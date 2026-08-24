@@ -1,0 +1,14 @@
+# generated / transient
+library.html
+cache/
+tiktok.json
+findings.json
+links.txt
+whatsapp.txt
+server.log
+__pycache__/
+
+# personal data - local only, never published
+library.json
+installs/
+docs/

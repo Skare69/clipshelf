@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>clipshelf</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%236750A4'/%3E%3Crect x='12' y='16' width='12' height='16' rx='3' fill='%23EADDFF'/%3E%3Crect x='28' y='12' width='12' height='20' rx='3' fill='%23D0BCFF'/%3E%3Crect x='44' y='18' width='8' height='14' rx='3' fill='%23EADDFF'/%3E%3Crect x='10' y='34' width='44' height='4' rx='2' fill='white'/%3E%3Crect x='12' y='44' width='16' height='10' rx='3' fill='%23D0BCFF'/%3E%3Crect x='32' y='42' width='10' height='12' rx='3' fill='%23EADDFF'/%3E%3Crect x='10' y='56' width='44' height='4' rx='2' fill='white'/%3E%3C/svg%3E">
+<script type="module" src="https://esm.run/@material/web@2/all.js"></script>
+<style>
+/* Official @material/web components (CDN ESM; needs network on first load).
+   ponytail: tokens below are the M3 baseline scheme; components read --md-sys-color-*. */
+:root{color-scheme:light dark;
+  --md-sys-color-primary:light-dark(#6750a4,#d0bcff);
+  --md-sys-color-on-primary:light-dark(#fff,#381e72);
+  --md-sys-color-primary-container:light-dark(#eaddff,#4f378b);
+  --md-sys-color-on-primary-container:light-dark(#21005d,#eaddff);
+  --md-sys-color-secondary:light-dark(#625b71,#ccc2dc);
+  --md-sys-color-on-secondary:light-dark(#fff,#332d41);
+  --md-sys-color-secondary-container:light-dark(#e8def8,#4a4458);
+  --md-sys-color-on-secondary-container:light-dark(#1d192b,#e8def8);
+  --md-sys-color-tertiary-container:light-dark(#ffd8e4,#633b48);
+  --md-sys-color-on-tertiary-container:light-dark(#31111d,#ffd8e4);
+  --md-sys-color-error:light-dark(#b3261e,#f2b8b5);
+  --md-sys-color-surface:light-dark(#fef7ff,#141218);
+  --md-sys-color-on-surface:light-dark(#1d1b20,#e6e0e9);
+  --md-sys-color-surface-variant:light-dark(#e7e0ec,#49454f);
+  --md-sys-color-on-surface-variant:light-dark(#49454f,#cac4d0);
+  --md-sys-color-surface-container-lowest:light-dark(#fff,#0f0d13);
+  --md-sys-color-surface-container-low:light-dark(#f7f2fa,#1d1b20);
+  --md-sys-color-surface-container:light-dark(#f3edf7,#211f26);
+  --md-sys-color-surface-container-high:light-dark(#ece6f0,#2b2930);
+  --md-sys-color-surface-container-highest:light-dark(#e6e0e9,#36343b);
+  --md-sys-color-outline:light-dark(#79747e,#938f99);
+  --md-sys-color-outline-variant:light-dark(#cac4d0,#49454f);
+  --md-ref-typeface-brand:Roboto,"Segoe UI",system-ui,sans-serif;
+  --md-ref-typeface-plain:Roboto,"Segoe UI",system-ui,sans-serif;
+  --elev:0 1px 2px rgba(0,0,0,.3),0 1px 3px 1px rgba(0,0,0,.15);
+  --hover:color-mix(in srgb,var(--md-sys-color-on-surface) 8%,transparent);
+  --mono:ui-monospace,Consolas,monospace}
+*{box-sizing:border-box}
+[hidden]{display:none!important} /* md components set :host display; keep hidden working */
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--md-sys-color-surface);color:var(--md-sys-color-on-surface);
+     font:400 15px/1.55 Roboto,"Segoe UI",system-ui,sans-serif}
+.wrap{max-width:880px;margin:0 auto;padding:64px 24px 128px}
+h1{font-size:clamp(32px,4vw,45px);font-weight:400;line-height:1.15;margin:0 0 8px}
+.sub{color:var(--md-sys-color-on-surface-variant);margin:0 0 32px;font-size:16px}
+h2{font-size:22px;font-weight:400;margin:56px 0 16px;scroll-margin-top:44px}
+h2 span{font-family:var(--mono);font-size:13px;color:var(--md-sys-color-on-surface-variant)}
+.ico{margin-right:10px;font-size:.85em}
+.row{scroll-margin-top:44px}
+.toc{position:sticky;top:0;background:var(--md-sys-color-surface);display:flex;gap:6px;
+  flex-wrap:wrap;padding:10px 0;z-index:1}
+.toc a{color:var(--md-sys-color-on-surface-variant);font-size:13px;font-weight:500;
+  text-decoration:none;padding:6px 14px;border-radius:99px;
+  background:var(--md-sys-color-surface-container-low)}
+.toc a:hover{background:var(--md-sys-color-secondary-container);
+  color:var(--md-sys-color-on-secondary-container)}
+.toc a.on{background:var(--md-sys-color-secondary-container);
+  color:var(--md-sys-color-on-secondary-container)}
+.toc .vw,.toc .tsep{display:none} /* view entries live in the tabs below 1400px */
+.tsec{display:contents} /* narrow: chips flow as before; drawer: becomes the scroll box */
+.toc.nosec{display:none}
+@media (min-width:1400px){ /* left navigation drawer, m3.material.io style */
+  md-tabs{display:none} /* the drawer owns view switching here */
+  /* content goes fluid: starts after the drawer, caps at 1320, re-centers on ultrawide */
+  .wrap{max-width:1320px;margin:0 auto 0 max(288px, calc(50% - 660px))}
+  .toc{position:fixed;left:max(24px, calc(50% - 924px));top:88px;width:228px;
+    display:flex;flex-direction:column;flex-wrap:nowrap;
+    max-height:calc(100vh - 128px);padding:0;background:none}
+  .toc .vw,.toc .tsep{flex:none} /* pinned; only .tsec below scrolls */
+  .toc .tsec{display:block;overflow:auto;min-height:0}
+  .toc a{display:flex;align-items:center;padding:10px 18px;margin:2px 0;background:none}
+  .toc a:hover{background:var(--md-sys-color-secondary-container)}
+  .toc a.on{background:var(--md-sys-color-secondary-container);
+    color:var(--md-sys-color-on-secondary-container)}
+  .toc .vw{display:flex}
+  .toc .count{margin-left:auto}
+  .toc .tsep{display:block;border-top:1px solid var(--md-sys-color-outline-variant);
+    margin:10px 14px}
+  .toc a.tsub{padding-left:36px;font-size:12.5px}
+  .toc.nosec{display:block}
+}
+md-tabs{margin:0 0 20px}
+md-primary-tab .count{background:var(--md-sys-color-secondary-container);
+  color:var(--md-sys-color-on-secondary-container);border-radius:99px;
+  padding:2px 9px;font-size:11.5px;margin-left:8px;font-family:var(--mono)}
+.bar{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+#q{flex:1;min-width:260px;--md-outlined-text-field-container-shape:28px}
+#tag{min-width:150px;--md-outlined-select-text-field-container-shape:28px}
+#dump{width:100%;margin:12px 0 10px}
+.tgroup{padding:14px 0;border-top:1px solid var(--md-sys-color-outline-variant);margin-top:12px}
+.tgroup:first-of-type{border-top:0}
+.tgroup pre{margin-top:10px}
+.tgroup md-filled-tonal-button,.prompt md-filled-tonal-button{
+  --md-filled-tonal-button-container-height:32px;
+  --md-filled-tonal-button-label-text-size:13px;margin-left:10px}
+summary:focus-visible{outline:3px solid var(--md-sys-color-primary);outline-offset:2px}
+ul{list-style:none;margin:0;padding:0}
+.row{padding:18px 16px;margin:0 -16px 4px;border-radius:12px;transition:background .2s ease}
+.row:hover{background:var(--hover)}
+:is(.row,.card) a.title{color:var(--md-sys-color-primary);font-size:16px;font-weight:500;
+             text-decoration:none;word-break:break-word}
+:is(.row,.card) a.title:hover{text-decoration:underline;text-underline-offset:3px}
+.tag{display:inline-block;color:var(--md-sys-color-on-surface-variant);font-size:11.5px;
+  font-weight:500;border:1px solid var(--md-sys-color-outline-variant);border-radius:8px;
+  padding:2px 10px;margin-left:8px}
+#dirPick{display:flex;flex-direction:column;gap:10px;margin:14px 0 2px}
+#dirPick[hidden]{display:none}
+#dirList{display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow:auto}
+.dirent{font:12px var(--mono);color:var(--md-sys-color-on-surface-variant);
+  background:var(--md-sys-color-surface-container);border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:8px;padding:3px 10px;cursor:pointer}
+.dirent:hover{color:var(--md-sys-color-on-surface);border-color:currentColor}
+#pendBar{display:flex;align-items:center;gap:14px;margin:28px 0 -20px}
+#pendBar[hidden]{display:none}
+.hint{color:var(--md-sys-color-on-surface-variant);font-size:12.5px;line-height:1.5;
+  margin-top:12px;max-width:65ch}
+.pend{display:inline-block;background:var(--md-sys-color-tertiary-container);
+  color:var(--md-sys-color-on-tertiary-container);
+  font-size:11.5px;font-weight:500;border-radius:8px;padding:3px 10px;margin-left:8px}
+.inst{flex:none;background:var(--md-sys-color-secondary-container);
+  color:var(--md-sys-color-on-secondary-container);
+  font-size:11px;font-weight:500;border-radius:99px;padding:3px 10px}
+.x{flex:none;border:0;background:none;color:var(--md-sys-color-on-surface-variant);
+  cursor:pointer;font-size:13px;border-radius:50%;width:28px;height:28px;padding:0}
+.x:hover{background:var(--hover);color:var(--md-sys-color-error)}
+.row .x{vertical-align:middle;margin-left:2px}
+.get{--md-filled-tonal-button-container-height:28px;font-size:12px;flex:none}
+.desc{color:var(--md-sys-color-on-surface-variant);margin-top:4px;max-width:65ch}
+.thumbs{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.thumbs a{display:block;overflow:hidden;border-radius:12px}
+.thumbs img{height:96px;display:block;transition:transform .6s ease}
+.row video{max-width:280px;max-height:400px;display:block;margin-top:10px;
+  border-radius:12px;background:#000}
+.thumbs a:hover img{transform:scale(1.05)}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px}
+.card{background:var(--md-sys-color-surface-container-low);border-radius:16px;
+      padding:18px 20px;display:flex;flex-direction:column;gap:10px;
+      transition:background .2s ease,box-shadow .2s ease}
+.card:hover{background:var(--md-sys-color-surface-container);box-shadow:var(--elev)}
+.card .head{display:flex;align-items:center;gap:12px;min-width:0}
+.avatar{width:36px;height:36px;border-radius:50%;flex:none;
+  background:var(--md-sys-color-surface-container-high)}
+.stars{margin-left:auto;font-family:var(--mono);font-size:12px;flex:none;
+  color:var(--md-sys-color-on-surface-variant)}
+.arch{flex:none;border:1px solid var(--md-sys-color-outline-variant);
+  color:var(--md-sys-color-on-surface-variant);
+  font-size:11px;font-weight:500;border-radius:99px;padding:2px 9px}
+.card .desc{margin:0;font-size:13.5px;display:-webkit-box;-webkit-line-clamp:3;
+            -webkit-box-orient:vertical;overflow:hidden}
+.card .meta{margin-top:auto}
+.meta{margin-top:6px;font-size:12.5px;color:var(--md-sys-color-on-surface-variant);
+      display:flex;align-items:center;gap:8px}
+.meta a{color:var(--md-sys-color-on-surface-variant);text-decoration:none}
+.meta .src img{width:16px;height:16px;border-radius:4px;display:block}
+.meta .date{font-family:var(--mono);margin-left:auto}
+.prompt b{font-weight:500;font-size:16px;min-width:0}
+.prompt .head{justify-content:space-between}
+.prompt pre{max-height:220px;overflow:auto;margin-top:0;flex:1}
+.prompt .meta{margin-top:auto}
+.pcat{font-size:13px;font-weight:500;letter-spacing:.04em;text-transform:uppercase;
+      color:var(--md-sys-color-on-surface-variant);margin:28px 0 4px;scroll-margin-top:44px}
+pre{white-space:pre-wrap;word-break:break-word;background:var(--md-sys-color-surface-container);
+    border-radius:12px;padding:14px 18px;margin:10px 0 0;font:13px/1.5 var(--mono)}
+.empty{border:1px dashed var(--md-sys-color-outline-variant);border-radius:16px;
+       padding:32px 24px;color:var(--md-sys-color-on-surface-variant);margin-top:16px}
+.empty code{font-family:var(--mono);color:var(--md-sys-color-on-surface)}
+md-dialog{min-width:min(90vw,620px)}
+#addDlg{max-height:min(820px,calc(100vh - 64px))}
+.term{background:#16181d;color:#d6dbe0;font-family:var(--mono);font-size:12px;
+  line-height:1.5;padding:12px 14px;border-radius:12px;margin:12px 0 0;
+  max-height:45vh;overflow:auto;white-space:pre-wrap;word-break:break-word}
+.fabs{position:fixed;right:24px;bottom:24px;display:flex;flex-direction:column;
+  gap:12px;align-items:center;z-index:12}
+.row2{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.row2 md-outlined-text-field{flex:1;min-width:220px}
+.sect{font-size:13px;font-weight:500;color:var(--md-sys-color-on-surface-variant);
+  margin:20px 0 4px}
+.steps{display:flex;gap:18px;flex-wrap:wrap;margin:14px 0 2px;font-size:13px;
+ list-style:none;padding:0}
+.st{display:flex;align-items:center;gap:8px;color:var(--md-sys-color-on-surface-variant)}
+.st .n{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+ background:var(--md-sys-color-surface-container-highest);font-weight:600;
+ font-size:12px;flex:none}
+.st b{font-weight:500}
+.st.on .n{background:var(--md-sys-color-primary-container);
+ color:var(--md-sys-color-on-primary-container)}
+.st.on b{color:var(--md-sys-color-on-surface)}
+.st.done .n{background:var(--md-sys-color-primary);
+ color:var(--md-sys-color-on-primary)}
+.st.done b{color:var(--md-sys-color-on-surface)}
+#interpRow{display:flex;align-items:center;gap:14px;margin:10px 0 0}
+#interpRow[hidden]{display:none}
+.chip{display:inline-flex;align-items:center;padding:5px 14px;border-radius:999px;
+ font-size:12.5px;font-weight:500;white-space:nowrap;
+ background:var(--md-sys-color-secondary-container);
+ color:var(--md-sys-color-on-secondary-container)}
+#interpProg{flex:1;height:4px;border-radius:2px;overflow:hidden;
+ background:var(--md-sys-color-surface-container-highest)}
+#interpProgFill{height:100%;width:0;background:var(--md-sys-color-primary);
+ transition:width .5s}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}html{scroll-behavior:auto}}
+</style></head><body><div class="wrap">
+<h1>clipshelf</h1>
+<p class="sub">Interpreted results on the left tab, the raw material on the right.</p>
+<ol class="steps" id="steps" aria-label="How clipshelf works">
+  <li class="st"><span class="n">1</span><span><b>Import</b> &mdash; paste links or a TikTok export</span></li>
+  <li class="st"><span class="n">2</span><span><b>Interpret</b> &mdash; the agent reads every pending item</span></li>
+  <li class="st"><span class="n">3</span><span><b>Browse</b> &mdash; repos, prompts, guides in the library</span></li>
+</ol>
+<md-tabs id="tabs" aria-label="Views">
+  <md-primary-tab data-view="lib" active><span>Library <span id="nLib" class="count"></span></span></md-primary-tab>
+  <md-primary-tab data-view="raw"><span>Raw links <span id="nRaw" class="count"></span></span></md-primary-tab>
+  <md-primary-tab data-view="pend"><span>Pending <span id="nPend" class="count"></span></span></md-primary-tab>
+</md-tabs>
+<div id="interpRow" hidden>
+  <span id="interpChip" class="chip"></span>
+  <div id="interpProg"><div id="interpProgFill"></div></div>
+  <md-text-button id="interpStop">stop</md-text-button>
+</div>
+<div class="bar">
+  <md-outlined-text-field id="q" placeholder="Search titles, text, urls&hellip; (press /)"
+      aria-label="Search library">
+    <md-icon slot="leading-icon"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg></md-icon>
+    <md-icon-button id="qclear" slot="trailing-icon" aria-label="Clear search" style="display:none">
+      <md-icon><svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></md-icon>
+    </md-icon-button>
+  </md-outlined-text-field>
+  <md-outlined-select id="tag" aria-label="Filter by tag">
+    <md-select-option value="" selected><div slot="headline">all tags</div></md-select-option>
+  </md-outlined-select>
+  <md-icon-button id="setBtn" aria-label="settings">
+    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+  </md-icon-button>
+</div>
+<div id="pendBar" hidden>
+  <span id="pendCount" class="pend" style="margin-left:0"></span>
+  <md-filled-tonal-button id="interpBtn">
+    <svg slot="icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z"/></svg>
+    start interpretation</md-filled-tonal-button>
+  <md-text-button id="reintAll">
+    <svg slot="icon" viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-8 8s3.57 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+    re-flag all</md-text-button>
+</div>
+<nav id="toc" class="toc"></nav>
+<div id="out"></div>
+<md-dialog id="dlg">
+  <div slot="headline" id="dlgHead"></div>
+  <div slot="content">
+    <div id="dlgText"></div>
+    <div id="dirPick" hidden>
+      <md-outlined-text-field id="instDir" label="run in folder"
+        style="width:100%"></md-outlined-text-field>
+      <div id="dirList"></div>
+    </div>
+    <pre id="term" class="term" hidden></pre>
+  </div>
+  <div slot="actions">
+    <md-text-button id="dlgCancel">cancel</md-text-button>
+    <md-filled-button id="dlgOk">run</md-filled-button>
+  </div>
+</md-dialog>
+<div class="fabs">
+  <md-icon-button id="topBtn" aria-label="back to top" hidden>
+    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8-8 8z"/></svg>
+  </md-icon-button>
+  <md-fab id="addFab" aria-label="add links">
+    <svg slot="icon" viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+  </md-fab>
+</div>
+<md-dialog id="addDlg">
+  <div slot="headline">Add to library</div>
+  <div slot="content">
+    <md-outlined-text-field id="dump" type="textarea" rows="5"
+      placeholder="Paste anything containing links (whatsapp export, notes, one url); non-tiktok links are added directly."></md-outlined-text-field>
+    <div class="row2"><md-filled-button id="addBtn">add to library</md-filled-button></div>
+    <div id="triageOut"></div>
+    <div class="sect">TikTok export</div>
+    <div class="row2">
+      <md-outlined-text-field id="tkDir" label="folder"
+        style="min-width:170px;flex:0 1 220px"></md-outlined-text-field>
+      <md-outlined-text-field id="tkPath"
+        placeholder="tiktok-&hellip;.json (blank: newest in folder)"></md-outlined-text-field>
+      <md-filled-tonal-button id="tkImport">import</md-filled-tonal-button>
+    </div>
+  </div>
+  <div slot="actions"><md-text-button id="addDlgClose">close</md-text-button></div>
+</md-dialog>
+<md-dialog id="setDlg">
+  <div slot="headline">Settings</div>
+  <div slot="content">
+    <md-outlined-text-field id="interpCmd" type="textarea" rows="3"
+      label="interpretation command" style="width:100%"></md-outlined-text-field>
+    <div id="presets" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"></div>
+    <div class="hint">Presets prefill the field; edit freely before saving.
+      The saved command is the base command &mdash; each pending entry runs it
+      with the single-entry skill prompt appended. Blank = the built-in
+      omp command. Any CLI agent works if it can read its entry file and write
+      one findings JSON (the skill file explains both).</div>
+  </div>
+  <div slot="actions">
+    <md-text-button id="setCancel">cancel</md-text-button>
+    <md-filled-tonal-button id="setSave">save</md-filled-tonal-button>
+  </div>
+</md-dialog>
+<script>
+const LIB = __DATA__;
+const INTERP_DEFAULT = __IDEF__;
+const COPY_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>`;
+const CHECK_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>`;
+const q = document.getElementById("q"), tagSel = document.getElementById("tag"),
+      out = document.getElementById("out"), tocEl = document.getElementById("toc");
+const links = Object.entries(LIB.links).map(([url, e]) => ({url, ...e}));
+const prompts = Object.entries(LIB.prompts).map(([id, p]) => ({id, ...p}));
+tagSel.innerHTML += [...new Set([...links.flatMap(l => l.tags),
+                                 ...links.map(l => l.cat).filter(Boolean),
+                                 ...prompts.map(p => p.cat).filter(Boolean)])].sort()
+  .map(t => `<md-select-option value="${t}"><div slot="headline">${t}</div></md-select-option>`)
+  .join("");
+const esc = s => (s || "").replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const srcIcon = s => {
+  if (!s.startsWith("http")) return "";  // "input" etc: no icon, less noise
+  let host; try { host = new URL(s).hostname; } catch { return ""; }
+  return `<a class="src" href="${esc(s)}" title="${esc(s)}"><img alt=""
+    src="https://${esc(host)}/favicon.ico" loading="lazy"
+    onerror="this.outerHTML='&#8599;'"></a>`;
+};
+const meta = (ss, found) => `<div class="meta">` +
+  (ss || []).map(srcIcon).join("") +
+  `<span class="date">${esc(found)}</span></div>`;
+const isRepo = l => (l.tags || []).includes("github");
+const instChip = l => {
+  const w = LIB.installed[l.url] ||
+    (l.install_done ? "installed via clipshelf " + l.install_done +
+       (l.install_dir ? " in " + l.install_dir : "") : "");
+  return w ? `<span class="inst" title="${esc(w)}">✓ installed</span>` : "";
+};
+const getBtn = l => l.install && !l.install_done && !LIB.installed[l.url]
+  ? `<md-filled-tonal-button class="get" data-install="${esc(l.url)}"
+       title="${esc(l.install)}">install</md-filled-tonal-button>` : "";
+const xBtn = l => `<button class="x" data-rm="${esc(l.url)}"
+  title="remove permanently">✕</button>`;
+let view = "lib";
+document.getElementById("nLib").textContent =
+  links.filter(isRepo).length + prompts.length;
+document.getElementById("nRaw").textContent = links.filter(l => !isRepo(l)).length;
+document.getElementById("nPend").textContent = links.filter(l => l.pending).length;
+function render() {
+  let secToc = "";
+  document.getElementById("pendBar").hidden = view !== "pend";
+  if (view === "pend") {
+    const n = links.filter(l => l.pending).length;
+    document.getElementById("pendCount").textContent =
+      n ? `${n} item${n > 1 ? "s" : ""} awaiting interpretation` : "nothing pending";
+    document.getElementById("interpBtn").disabled = !n;
+  }
+  const needle = (q.value || "").toLowerCase(), tag = tagSel.value || "";
+  const hit = s => !needle || (s || "").toLowerCase().includes(needle);
+  const nameOf = l => isRepo(l)
+    ? (l.title.match(/^GitHub - ([^:]+?)(?: ·|:)/) || [])[1] ||
+      decodeURIComponent(new URL(l.url).pathname.slice(1)) || l.title || l.url
+    : l.title || decodeURIComponent(new URL(l.url).pathname.slice(1)) || l.url;
+  const cleanDesc = (s, name) => {
+    let d = (s || "").replace(
+      /\s*Contribute to \S+ development by creating an account on GitHub\.?/, "");
+    if (name)  // github meta-descriptions end in " - owner/name"; pure repetition
+      d = d.replace(new RegExp("\\s*[-\u00b7]\\s*" +
+        name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*$", "i"), "");
+    return d;
+  };
+  const ls = links
+    .filter(l => (view === "pend" ? l.pending : isRepo(l) === (view === "lib")) &&
+                 (!tag || l.tags.includes(tag) || l.cat === tag) &&
+                 (hit(l.url) || hit(l.title) || hit(l.desc)))
+    .sort(view === "lib"
+      ? (a, b) => nameOf(a).localeCompare(nameOf(b))
+      : (a, b) => (b.found + b.url).localeCompare(a.found + a.url));
+  let h = "";
+  if (view === "lib") {
+    const groups = new Map();
+    for (const l of ls) {
+      const c = l.cat || "Other";
+      if (!groups.has(c)) groups.set(c, []);
+      groups.get(c).push(l);
+    }
+    const cats = [...groups.keys()].sort((a, b) =>
+      a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompare(b));
+    const slug = c => c.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    const ICON = {
+      "Video generation": "🎬", "Video editing & production": "✂️",
+      "Image tools": "🖼️", "Speech & audio": "🎙️",
+      "Agents & dev tools": "🤖", "Claude Code ecosystem": "✳️",
+      "Design & creative skills": "🎨", "RAG & knowledge": "📚",
+      "LLM infra & routing": "🔀", "Web automation & scraping": "🕸️",
+      "Self-hosted apps & tools": "🏠", "Curated lists": "📋",
+      "Work & productivity": "💼", "Other": "▪️",
+      "Security & privacy": "🔐", "Web frameworks": "🧱",
+      "Career & job search": "🧑‍💼", "Marketing & social media": "📣",
+      "ML & data science": "🧠", "Prompts": "📝",
+      "Game modding": "🎮", "Model training": "🏋️",
+      // prompt categories
+      "Agent workflows": "🔁", "Agentic coding": "⌨️", "Career & income": "💰",
+      "Coding agents": "🧑‍💻", "Content & social media": "📱",
+      "Prompt frameworks": "🧩", "Startup & app building": "🚀",
+      "Writing & communication": "✍️", "YouTube growth": "▶️",
+      "Uncategorized": "▪️"
+    };
+    const icon = c => ICON[c] || "▪️";
+    secToc =
+      cats.map(c => `<a href="#g-${slug(c)}"><span class="ico">${icon(c)}</span>${esc(c)}</a>`).join("") +
+      `<a href="#sec-prompts"><span class="ico">${icon("Prompts")}</span>Prompts</a>`;
+    for (const c of cats) {
+      const rows = groups.get(c);
+      h += `<h2 id="g-${slug(c)}"><span class="ico">${icon(c)}</span>${esc(c)} <span>(${rows.length})</span></h2><ul class="cards">`;
+      for (const l of rows) {
+        const owner = new URL(l.url).pathname.split("/")[1] || "";
+        const st = l.stars ? `<span class="stars">★ ${l.stars >= 1000
+          ? (l.stars / 1000).toFixed(l.stars >= 10000 ? 0 : 1) + "k" : l.stars}</span>` : "";
+        h += `<li class="card"><div class="head">
+          <img class="avatar" alt="" loading="lazy"
+            src="https://github.com/${esc(owner)}.png?size=64"
+            onerror="this.style.visibility='hidden'">
+          <a class="title" href="${esc(l.url)}">${esc(nameOf(l))}</a>${l.archived
+            ? `<span class="arch" title="archived on GitHub, read-only (seen ${esc(l.archived)})">archived</span>` : ""
+          }${instChip(l)}${getBtn(l)}${st}${xBtn(l)}</div>` +
+          (cleanDesc(l.desc, nameOf(l)) ? `<div class="desc">${esc(cleanDesc(l.desc, nameOf(l)))}</div>` : "") +
+          meta(l.sources, l.found) + `</li>`;
+      }
+      h += `</ul>`;
+    }
+    const ps = prompts.filter(p => (!tag || p.cat === tag) && (hit(p.title) || hit(p.text)));
+    h += `<h2 id="sec-prompts"><span class="ico">${icon("Prompts")}</span>Prompts <span>(${ps.length})</span></h2>`;
+    let pcat = null;  // sorted by category; "￿" sinks uncategorized last
+    for (const p of [...ps].sort((a, b) =>
+        (a.cat || "￿").localeCompare(b.cat || "￿") ||
+        (a.title || "").localeCompare(b.title || ""))) {
+      if ((p.cat || "") !== pcat) {
+        if (pcat !== null) h += `</ul>`;
+        pcat = p.cat || "";
+        const label = pcat || "Uncategorized";
+        h += `<h3 class="pcat" id="p-${slug(label)}"><span class="ico">${icon(label)}</span>${esc(label)}</h3><ul class="cards">`;
+        secToc += `<a class="tsub" href="#p-${slug(label)}"><span class="ico">${icon(label)}</span>${esc(label)}</a>`;
+      }
+      h += `<li class="card prompt"><div class="head"><b>${esc(p.title) || "Untitled prompt"}</b>
+        <md-icon-button data-copy="${esc(p.id)}" aria-label="copy prompt">${COPY_ICON}</md-icon-button></div>
+        <pre>${esc(p.text)}</pre>` + meta(p.sources, p.found) + `</li>`;
+    }
+    if (ps.length) h += `</ul>`;
+    if (!ls.length && !ps.length)
+      h = needle || tag
+        ? `<div class="empty">No matches for &quot;${esc(q.value)}&quot;.</div>`
+        : `<div class="empty">Nothing interpreted yet. Ingest links on the raw
+           tab, then tell the agent to <code>interpret</code>.</div>`;
+  } else {
+    h += `<h2>${view === "pend" ? "Pending interpretation" : "Raw links"} <span>(${ls.length})</span></h2><ul>`;
+    for (const l of ls) {
+      h += `<li class="row">
+        <a class="title" href="${esc(l.url)}">${esc(l.title) || esc(l.url)}</a>` +
+        l.tags.map(t => `<span class="tag">${esc(t)}</span>`).join("") +
+        (l.pending ? `<span class="pend">pending</span>` : "") +
+        (!l.pending && ((l.images || []).length || l.video || l.cache)
+          ? `<md-text-button data-reint="${esc(l.url)}">↻ re-interpret</md-text-button>` : "") +
+        xBtn(l) +
+        (l.desc ? `<div class="desc">${esc(l.desc)}</div>` : "") +
+        (l.images || []).map(i =>
+          `<a href="${esc(i)}"><img src="${esc(i)}" alt="saved slide" loading="lazy"></a>`)
+          .join("").replace(/^(.+)$/s, `<div class="thumbs">$1</div>`) +
+        (l.video ? `<video controls preload="metadata" src="${esc(l.video)}"></video>` : "") +
+        meta(l.sources, l.found) + `</li>`;
+    }
+    h += `</ul>`;
+    if (!ls.length)
+      h = needle || tag
+        ? `<div class="empty">No matches for &quot;${esc(q.value)}&quot;.</div>`
+        : view === "pend"
+          ? `<div class="empty">Nothing pending. Import a tiktok export from the
+             + dialog, or ↻ re-interpret items on the raw tab.</div>`
+          : `<div class="empty">No raw links yet. Ingest something:<br>
+             <code>python clipshelf.py links.txt</code></div>`;
+  }
+  out.innerHTML = h;
+  const counts = {
+    lib: links.filter(isRepo).length + prompts.length,
+    raw: links.filter(l => !isRepo(l)).length,
+    pend: links.filter(l => l.pending).length };
+  tocEl.innerHTML =
+    [["lib", "Library"], ["raw", "Raw links"], ["pend", "Pending"]].map(([v, n]) =>
+      `<a class="vw${v === view ? " on" : ""}" data-nav="${v}" href="#">${n}
+         <span class="count">${counts[v]}</span></a>`).join("") +
+    (secToc ? `<div class="tsep"></div><div class="tsec">` + secToc + `</div>` : "");
+}
+tocEl.onclick = e => {
+  const a = e.target.closest("a[data-nav]");
+  if (!a) return;  // section anchors scroll natively (html{scroll-behavior:smooth})
+  e.preventDefault();
+  view = a.dataset.nav;
+  tabsEl.activeTabIndex = ["lib", "raw", "pend"].indexOf(view);
+  render();
+  scrollTo({ top: 0, behavior: "instant" });  // view switch = new page, no 17k-px cruise
+};
+// scroll-spy: highlight the section under the reading line in the toc
+let spyTick = false;
+addEventListener("scroll", () => {
+  if (spyTick) return;
+  spyTick = true;
+  requestAnimationFrame(() => {
+    spyTick = false;
+    const hs = [...out.querySelectorAll("h2[id], h3[id]")];
+    if (!hs.length) return;
+    let cur = hs[0];
+    for (const s of hs) if (s.getBoundingClientRect().top <= 120) cur = s;
+    for (const a of tocEl.querySelectorAll("a:not(.vw)"))
+      a.classList.toggle("on", a.getAttribute("href") === "#" + cur.id);
+  });
+}, { passive: true });
+const tabsEl = document.getElementById("tabs");
+tabsEl.addEventListener("change", () => {
+  view = tabsEl.activeTab.dataset.view;
+  render();
+});
+const dlg = document.getElementById("dlg"),
+      dlgHead = document.getElementById("dlgHead"),
+      dlgText = document.getElementById("dlgText"),
+      term = document.getElementById("term"),
+      dlgOk = document.getElementById("dlgOk"),
+      dlgCancel = document.getElementById("dlgCancel");
+function askDlg(head, text, cmd, okLabel) {
+  return new Promise(res => {
+    dlgHead.textContent = head;
+    dlgText.textContent = text;
+    term.hidden = !cmd;
+    term.textContent = cmd ? "$ " + cmd : "";
+    dlgOk.textContent = okLabel;
+    dlgOk.style.display = "";
+    dlgCancel.textContent = "cancel";
+    dlgOk.onclick = () => res(true);
+    dlgCancel.onclick = () => dlg.close();
+    dlg.addEventListener("closed", () => res(false), { once: true });
+    dlg.show();
+  });
+}
+const served = location.protocol.startsWith("http");
+out.addEventListener("click", async e => {
+  const b = e.target.closest("[data-copy]");
+  if (b) {
+    await navigator.clipboard.writeText(LIB.prompts[b.dataset.copy].text);
+    b.innerHTML = CHECK_ICON;
+    setTimeout(() => { b.innerHTML = COPY_ICON; }, 1200);
+    return;
+  }
+  const rm = e.target.closest("[data-rm]");
+  if (rm) {
+    if (!served) return alert("Removing needs the server: open http://127.0.0.1:8765");
+    if (!await askDlg("Remove permanently?", `${rm.dataset.rm} (future ingests will skip it)`, null, "remove")) return;
+    dlg.close();
+    await fetch("/remove", { method: "POST", body: JSON.stringify({ url: rm.dataset.rm }) });
+    location.reload();  // server re-rendered library.html
+    return;
+  }
+  const ri = e.target.closest("[data-reint]");
+  if (ri) {
+    if (!served) return alert("Re-interpreting needs the server: open http://127.0.0.1:8765");
+    ri.disabled = true;
+    await fetch("/reinterpret", { method: "POST", body: JSON.stringify({ url: ri.dataset.reint }) });
+    location.reload();  // server re-rendered; row now shows its pending badge
+    return;
+  }
+  const ins = e.target.closest("[data-install]");
+  if (ins) {
+    if (!served) return alert("Installing needs the server: open http://127.0.0.1:8765");
+    const cmd = LIB.links[ins.dataset.install]?.install || ins.title;
+    dirPick.hidden = false;
+    instDir.value = localStorage.instDir || "";
+    listDirs();  // resolves "" to the default installs/ folder
+    const ok = await askDlg("Run install command?",
+                      "Runs on this machine in the folder below (10-minute cap). Live output follows.",
+                      cmd, "install");
+    dirPick.hidden = true;
+    if (!ok) return;
+    localStorage.instDir = instDir.value;
+    // octoprint-style terminal mirror: stream the response into the pane
+    dlgHead.textContent = "Installing…";
+    term.textContent += `
+`;
+    doneDlg(await streamInto("/install",
+              JSON.stringify({ url: ins.dataset.install, dir: instDir.value })),
+            "Installed", "Install failed");
+  }
+});
+const dirPick = document.getElementById("dirPick"),
+      instDir = document.getElementById("instDir"),
+      dirList = document.getElementById("dirList");
+async function listDirs() {
+  const r = await fetch("/dirs", { method: "POST", body: JSON.stringify({ path: instDir.value }) });
+  if (!r.ok) { dirList.innerHTML = `<span class="tag">not a folder</span>`; return; }
+  const d = await r.json();
+  instDir.value = d.path;
+  dirList.innerHTML = (d.parent ? `<button class="dirent" data-d="${esc(d.parent)}">..</button>` : "") +
+    d.dirs.map(n => `<button class="dirent" data-d="${esc(d.path + "/" + n)}">${esc(n)}</button>`).join("");
+}
+dirList.addEventListener("click", e => {
+  const b = e.target.closest("[data-d]");
+  if (b) { instDir.value = b.dataset.d; listDirs(); }
+});
+instDir.addEventListener("change", listDirs);
+async function streamInto(url, body) {
+  dlgText.textContent = "";
+  dlgOk.style.display = "none";
+  dlgCancel.textContent = "close";
+  dlgCancel.onclick = () => dlg.close();
+  term.hidden = false;
+  if (!dlg.open) dlg.show();
+  try {
+    const r = await fetch(url, { method: "POST", body });
+    if (!r.ok) { term.textContent += await r.text(); return false; }
+    const rd = r.body.getReader(), dec = new TextDecoder();
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (done) break;
+      term.textContent += dec.decode(value, { stream: true });
+      term.scrollTop = term.scrollHeight;
+    }
+    return /\[exit 0\]\s*$/.test(term.textContent);
+  } catch (err) {
+    term.textContent += `
+${err}`;
+    return false;
+  }
+}
+function doneDlg(ok, okHead, failHead) {
+  dlgHead.textContent = ok ? okHead : failHead;
+  if (!ok) return;
+  // reload (to refresh the library) only after the user reads and closes the output
+  if (dlg.open) dlg.addEventListener("closed", () => location.reload(), { once: true });
+  else location.reload();  // dialog was dismissed mid-run
+}
+const qclear = document.getElementById("qclear");
+const clearQ = () => { q.value = ""; onQ(); q.focus(); };
+qclear.onclick = clearQ;
+addEventListener("keydown", e => {
+  // typing anywhere editable (settings command, folder field, paste box) wins over hotkeys
+  const typing = e.target !== q && e.target.closest?.(
+    "md-outlined-text-field, md-filled-text-field, input, textarea, [contenteditable]");
+  if (typing) return;
+  if (e.key === "/" && e.target !== q) { e.preventDefault(); q.focus(); }
+  if (e.key === "Escape" && q.value) clearQ();
+});
+const tlists = [];
+document.getElementById("triageOut").addEventListener("click", async e => {
+  const b = e.target.closest("[data-tlist]");
+  if (!b) return;
+  await navigator.clipboard.writeText(tlists[b.dataset.tlist]);
+  if (b.dataset.open) window.open("https://www.tiktok.com/", "_blank");
+  const label = b.textContent;
+  b.textContent = "copied";
+  setTimeout(() => { b.textContent = label; }, 1200);
+});
+const addDlg = document.getElementById("addDlg"),
+      addBtn = document.getElementById("addBtn"),
+      dumpEl = document.getElementById("dump"),
+      interpBtn = document.getElementById("interpBtn"),
+      tkImport = document.getElementById("tkImport");
+document.getElementById("addDlgClose").onclick = () => addDlg.close();
+document.getElementById("addFab").onclick = () => addDlg.show();
+const setDlg = document.getElementById("setDlg"),
+      interpCmd = document.getElementById("interpCmd");
+interpCmd.placeholder = INTERP_DEFAULT;
+// presets: prefill only - the field stays the single source of truth
+const PRESETS = [
+  ["omp (default)", INTERP_DEFAULT],
+  ["Claude Code", "claude --dangerously-skip-permissions -p"],
+  ["Codex CLI", "codex exec --full-auto"],
+  ["Gemini CLI", "gemini --yolo -p"],
+  ["OpenCode", "opencode run"],
+];
+const presetsEl = document.getElementById("presets");
+presetsEl.innerHTML = PRESETS.map(([n], i) =>
+  `<button class="dirent" data-pre="${i}">${esc(n)}</button>`).join("");
+presetsEl.onclick = e => {
+  const b = e.target.closest("[data-pre]");
+  if (b) { interpCmd.value = PRESETS[+b.dataset.pre][1]; interpCmd.focus(); }
+};
+document.getElementById("setBtn").onclick = () => {
+  interpCmd.value = LIB.settings?.interpret_cmd || "";
+  setDlg.show();
+};
+document.getElementById("setCancel").onclick = () => setDlg.close();
+document.getElementById("setSave").onclick = async () => {
+  if (!served) return alert("Settings need the server: open http://127.0.0.1:8765");
+  await fetch("/settings", { method: "POST",
+    body: JSON.stringify({ interpret_cmd: interpCmd.value }) });
+  (LIB.settings ||= {}).interpret_cmd = interpCmd.value.trim();
+  setDlg.close();
+};
+const topBtn = document.getElementById("topBtn");
+addEventListener("scroll", () => { topBtn.hidden = scrollY < 600; }, { passive: true });
+topBtn.onclick = () => scrollTo({ top: 0, behavior: "smooth" });
+addBtn.onclick = async () => {
+  if (!served) return alert("Adding needs the server: open http://127.0.0.1:8765");
+  addBtn.disabled = true; addBtn.textContent = "adding…";
+  try {
+    const r = await fetch("/add", { method: "POST", body: dumpEl.value });
+    const j = await r.json();
+    let h = `<div class="tgroup"><b>added</b> <span class="tag">${j.queued} queued` +
+      (j.known ? `, ${j.known} in library` : "") + `</span>`;
+    if (j.tiktok.length) {
+      h += `<div class="pend" style="margin-left:0">${j.tiktok.length} tiktok links:
+        paste into the tiktok-extract panel</div>
+        <md-filled-tonal-button data-tlist="${tlists.length}">copy list</md-filled-tonal-button>
+        <md-filled-tonal-button data-tlist="${tlists.length}" data-open="1">copy &amp; open tiktok</md-filled-tonal-button>
+        <pre>${esc(j.tiktok.join("\n"))}</pre>`;
+      tlists.push(j.tiktok.join("\n"));
+    }
+    h += `<div id="sendStat" class="pend" style="margin-left:0"></div></div>`;
+    document.getElementById("triageOut").innerHTML = h;
+    if (j.queued) pollStat(j.added, j.queued);
+  } catch (err) {
+    document.getElementById("triageOut").innerHTML =
+      `<div class="empty">add failed: ${esc(String(err))}</div>`;
+  }
+  addBtn.disabled = false; addBtn.textContent = "add to library";
+};
+const tkDir = document.getElementById("tkDir");
+tkDir.value = localStorage.tkDir || "~/Downloads";
+tkDir.oninput = () => { localStorage.tkDir = tkDir.value; };
+tkImport.onclick = async () => {
+  if (!served) return alert("Importing needs the server: open http://127.0.0.1:8765");
+  addDlg.close();
+  dlgHead.textContent = "Importing tiktok export…";
+  term.textContent = "";
+  const ok = await streamInto("/ingest", JSON.stringify({
+    path: document.getElementById("tkPath").value, dir: tkDir.value }));
+  if (!ok) return doneDlg(false, "", "Import failed");
+  // the CLI summary line names the queue: "... N pending -> library.html"
+  const pend = +(term.textContent.match(/(\d+) pending/) || [0, 0])[1];
+  if (!pend) return doneDlg(true, "Imported (nothing to interpret)", "");
+  dlgHead.textContent = `Imported, interpreting ${pend} item` +
+    (pend > 1 ? "s" : "") + ` (runs omp, may take minutes)…`;
+  term.textContent += `
+`;
+  doneDlg(await streamInto("/interpret", "{}"),
+    "Imported + interpretation finished",
+    "Interpretation failed; import kept, retry from the Pending tab");
+};
+interpBtn.onclick = async () => {
+  if (!served) return alert("Interpretation needs the server: open http://127.0.0.1:8765");
+  dlgHead.textContent = "Interpreting (runs omp, may take minutes)…";
+  term.textContent = "";
+  doneDlg(await streamInto("/interpret", "{}"),
+    "Interpretation finished", "Interpretation failed");
+};
+const reintAll = document.getElementById("reintAll");
+reintAll.onclick = async () => {
+  if (!served) return alert("Re-flagging needs the server: open http://127.0.0.1:8765");
+  reintAll.disabled = true;
+  await fetch("/reinterpret", { method: "POST", body: JSON.stringify({ all: true }) });
+  reintAll.disabled = false;
+  // mirror server state client-side; pend tab re-renders without a reload
+  links.forEach(l => { if ((l.images || []).length || l.video || l.cache) l.pending = true; });
+  document.getElementById("nPend").textContent = links.filter(l => l.pending).length;
+  render();
+};
+async function pollStat(base, queued) {
+  const el = document.getElementById("sendStat");
+  if (!el) return;  // user re-sorted; result panel is gone
+  try {
+    const s = await (await fetch("/status")).json();
+    if (s.left) {
+      el.textContent = `scanning ${s.scanned}/${queued} (${s.added} added): ` +
+        s.current.replace("https://", "").slice(0, 70);
+      setTimeout(() => pollStat(base, queued), 1200);
+    } else {
+      el.innerHTML = `done: ${s.added - base} new entries ` +
+        `<md-filled-tonal-button onclick="location.reload()">refresh library</md-filled-tonal-button>`;
+    }
+  } catch { el.textContent = "server unreachable"; }
+}
+const onQ = () => { qclear.style.display = q.value ? "" : "none"; render(); };
+q.oninput = onQ;
+tagSel.onchange = render;
+// interpret pool: header chip + progress bar + stepper from /interpret/status
+const interpRow = document.getElementById("interpRow"),
+      interpChip = document.getElementById("interpChip"),
+      interpFill = document.getElementById("interpProgFill"),
+      interpStop = document.getElementById("interpStop");
+interpStop.onclick = () => fetch("/interpret/stop", { method: "POST" });
+function setInterp(s) {
+  const interp = links.some(l => !l.pending),
+        pend = links.some(l => l.pending),
+        run = !!(s && s.running),
+        st = [links.length ? "done" : "on",
+              run ? "on" : interp ? "done" : pend ? "on" : "todo",
+              interp ? "done" : "todo"];
+  document.querySelectorAll("#steps .st").forEach((el, i) =>
+    el.className = "st" + (st[i] === "on" ? " on" : st[i] === "done" ? " done" : ""));
+  if (!s) { interpRow.hidden = true; return; }
+  interpRow.hidden = false;
+  interpChip.textContent = `Interpret ${s.done}/${s.total} · ${s.model}`;
+  interpFill.style.width = s.total ? `${100 * s.done / s.total}%` : "0%";
+}
+let interpTimer = 0;
+async function interpTick() {
+  clearInterval(interpTimer);
+  if (!served) return;
+  try {
+    const s = await (await fetch("/interpret/status")).json();
+    setInterp(s.running ? s : null);
+    if (s.running) interpTimer = setInterval(interpTick, 2000);
+  } catch {}
+}
+interpTick();  // picks up an in-progress run (e.g. after a page reload)
+render();
+</script></div></body></html>
