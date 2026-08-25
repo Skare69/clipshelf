@@ -455,6 +455,7 @@ def add_extracted(lib, findings):
         entry = lib["links"].get(src)
         if entry:
             entry.pop("pending", None)
+            entry["interpreted"] = TODAY  # newest-first sort key; refresh on re-interpret
             if f.get("summary") and len(f["summary"]) > len(entry["desc"]):
                 entry["desc"] = f["summary"]
         cats = f.get("categories", {})
@@ -463,6 +464,7 @@ def add_extracted(lib, findings):
             u = repo_url(repo)
             if u:
                 e = add_link(lib, u, "", "", src, ["github"])
+                e["interpreted"] = TODAY
                 if cats.get(repo):
                     e["cat"] = cats[repo]
                 if installs.get(repo):
@@ -471,12 +473,14 @@ def add_extracted(lib, findings):
         for link in f.get("links", []):
             u = norm(link.get("url", ""))
             if u:
-                add_link(lib, u, link.get("title", ""), "", src,
+                e = add_link(lib, u, link.get("title", ""), "", src,
                          [tag_for(u, link.get("title", "")) or "page"])
+                e["interpreted"] = TODAY
                 queue.append(u)
         for pr in f.get("prompts", []):
             if (pr.get("text") or "").strip():
-                add_prompt(lib, pr.get("title", ""), pr["text"], src, pr.get("cat", ""))
+                p = add_prompt(lib, pr.get("title", ""), pr["text"], src, pr.get("cat", ""))
+                p["interpreted"] = TODAY
     return queue
 
 HTML = (Path(__file__).parent / "template.html").read_text(encoding="utf-8")

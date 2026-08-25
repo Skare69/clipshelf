@@ -126,6 +126,9 @@ def test():
     prompt = next(iter(lib["prompts"].values()))
     assert prompt["sources"] == ["https://www.tiktok.com/@u/video/1"]
     assert prompt["cat"] == "Coding agents"  # kept through the dedup merge
+    assert prompt["interpreted"] == cs.TODAY  # newest-first sort key stamped at merge
+    assert lib["links"]["https://github.com/foo/bar"]["interpreted"] == cs.TODAY
+    assert lib["links"]["https://www.tiktok.com/@u/video/1"]["interpreted"] == cs.TODAY
     pid = next(iter(lib["prompts"]))  # categorize accepts prompt ids as keys
     e2 = (lib["links"].get(cs.repo_url(pid)) if cs.repo_url(pid) else None) \
         or lib["prompts"].get(pid)
@@ -236,6 +239,7 @@ def test():
         pass
     assert "pipes a remote script" in cs.HTML  # pipe-to-shell installs get flagged
     assert 'id="instDir"' in cs.HTML and '"/dirs"' in cs.HTML and "data-d" in cs.HTML
+    assert 'data-srt="new"' in cs.HTML and "localStorage.srt" in cs.HTML  # newest/az sort toggle
     # embedded JS must parse: Python escapes can silently corrupt it (seen live)
     import re as _re, shutil, subprocess, tempfile as _tf
     if shutil.which("node"):

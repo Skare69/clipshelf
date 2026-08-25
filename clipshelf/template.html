@@ -82,6 +82,13 @@ h2 span{font-family:var(--mono);font-size:13px;color:var(--md-sys-color-on-surfa
 .vtb.on{background:var(--md-sys-color-secondary-container);
   color:var(--md-sys-color-on-secondary-container)}
 .vtb svg{width:18px;height:18px;fill:currentColor}
+/* sort toggle: same pill look, text labels instead of icons */
+.stb{height:34px;border:0;border-radius:99px;background:none;cursor:pointer;
+  display:inline-flex;align-items:center;padding:0 14px;
+  color:var(--md-sys-color-on-surface-variant);font-size:12.5px;font-weight:500}
+.stb:hover{background:var(--hover)}
+.stb.on{background:var(--md-sys-color-secondary-container);
+  color:var(--md-sys-color-on-secondary-container)}
 /* ---- inbox interpretation banner ---- */
 #pendBar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0 6px;
   padding:12px 16px;border-radius:14px;background:var(--md-sys-color-surface-container)}
@@ -250,6 +257,10 @@ md-dialog{min-width:min(90vw,620px)}
       <svg viewBox="0 0 24 24"><path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z"/></svg>
     </button>
   </span>
+  <span class="vt" role="group" aria-label="Sort">
+    <button class="stb" id="srtNew" data-srt="new" title="Newest first" aria-pressed="false">Newest</button>
+    <button class="stb" id="srtAz" data-srt="az" title="Alphabetical by category" aria-pressed="true">A-Z</button>
+  </span>
   <md-icon-button id="setBtn" aria-label="settings">
     <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
   </md-icon-button>
@@ -398,6 +409,7 @@ const xBtn = l => `<button class="x" data-rm="${esc(l.url)}"
 let view = "lib";          // "lib" | "inbox"
 let xf = "all";            // inbox filter: "all" | "pend" | "done"
 let vt = localStorage.vt === "list" ? "list" : "grid";
+let srt = localStorage.srt === "new" ? "new" : "az";  // library sort: newest feed | A-Z grouped
 let interpRun = false;     // an interpretation run is in flight
 document.getElementById("nLib").textContent =
   links.filter(isRepo).length + prompts.length;
@@ -423,7 +435,9 @@ function render() {
              (hit(l.url) || hit(l.title) || hit(l.desc));
     })
     .sort(view === "lib"
-      ? (a, b) => nameOf(a).localeCompare(nameOf(b))
+      ? (srt === "new"
+        ? (a, b) => (b.interpreted || b.found || "").localeCompare(a.interpreted || a.found || "")
+        : (a, b) => nameOf(a).localeCompare(nameOf(b)))
       : (a, b) => (b.found + b.url).localeCompare(a.found + a.url));
   let h = "";
   if (view === "lib") {
@@ -456,56 +470,63 @@ function render() {
       "Uncategorized": "▪️"
     };
     const icon = c => ICON[c] || "▪️";
-    secToc =
-      cats.map(c => `<a href="#g-${slug(c)}"><span class="ico">${icon(c)}</span>${esc(c)}</a>`).join("") +
-      `<a href="#sec-prompts"><span class="ico">${icon("Prompts")}</span>Prompts</a>`;
-    for (const c of cats) {
-      const rows = groups.get(c);
-      h += `<h2 id="g-${slug(c)}"><span class="ico">${icon(c)}${esc(c)} <span>(${rows.length})</span></h2>`;
-      if (vt === "grid") {
-        h += `<ul class="cards">`;
-        for (const l of rows) {
-          const owner = new URL(l.url).pathname.split("/")[1] || "";
-          h += `<li class="card"><div class="head">
-            <img class="avatar" alt="" loading="lazy"
-              src="https://github.com/${esc(owner)}.png?size=64"
-              onerror="this.style.visibility='hidden'">
-            <a class="title" href="${esc(l.url)}">${esc(nameOf(l))}</a>${l.archived
-              ? `<span class="arch" title="archived on GitHub, read-only (seen ${esc(l.archived)})">archived</span>` : ""
-            }${instChip(l)}${getBtn(l)}${stars(l)}${xBtn(l)}</div>` +
-            (cleanDesc(l.desc, nameOf(l)) ? `<div class="desc">${esc(cleanDesc(l.desc, nameOf(l)))}</div>` : "") +
-            meta(l.sources, l.found) + `</li>`;
-        }
-        h += `</ul>`;
-      } else {
-        h += `<ul class="rows">`;
-        for (const l of rows) {
-          const owner = new URL(l.url).pathname.split("/")[1] || "";
-          const d = cleanDesc(l.desc, nameOf(l));
-          h += `<li class="row">
-            <img class="avatar" alt="" loading="lazy"
-              src="https://github.com/${esc(owner)}.png?size=64"
-              onerror="this.style.visibility='hidden'">
-            <div class="rmain">
-              <div class="rhead"><a class="title" href="${esc(l.url)}">${esc(nameOf(l))}</a>${l.archived
-                ? `<span class="arch" title="archived on GitHub, read-only (seen ${esc(l.archived)})">archived</span>` : ""
-              }${instChip(l)}${stars(l)}</div>
-              ${d ? `<div class="desc">${esc(d)}</div>` : ""}
-              ${meta(l.sources, l.found)}
-            </div>
-            <div class="rside">${getBtn(l)}${xBtn(l)}</div>
-          </li>`;
-        }
-        h += `</ul>`;
+    secToc = srt === "new"
+      ? `<a href="#sec-prompts"><span class="ico">${icon("Prompts")}</span>Prompts</a>`
+      : cats.map(c => `<a href="#g-${slug(c)}"><span class="ico">${icon(c)}</span>${esc(c)}</a>`).join("") +
+        `<a href="#sec-prompts"><span class="ico">${icon("Prompts")}</span>Prompts</a>`;
+    const cardHtml = l => {
+      const owner = new URL(l.url).pathname.split("/")[1] || "";
+      return `<li class="card"><div class="head">
+        <img class="avatar" alt="" loading="lazy"
+          src="https://github.com/${esc(owner)}.png?size=64"
+          onerror="this.style.visibility='hidden'">
+        <a class="title" href="${esc(l.url)}">${esc(nameOf(l))}</a>${l.archived
+          ? `<span class="arch" title="archived on GitHub, read-only (seen ${esc(l.archived)})">archived</span>` : ""
+        }${instChip(l)}${getBtn(l)}${stars(l)}${xBtn(l)}</div>` +
+        (cleanDesc(l.desc, nameOf(l)) ? `<div class="desc">${esc(cleanDesc(l.desc, nameOf(l)))}</div>` : "") +
+        meta(l.sources, srt === "new" ? (l.interpreted || l.found) : l.found) + `</li>`;
+    };
+    const rowHtml = l => {
+      const owner = new URL(l.url).pathname.split("/")[1] || "";
+      const d = cleanDesc(l.desc, nameOf(l));
+      return `<li class="row">
+        <img class="avatar" alt="" loading="lazy"
+          src="https://github.com/${esc(owner)}.png?size=64"
+          onerror="this.style.visibility='hidden'">
+        <div class="rmain">
+          <div class="rhead"><a class="title" href="${esc(l.url)}">${esc(nameOf(l))}</a>${l.archived
+            ? `<span class="arch" title="archived on GitHub, read-only (seen ${esc(l.archived)})">archived</span>` : ""
+          }${instChip(l)}${stars(l)}</div>
+          ${d ? `<div class="desc">${esc(d)}</div>` : ""}
+          ${meta(l.sources, srt === "new" ? (l.interpreted || l.found) : l.found)}
+        </div>
+        <div class="rside">${getBtn(l)}${xBtn(l)}</div>
+      </li>`;
+    };
+    const listHtml = rows =>
+      vt === "grid"
+        ? `<ul class="cards">` + rows.map(cardHtml).join("") + `</ul>`
+        : `<ul class="rows">` + rows.map(rowHtml).join("") + `</ul>`;
+    if (srt === "new") {  // flat chronological feed: category headers gone
+      if (ls.length) h += listHtml(ls);
+    } else {
+      for (const c of cats) {
+        const rows = groups.get(c);
+        h += `<h2 id="g-${slug(c)}"><span class="ico">${icon(c)}${esc(c)} <span>(${rows.length})</span></h2>`;
+        h += listHtml(rows);
       }
     }
     const ps = prompts.filter(p => (!tag || p.cat === tag) && (hit(p.title) || hit(p.text)));
     h += `<h2 id="sec-prompts"><span class="ico">${icon("Prompts")}Prompts <span>(${ps.length})</span></h2>`;
     let pcat = null;  // sorted by category; "￿" sinks uncategorized last
-    for (const p of [...ps].sort((a, b) =>
-        (a.cat || "￿").localeCompare(b.cat || "￿") ||
-        (a.title || "").localeCompare(b.title || ""))) {
-      if ((p.cat || "") !== pcat) {
+    const psSorted = srt === "new"
+      ? [...ps].sort((a, b) => (b.interpreted || b.found || "").localeCompare(a.interpreted || a.found || ""))
+      : [...ps].sort((a, b) =>
+          (a.cat || "￿").localeCompare(b.cat || "￿") ||
+          (a.title || "").localeCompare(b.title || ""));
+    if (srt === "new" && ps.length) h += `<ul class="cards pgrid">`;
+    for (const p of psSorted) {
+      if (srt === "az" && (p.cat || "") !== pcat) {
         if (pcat !== null) h += `</ul>`;
         pcat = p.cat || "";
         const label = pcat || "Uncategorized";
@@ -514,7 +535,7 @@ function render() {
       }
       h += `<li class="card prompt"><div class="head"><b>${esc(p.title) || "Untitled prompt"}</b>
         <md-icon-button data-copy="${esc(p.id)}" aria-label="copy prompt">${COPY_ICON}</md-icon-button></div>
-        <pre>${esc(p.text)}</pre>` + meta(p.sources, p.found) + `</li>`;
+        <pre>${esc(p.text)}</pre>` + meta(p.sources, srt === "new" ? (p.interpreted || p.found) : p.found) + `</li>`;
     }
     if (ps.length) h += `</ul>`;
     if (!ls.length && !ps.length)
@@ -592,6 +613,19 @@ function setVT(v) {
   if (view === "lib") render();
 }
 for (const b of vtBtns) b.onclick = () => setVT(b.dataset.vt);
+// newest/az sort toggle, library view; persisted in localStorage
+const srtBtns = [...document.querySelectorAll(".stb")];
+function setSrt(s) {
+  srt = s;
+  localStorage.srt = s;
+  for (const b of srtBtns) {
+    const on = b.dataset.srt === s;
+    b.classList.toggle("on", on);
+    b.setAttribute("aria-pressed", on);
+  }
+  if (view === "lib") render();
+}
+for (const b of srtBtns) b.onclick = () => setSrt(b.dataset.srt);
 // mobile: sidebar is an off-canvas drawer behind the hamburger
 const navBtn = document.getElementById("navBtn"),
       scrim = document.getElementById("scrim");
@@ -910,5 +944,6 @@ async function interpTick() {
 }
 interpTick();  // picks up an in-progress run (e.g. after a page reload)
 setVT(vt);
+setSrt(srt);
 render();
 </script></body></html>

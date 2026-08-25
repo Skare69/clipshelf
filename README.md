@@ -25,7 +25,7 @@ Open <http://127.0.0.1:8765>. Python 3, stdlib only — nothing to `pip install`
    - *Anything else*: paste text into the UI box; URLs are extracted, deduped, and scanned.
 2. **Interpret** — press **start interpretation** in the Inbox banner (or run `python clipshelf.py pending` and process it yourself). Each pending entry is handed to your agent CLI, which reads the images / videos / pages and writes a findings JSON of repos, verbatim prompts, categories, and install commands. The protocol is one skill file: `.claude/skills/clipshelf-interpret/SKILL.md` — any CLI agent works if it can read a file and write one.
    - The built-in default command is the author's local agent (`omp -p --model llama.cpp/qwen3.8-27b`); set your own under the gear icon (Settings).
-3. **Browse** — the **Library** view groups results by category (Coding agents, Image generation, Prompts, …) with star counts, a card/list toggle, one-click install, and source links. The **Inbox** view keeps every original link with its cached material.
+3. **Browse** — the **Library** view groups results by category (Coding agents, Image generation, Prompts, …) with star counts, card/list and Newest/A-Z toggles, one-click install, and source links. The **Inbox** view keeps every original link with its cached material.
 
 ## Layout
 
