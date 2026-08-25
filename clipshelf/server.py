@@ -79,10 +79,16 @@ def serve(port=8765):
                 self._send(404, b"not found", "text/plain")
 
         def do_POST(self):
-            # trust boundary: browsers send Origin on cross-site POSTs; a random
-            # webpage must not be able to drive this server (remove/install = RCE).
+            # trust boundary: a random webpage must not drive this server
+            # (remove/install = RCE). Browsers send Origin on cross-site POSTs;
+            # a DNS-rebinding form POST carries no Origin, so the Host header
+            # is the backstop. Matching Origin against Host also lets
+            # localhost:8765 work, not just 127.0.0.1.
+            host = self.headers.get("Host", "")
+            if host not in (f"127.0.0.1:{port}", f"localhost:{port}"):
+                return self._send(403, b"unknown host", "text/plain")
             origin = self.headers.get("Origin")
-            if origin and origin != f"http://127.0.0.1:{port}":
+            if origin and origin != f"http://{host}":
                 return self._send(403, b"cross-origin blocked", "text/plain")
             # video-embedded exports can be big; truncating here corrupts the JSON
             n = min(int(self.headers.get("Content-Length") or 0), 200_000_000)
