@@ -5,6 +5,8 @@ a run. Stream clients (the UI dialog, the header chip) tail the line buffer.
 """
 import hashlib
 import json
+import os
+import signal
 import subprocess
 import sys
 import threading
@@ -30,6 +32,18 @@ PROMPT = ("Interpret the single clipshelf entry at {entry} (a JSON file with "
 
 def entry_hash(url):
     return hashlib.sha1(url.encode("utf-8")).hexdigest()[:16]
+
+
+def _kill_tree(p):
+    """Kill the shell AND its children; a bare kill() orphans the agent."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/F", "/T", "/PID", str(p.pid)],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 class Pool:
@@ -115,7 +129,8 @@ class Pool:
                                                out=f"_interp/findings_{h}.json")
                         p = subprocess.Popen(f'{base} "{prompt}"', shell=True,
                                              cwd=HERE, stdin=subprocess.DEVNULL,
-                                             stdout=lf, stderr=subprocess.STDOUT)
+                                             stdout=lf, stderr=subprocess.STDOUT,
+                                             start_new_session=os.name != "nt")
                         procs[h] = [p, time.time(), u, lf]
                         self.emit(f"[{self.done + len(procs)}/{self.total}] started {u}\n")
                     if not procs and (ni >= len(todo) or self.stop_ev.is_set()):
@@ -128,7 +143,7 @@ class Pool:
                     p, t0, u, lf = item
                     if p.poll() is None and (self.stop_ev.is_set()
                                              or time.time() - t0 > TIMEOUT):
-                        p.kill()
+                        _kill_tree(p)
                     if p.poll() is not None:
                         lf.close()
                         ok = p.returncode == 0
