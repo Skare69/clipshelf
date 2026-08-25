@@ -1,5 +1,7 @@
 # clipshelf
 
+[![tests](https://github.com/Skare69/clipshelf/actions/workflows/test.yml/badge.svg)](https://github.com/Skare69/clipshelf/actions/workflows/test.yml)
+
 Turn the links you stumble onto into a curated local library — GitHub repos, prompts, and guides — interpreted by your own AI agent.
 
 ![clipshelf](screenshot.jpg)
