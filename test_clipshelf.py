@@ -196,7 +196,7 @@ def test():
     assert "pending" not in lib4["links"]["https://c/"]
     assert cs.reinterpret(lib4, "https://b/") == 1  # single-url mode
     assert 'id="reintAll"' in cs.HTML and "data-reint" in cs.HTML and '"/reinterpret"' in cs.HTML
-    # interpretation controls live on the pending tab, not in the add dialog
+    # interpretation controls live in the inbox banner, before the add dialog
     assert 'id="pendBar"' in cs.HTML
     assert cs.HTML.index('id="interpBtn"') < cs.HTML.index('id="addDlg"')
     # settings: interpret command override, blank falls back to built-in omp
@@ -209,13 +209,15 @@ def test():
     assert "p.cat === tag" in cs.HTML and "l.cat === tag" in cs.HTML
     assert "prompts.map(p => p.cat)" in cs.HTML
     # toc: persistent nav with view entries, scroll-spy, smooth anchors
-    assert 'id="toc"' in cs.HTML and 'data-nav="${v}"' in cs.HTML
+    assert 'id="toc"' in cs.HTML and 'data-nav="inbox"' in cs.HTML
     assert "scroll-behavior:smooth" in cs.HTML and 'a.getAttribute("href") === "#" + cur.id' in cs.HTML
     # prompt categories: anchored h3s, toc sub-entries, spy covers h3
     assert 'class="tsub"' in cs.HTML and 'id="p-${slug(label)}"' in cs.HTML
     assert 'h2[id], h3[id]' in cs.HTML
     assert 'class="tsec"' in cs.HTML and ".toc .tsec{display:block;overflow:auto" in cs.HTML  # pinned views, scrolling cats
     assert 'class="card prompt"' in cs.HTML  # prompts share the card grid
+    # search applies in the library view too (regression: isRepo early-return)
+    assert 'if (view === "lib" ? !isRepo(l) : isRepo(l)) return false' in cs.HTML
     assert 'data-copy="${esc(p.id)}"' in cs.HTML and "COPY_ICON" in cs.HTML  # icon-only copy
     # favicon inlined + repo file; prompt cats have icons
     assert 'rel="icon" href="data:image/svg+xml' in cs.HTML
@@ -232,6 +234,7 @@ def test():
         cs.list_dirs(str(droot / "nope")); assert False, "missing dir must raise"
     except OSError:
         pass
+    assert "pipes a remote script" in cs.HTML  # pipe-to-shell installs get flagged
     assert 'id="instDir"' in cs.HTML and '"/dirs"' in cs.HTML and "data-d" in cs.HTML
     # embedded JS must parse: Python escapes can silently corrupt it (seen live)
     import re as _re, shutil, subprocess, tempfile as _tf
@@ -259,6 +262,17 @@ def test():
     (root / "My-Skill").mkdir()
     cs.SKILL_ROOTS, cs.PLUGINS = [root], root / "nope"
     assert "my-skill" in cs.installed_index()
+    # tree-kill: the reaper takes the agent down with its shell, live or reaped
+    import os as _os, subprocess as _sp
+    from clipshelf import pool as _pool
+    sleeper = "ping -n 60 127.0.0.1" if _os.name == "nt" else "sleep 60"
+    p = _sp.Popen(sleeper, shell=True, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                  start_new_session=_os.name != "nt")
+    _pool._kill_tree(p)
+    assert p.wait(timeout=15) is not None
+    done = _sp.Popen("exit 0", shell=True)
+    done.wait()
+    _pool._kill_tree(done)  # already-exited process: must not raise
 
     print("ok")
 
