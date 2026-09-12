@@ -1,4 +1,4 @@
-# Clipshelf server plan (rev. 3)
+# Clipshelf server plan (rev. 4)
 
 Consolidated 2026-09-12 after the user interview. This replaces rev. 2's
 single-user schema, tailnet-as-auth, stdlib HTTP server, and online-only PWA
@@ -6,9 +6,16 @@ proposal. **Product decisions and implementation are approved by the user as of
 2026-09-12.** The release gates below remain mandatory; implementation approval
 does not mean that deployment, delivery, or recovery has passed verification.
 
+Rev. 4 adds the open-source and paid-hosting proposal in **sections 10–12**,
+researched 2026-09-12. Sections 1–9 remain the approved rev. 3 **self-hosted
+baseline**. The extension is a recommendation for review, not approval to change
+the license, weaken privacy rules, purchase services, or launch commercial hosting.
+
 Companions: [authentication and recovery](authentication-recovery.md),
 [TikTok acquisition](tiktok-server-side.md), and the historical
-[Android sharing survey](android-sharing.md). Research findings are not claims
+[Android sharing survey](android-sharing.md), plus
+[open-source and managed-hosting research](open-source-hosting.md).
+Research findings are not claims
 that the future server, Android app, or deployment has passed its runtime gates.
 
 ## 1. Approved product contract
@@ -367,9 +374,10 @@ domain. Retention/frequency are operator settings; no new backup platform here.
 
 ## 8. Implementation sequence and observable release gates
 
-These are future gates, **not tests completed during planning**. Early work can
-run locally without NAS deployment or a paid model key. Do not switch the primary
-phone workflow until the complete path passes on the real phone and server.
+These are acceptance requirements, not a completion ledger. Local implementation
+and checks do not discharge real deployment, SMTP, or physical-device gates.
+Do not switch the primary phone workflow until the complete path passes on the
+real phone and server.
 
 | Milestone | Complete, observable result |
 |---|---|
@@ -402,6 +410,199 @@ roles or changing approved privacy/delivery rules.
 
 **Implementation approved 2026-09-12.** Keep actual verification evidence separate
 from these acceptance requirements; do not switch the primary phone workflow early.
+
+## 10. Open source plus paid hosting — proposed direction
+
+**Keep Clipshelf MIT-licensed and offer the same application as a managed
+subscription. Sell operation, not permission to use the code.** The repository
+already has an MIT license; this is productizing the public project, not first
+making its source available. MIT permits commercial use and competing hosts.
+AGPL is an optional future governance decision, not a ban on competitors and
+not a way to revoke previously published MIT permissions.
+
+The [research](open-source-hosting.md) records primary-source license comparisons,
+nearby products, dated provider rates, cost assumptions, and legal uncertainties.
+Competitor prices show a packaging precedent, not demand for Clipshelf.
+
+| Offer | Proposed boundary |
+|---|---|
+| Self-hosted Clipshelf | Same capture, source acquisition, interpretation, collections, Android client, and future portability/security improvements. Operator supplies storage, mail, backups, and a compatible model. No subscription check, hosted account requirement, or phone-home license server. |
+| Managed Clipshelf | Operator supplies public HTTPS, provisioning, updates, verified mail, monitored jobs, bounded model usage and storage, tested off-host backups, and support. Customers do not need Docker, a NAS, Tailscale, or their own model key. |
+| Not offered initially | Permanent free hosted tier, unlimited AI/media, enterprise SSO, white-label hosting, a separate proprietary application fork, iOS app, or guaranteed TikTok availability. |
+
+Keep one source tree, image, API, and Android signing identity. Billing is a
+hosted-service entitlement, never collection authorization or a hidden license
+requirement for self-hosters. Core fixes flow to both deployments. Support terms
+and an official-hosting brand can differ; do not describe MIT as trademark
+exclusivity or claim trademark registration without checking it.
+
+Before promoting a public release, publish supported versions, an install/upgrade
+path, contribution expectations, a private vulnerability-reporting route, and
+release checksums/source identity. Inventory licenses and source/notice obligations
+for the actual image/APK, not just Clipshelf's MIT code: the image also ships
+gallery-dl and FFmpeg. Preserve existing signing keys; do not treat temporary
+Actions artifacts as permanent customer downloads.
+
+## 11. Hosted product contract and minimal architecture
+
+### Start with a bounded managed-instance pilot
+
+**Recommendation: at most five paying design partners, one isolated application
+instance per customer/household.** Provision manually from the existing image;
+each instance has its own web/worker pair, SQLite database, local assets, secrets,
+origin, and application instance identity. The payer's instance is the billing
+scope; its invited members share the allowance. A Personal collection is not a
+new organization/tenant model. Do not enable sharing across customer instances.
+
+Use commercial infrastructure separate from the household NAS and home GPU.
+Customers connect over public HTTPS; Tailscale may protect operator access only.
+A single commercial host may run several instances, but containers share a kernel
+and host failure domain: this is not dedicated-VM isolation or high availability.
+Apply distinct volumes, restrictive filesystem permissions and networks, bounded
+CPU/RAM/PIDs/disk, and tested extractor egress restrictions including cloud
+metadata endpoints. Never mount the Docker socket into a customer-facing app.
+
+Keep one worker coordinator per instance and SQLite on a real local filesystem.
+Backups may go to object storage; live SQLite/WAL files may not. Measure resident
+memory, peak extraction resources, queue delay, storage growth, backup size,
+restore time, and operator time before admitting another instance. No promise
+that a quoted small VM fits five customers.
+
+**ponytail:** manual provisioning and per-customer instances cap the first pilot
+at five customers. Automate the same deployment when measured operator time
+warrants it; design shared-tenant hosting only if measured density/cost requires
+it. PostgreSQL, distributed workers, object-backed live assets, and orchestration
+are separate responses to demonstrated bottlenecks, not prerequisites for charging.
+
+Do not put unrelated paying customers in today's one global application as
+administrators: `ServerSettings` is a singleton, account invitations/admin
+operations are instance-wide, and there is no subscription or tenant model.
+Pilot customers are ordinary application users/collection owners; the operator
+handles account invitations and model settings. Paying does not grant app-admin,
+database, recovery, or other customers' collection access.
+
+### Explicit differences from the approved self-hosted baseline
+
+These changes need owner approval and implementation **before paid admission**;
+this plan does not silently replace sections 1–9.
+
+| Existing rule | Hosted requirement and proposed treatment |
+|---|---|
+| Administrator-invitation-only admission | Keep it for the pilot. Confirm payment with the provider, then issue an invitation to a verified intended recipient; checkout email alone is not account ownership proof. Automate this sequence only at the self-service milestone. |
+| Accounts are disabled, never deleted | Disabling is security state, not erasure. Add an authenticated, scoped export/erasure procedure, including jobs, source files, histories, invitations, logs, provider handling and backup expiry. Determine legal exceptions for minimal accounting/abuse records. Permanent disable-only retention is not a commercial privacy policy. |
+| Retain every acquired source indefinitely | Active customers retain accepted sources within a disclosed storage allowance; do not silently expire old material. At a limit, pause expensive work and offer cleanup/export or an explicitly purchased upgrade. Account closure and valid erasure requests have a separate disclosed deletion schedule. |
+| One trusted admin-managed model | Reuse one managed endpoint per instance, with operator-owned credentials and bounded usage. Disclose the provider, data sent, processing region/retention and subprocessors. Customers cannot select internal endpoints or inherit authority over the provider account. |
+| Jellyfin-style exceptional recovery | Retain same-account recovery only with a documented identity-verification, recent-authentication, audit and notification procedure. A card receipt, matching email string, or support request alone must not transfer an account. Hosting operators can technically access data; do not claim zero knowledge or end-to-end encryption. |
+| Operator backup/restore and legacy import | Add portable, authorized customer export/import; a whole database/secret backup is not a safe customer export. Preserve Personal privacy and other contributors' rights. Exercise hosted-to-self-hosted and reverse migration, not merely download a JSON file. |
+| Private LAN/tailnet service | Add public-ingress abuse protection, aggregate/per-instance budgets, alerting, patching, incident response and operator access controls. Keep all existing authorization, SSRF, idempotency and private-cache boundaries. |
+
+Export must contain authorized originals, findings, provenance, retained assets,
+and a manifest sufficient for a fresh-instance import, not credentials or another
+member's Personal data. Cross-server migration uses a new server identity and
+fresh authentication; preserve the phone's old outbox separately, never rewrite
+old queued shares to a different account/server. Preserve instance identity for
+an actual disaster-recovery restore, not for two simultaneously live clones.
+
+Define how member erasure removes private data and identifying provenance while
+preserving other members' legitimate contributions. Whole-instance removal is
+not a substitute when a household member requests erasure. Restoring a backup
+must reapply applicable erasure records before traffic resumes. A verified
+operator-mediated process can serve the pilot; ad hoc SQL and "contact support"
+without a tested procedure cannot.
+
+### Pricing, usage and billing
+
+Start with one monthly hosted offer and no automatic overages. The research gives
+an illustrative price/cost worksheet, **not an approved price or a capacity
+promise**. Validate willingness to pay with prospective customers and measure
+real videos/carousels before publishing storage, interpretation and support
+allowances. Include retained-media growth, failed/retried model calls, payment
+fees, taxes, email, off-host backups, monitoring, refunds and support time.
+
+Account for the actual billable unit: a share can contain several URLs, and one
+source can produce many images/frames and several paid model attempts. Persist
+usage and reserve bounded work atomically before invoking paid services; release
+unused reservations and reconcile crash/retry outcomes. Quotas must cover web,
+Android, retries and imports. Provider dashboards/alerts alone are not a hard
+spend cap. State whether failed interpretation consumes a customer allowance;
+internal cost accounting must include it either way.
+
+Pause acquisition/interpretation visibly when budgets are exhausted, preserving
+accepted receipts and existing sources/findings. A receipt still means durably
+accepted, not completed. If even bounded intake cannot safely be accepted, reject
+before receipt issuance and leave the phone outbox intact; never silently drop,
+charge twice for an idempotent retry, or reroute a share to get around a quota.
+
+Prefer a hosted checkout/customer portal over custom card handling. Evaluate a
+merchant of record against direct Stripe using the operator's actual country,
+tax duties, content policy and approval status; no provider is selected or
+authorized by this plan. Paddle's published prohibited categories include
+streaming downloaders: resolve product-specific eligibility and TikTok permission
+before selling, not after integrating checkout. During the pilot, manual
+provisioning after checking the authoritative payment state is sufficient.
+Before automated self-service:
+
+- Verify webhook signatures; store provider event identity, make processing
+  idempotent, handle duplicate/out-of-order events, and reconcile missed delivery
+  against current provider subscription state. A success redirect is not payment.
+- Bind provider customer/subscription IDs to an immutable instance identity, not
+  an email address or collection ID. Separate billing authority from membership.
+- Exercise renewal, failed payment, recovery, cancellation at period end, refunds
+  and chargebacks. Never hard-delete collections in a billing webhook.
+- Proposed closure policy: after the paid period ends, pause new expensive work
+  but allow authenticated reading/export for 30 days, notify before live-data
+  deletion, then expire backup copies within a further 30 days. Valid erasure
+  requests and documented legal holds need their own applicable handling.
+  Confirm exact periods and renewal/refund terms before selling.
+
+Website checkout plus the signed sideloaded Android client is the smallest pilot.
+Keep billing off the client initially. A later Google Play release needs its own
+current payments, data-safety, account-deletion and developer-verification review;
+do not assume a Play-distributed app can freely link to web checkout everywhere.
+
+### Operational, privacy and platform launch gates
+
+Before taking payment, establish the seller/legal jurisdiction, supported customer
+countries and age scope, tax/invoice/consumer-cancellation obligations, terms,
+privacy notice, applicable processor agreements, provider approvals and a working
+support/abuse contact. GDPR applicability depends on establishment/targeting, not
+only server location; determine controller/processor roles per processing purpose.
+A merchant of record does not take over application privacy or security duties.
+
+Do not sell reliable TikTok downloading as a guaranteed capability. Public
+availability and successful extraction are not commercial permission. Review
+the applicable TikTok terms, copyright and host/payment/model policies; test
+acquisition from the actual hosting region/network. Where permission or service
+availability is unresolved, preserve links/metadata and permit only authorized
+imports, explicitly disclose the unavailable automatic acquisition, and do not
+advertise it as included. No account-cookie custody or anti-bot escalation service.
+
+Use verified transactional mail, encrypted transport/storage/backups with
+operator-controlled key access, bounded/redacted logs, dependency patching, and
+alerts for disk, backup failure, queue age, auth abuse and model spend. Exercise
+provider failure, disk exhaustion and a host-loss restore. Proposed pilot recovery
+targets are RPO <= 24 hours and RTO <= one working day, measured and disclosed,
+not a 24/7 SLA. Refuse admission if those targets cannot be met. Backups on the
+same host do not meet the host-loss gate.
+
+## 12. Additional milestones and decision gates
+
+No commercial gate is marked complete by this research. Preserve section 8's
+release requirements: remaining real SMTP, public shortlink, physical-phone,
+NAS LAN/tailnet deployment, and deployed restart/upgrade/restore checks are not
+waived by an image publication or this business proposal.
+
+| Milestone | Observable result before moving on |
+|---|---|
+| 7. Public-project readiness | Finish the existing release gates; audit actual distributed licenses/notices/source obligations and repository/artifact privacy; publish a stable versioned image/APK download, upgrade/rollback instructions, supported-version/security-reporting policy and contribution guidance. A new self-hoster installs without a hosted subscription and without personal maintainer data. |
+| 8. Hosted foundations and owner decisions | Approve the hosted exceptions, seller/region, provider agreements, pricing/allowances, erasure/retention and support scope. Implement/test quotas, safe customer export/import and scoped erasure. Two isolated customer instances prove separation of accounts, assets, logs, secrets, billing and restore. An ordinary paying account cannot use operator endpoints. |
+| 9. Paid managed pilot, maximum five customers | Real checkout/invoice verification, invitation/mail delivery and a real-phone share work on public HTTPS without Tailscale. Verify lost responses, offline reconnect, quota exhaustion, provider/network failure, and lack of duplicate receipts/charges. Exercise renewal/cancellation and export followed by fresh self-hosted import; restore off-host backups within measured targets. Record model/media/support cost and actual retention across at least one paid renewal cycle. |
+| 10. Self-service hosted offering | Only after pilot economics and demand hold: automate provisioning and signed/idempotent/reconciled billing events, verified admission, visible usage/limits, cancellation/export/erasure and support operations. Exercise duplicate/reversed/missing webhooks, refund/chargeback and migration/restore failures without privacy or data loss. Recheck distribution/payment policies before any Play launch. |
+| 11. Evidence-led scaling, optional | If per-instance memory/operations cost or measured queue/DB contention fails the agreed margin/latency target, choose the smallest measured remedy. A shared-tenant design must explicitly scope settings, accounts/invitations, jobs, assets, search, cache, exports, billing, support and restores before migration; collection filtering alone is insufficient. Require migration/rollback and adversarial cross-tenant proof before changing isolation. |
+
+**Go/no-go:** no sale while scoped erasure/export, cost bounds, provider/content
+permission, real delivery or restore remains unverified. Do not turn unbounded
+media/AI costs into an "unlimited" subscription to match a competitor's headline.
 
 [android-receive]: https://developer.android.com/develop/ui/compose/sharing/receive
 [android-work]: https://developer.android.com/develop/background-work/background-tasks/persistent
