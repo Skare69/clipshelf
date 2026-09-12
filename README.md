@@ -38,6 +38,11 @@ development mail goes to the console; production needs a real SMTP relay
 
 ## Deploy on the NAS
 
+Published image (linux/amd64 + linux/arm64), built and verified by CI:
+`ghcr.io/skare69/clipshelf:0.1.0`. The Android APK is built and signed by the
+`android-release` workflow and downloaded from its run artifacts — there is no
+app store, you sideload it.
+
 ```
 cp deploy/clipshelf.env.example .env      # fill in image, origin, hosts, data dir, SMTP
 docker compose --profile ops run --rm migrate
