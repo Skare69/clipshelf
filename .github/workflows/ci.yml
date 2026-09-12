@@ -15,7 +15,7 @@ jobs:
     # clipshelf package). Runs outside the NAS; nothing is published.
     runs-on: ubuntu-latest
     env:
-      CLIPSHELF_DATA_DIR: ${{ runner.temp }}/clipshelf-data
+      CLIPSHELF_DATA_DIR: /tmp/clipshelf-data
       CLIPSHELF_DEBUG: "1"
     steps:
       - uses: actions/checkout@v4
@@ -26,7 +26,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python clipshelf.py check
       - run: python clipshelf.py migrate
-      - run: python -m unittest discover -v -p "test_*.py"
+      - run: python clipshelf.py test --verbosity 1
+      - run: python test_clipshelf.py
+      - run: python test_sources.py
 
   android:
     # Debug-build gate for the Android client. Versions come from the source
