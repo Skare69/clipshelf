@@ -1,0 +1,54 @@
+name: android-release
+
+# Builds the signed release APK. Manual dispatch or v* tag push only.
+# Release signing secrets are REQUIRED: the job fails loudly when any is
+# missing — the gate is never silently skipped. The keystore exists only at
+# ~/clipshelf-release.jks (outside the workdir) and is never uploaded.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  signed-apk:
+    runs-on: ubuntu-latest
+    env:
+      CLIPSHELF_RELEASE_KEYSTORE_BASE64: ${{ secrets.CLIPSHELF_RELEASE_KEYSTORE_BASE64 }}
+      CLIPSHELF_RELEASE_STORE_PASSWORD: ${{ secrets.CLIPSHELF_RELEASE_STORE_PASSWORD }}
+      CLIPSHELF_RELEASE_KEY_ALIAS: ${{ secrets.CLIPSHELF_RELEASE_KEY_ALIAS }}
+      CLIPSHELF_RELEASE_KEY_PASSWORD: ${{ secrets.CLIPSHELF_RELEASE_KEY_PASSWORD }}
+    steps:
+      - name: Require signing secrets
+        run: |
+          missing=0
+          for name in CLIPSHELF_RELEASE_KEYSTORE_BASE64 CLIPSHELF_RELEASE_STORE_PASSWORD \
+                      CLIPSHELF_RELEASE_KEY_ALIAS CLIPSHELF_RELEASE_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::missing repository secret ${name} (required for release signing)"
+              missing=1
+            fi
+          done
+          exit "$missing"
+      - uses: actions/checkout@v4
+      - name: Restore keystore outside the repo
+        run: |
+          echo "$CLIPSHELF_RELEASE_KEYSTORE_BASE64" | base64 -d > "$HOME/clipshelf-release.jks"
+          echo "CLIPSHELF_RELEASE_KEYSTORE=$HOME/clipshelf-release.jks" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: true
+      - run: ./gradlew :app:assembleRelease --no-daemon
+        working-directory: android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clipshelf-release-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error

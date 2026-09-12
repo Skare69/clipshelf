@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    # Migrated server checks: dependency install, Django system check, migration
+    # against a throwaway data dir, and the unittest suite (repo root plus the
+    # clipshelf package). Runs outside the NAS; nothing is published.
+    runs-on: ubuntu-latest
+    env:
+      CLIPSHELF_DATA_DIR: ${{ runner.temp }}/clipshelf-data
+      CLIPSHELF_DEBUG: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python clipshelf.py check
+      - run: python clipshelf.py migrate
+      - run: python -m unittest discover -v -p "test_*.py"
+
+  android:
+    # Debug-build gate for the Android client. Versions come from the source
+    # tree (android/gradle/wrapper/gradle-wrapper.properties), never from CI.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          validate-wrappers: true
+      - run: ./gradlew :app:assembleDebug --no-daemon
+        working-directory: android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clipshelf-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+          if-no-files-found: error

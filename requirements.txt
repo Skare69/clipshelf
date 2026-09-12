@@ -1,0 +1,11 @@
+# Clipshelf server dependencies (rev. 3).
+# Pinned lines verified installable on Python 3.13 (2026-09-12, by Main):
+# Django 5.2.17 = current patched 5.2 LTS security release (2026-08-04).
+# ffmpeg/ffprobe are OS packages, NOT pip deps.
+Django>=5.2.17,<5.3
+django-allauth>=65.19.3,<66
+waitress>=3.0.2,<4
+Pillow>=12.3.0,<13
+gallery-dl>=1.32.12,<2
+yt-dlp[curl-cffi]>=2026.8.19
+argon2-cffi>=25.1.0,<26

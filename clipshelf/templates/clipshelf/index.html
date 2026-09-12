@@ -1,0 +1,120 @@
+{% extends "clipshelf/base.html" %}
+{% load static %}
+{% block body %}
+<div id="scrim" hidden></div>
+<header class="top">
+  <button id="navBtn" class="iconbtn navbtn" aria-label="Menu" aria-controls="toc" aria-expanded="false">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+  </button>
+  <a class="brand" href="/">clipshelf</a>
+  <div class="qwrap">
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+    <input id="q" type="search" placeholder="Search titles, text, urls&#8230;  ( / )" aria-label="Search titles, text, and urls" autocomplete="off">
+    <button id="qclear" class="iconbtn" aria-label="Clear search" hidden>
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    </button>
+  </div>
+  <label class="selwrap"><span class="vh">Filter by tag</span>
+    <select id="tag"><option value="">all tags</option></select>
+  </label>
+  <label class="selwrap"><span class="vh">Filter by kind</span>
+    <select id="kind">
+      <option value="">links + prompts</option>
+      <option value="link">links</option>
+      <option value="prompt">prompts</option>
+    </select>
+  </label>
+  <div class="vt" role="group" aria-label="Layout">
+    <button class="vtb" data-vt="grid" aria-pressed="true" title="Card grid">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg><span class="vh">Grid</span>
+    </button>
+    <button class="vtb" data-vt="list" aria-pressed="false" title="List">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z"/></svg><span class="vh">List</span>
+    </button>
+  </div>
+  <div class="vt" role="group" aria-label="Sort">
+    <button class="stb" data-srt="new" aria-pressed="false">Newest</button>
+    <button class="stb" data-srt="az" aria-pressed="true">A-Z</button>
+  </div>
+</header>
+<div class="shell">
+  <aside id="toc" class="toc" aria-label="Navigation">
+    <nav class="vnav" aria-label="Views">
+      <a href="#library" class="vw on" data-nav="library">Library <span class="count" id="nLib"></span></a>
+      <a href="#inbox" class="vw" data-nav="inbox">Inbox <span class="count" id="nInbox"></span></a>
+      <a href="#collections" class="vw" data-nav="collections">Collections</a>
+      <a href="#settings" class="vw" data-nav="settings">Settings</a>
+      <a href="#admin" id="adminNav" class="vw" data-nav="admin" hidden>Admin</a>
+    </nav>
+    <div class="tsep"></div>
+    <div class="tsec" id="tsec"></div>
+  </aside>
+  <main id="main" tabindex="-1">
+    <div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
+    <div id="out"></div>
+  </main>
+</div>
+<div class="fabs">
+  <button id="topBtn" class="fab sub" aria-label="Back to top" hidden>
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8-8 8z"/></svg>
+  </button>
+  <button id="addFab" class="fab" aria-label="Add capture or import">
+    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+  </button>
+</div>
+<dialog id="addDlg" aria-labelledby="addHead">
+  <header class="dhead">
+    <h2 id="addHead">Add capture</h2>
+    <button class="iconbtn" data-close aria-label="Close">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    </button>
+  </header>
+  <section>
+    <label for="capText">Paste links or notes</label>
+    <textarea id="capText" rows="6" placeholder="Paste anything containing one or more http(s) links &#8212; notes, a share text, a single url."></textarea>
+    <p class="err" id="capErr" role="alert" hidden></p>
+    <div class="row2">
+      <label class="grow">Destination
+        <select id="capCol"></select>
+      </label>
+      <button id="capBtn" class="btn primary">Save capture</button>
+    </div>
+    <p class="hint">Saved to the inbox immediately; acquisition and interpretation run on the server.</p>
+  </section>
+  <hr>
+  <section>
+    <h3>Import TikTok export</h3>
+    <div class="row2">
+      <label class="filebtn">Choose tiktok.json<input id="impFile" type="file" accept=".json,application/json"></label>
+      <span id="impName" class="hint"></span>
+    </div>
+    <div class="prog" id="impProg" hidden role="progressbar" aria-label="Import upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="impFill"></div></div>
+    <p class="err" id="impErr" role="alert" hidden></p>
+    <div class="row2">
+      <button id="impBtn" class="btn tonal" disabled>Import</button>
+      <span id="impStat" class="hint"></span>
+    </div>
+    <p class="hint">Browser media/data export only. Server ceiling applies; oversized imports are rejected whole, never truncated.</p>
+  </section>
+</dialog>
+<dialog id="detailDlg" aria-labelledby="detHead">
+  <header class="dhead">
+    <h2 id="detHead"></h2>
+    <button class="iconbtn" data-close aria-label="Close">
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    </button>
+  </header>
+  <div id="detBody"></div>
+</dialog>
+<dialog id="confirmDlg" aria-labelledby="cfHead">
+  <h2 id="cfHead"></h2>
+  <p id="cfText"></p>
+  <div id="cfExtra"></div>
+  <p class="err" id="cfErr" role="alert" hidden></p>
+  <div class="dactions">
+    <button class="btn" id="cfCancel">Cancel</button>
+    <button class="btn danger" id="cfOk">Confirm</button>
+  </div>
+</dialog>
+<script src="{% static 'clipshelf/app.js' %}" defer></script>
+{% endblock %}

@@ -1,0 +1,56 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "dev.clipshelf.app"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "dev.clipshelf.app"
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+    }
+
+    signingConfigs {
+        release {
+            // Release signing material comes ONLY from protected env/secret paths.
+            // Absent env = loud build failure; debug signing never substitutes for release.
+            def ksPath = System.getenv("CLIPSHELF_RELEASE_KEYSTORE")
+            def ksStorePass = System.getenv("CLIPSHELF_RELEASE_STORE_PASSWORD")
+            def ksAlias = System.getenv("CLIPSHELF_RELEASE_KEY_ALIAS")
+            def ksKeyPass = System.getenv("CLIPSHELF_RELEASE_KEY_PASSWORD")
+            if (ksPath != null) {
+                storeFile file(ksPath)
+                storePassword ksStorePass
+                keyAlias ksAlias
+                keyPassword ksKeyPass
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+        debug {
+            // No applicationIdSuffix: the share target identity is dev.clipshelf.app.
+        }
+    }
+
+    buildFeatures {
+        buildConfig true
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "androidx.work:work-runtime:2.9.1"
+}

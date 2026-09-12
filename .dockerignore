@@ -1,0 +1,18 @@
+# Whitelist context: everything not explicitly re-included stays out of the image.
+# This is the hard guard against personal data (library.json/cache/exports) and
+# secrets (env files, keystores) leaking into build context or layers.
+*
+!clipshelf/
+!clipshelf.py
+!deploy/
+!requirements.txt
+
+# Even inside included trees, never ship generated/volatile state.
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.sqlite3
+**/*.sqlite3-wal
+**/*.sqlite3-shm
+**/staging/
+**/.pytest_cache/

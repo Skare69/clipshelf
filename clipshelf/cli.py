@@ -1,82 +1,57 @@
-"""clipshelf CLI.
+"""clipshelf entry: standard Django management commands plus Waitress serve.
 
 Usage:
-  python clipshelf.py links.txt            # ingest: any text file, URLs regexed out
-  python clipshelf.py triage dump.txt      # sort a raw link dump by domain,
-                                           # resolving share.google/vm.tiktok/... redirects
-  echo https://github.com/x/y | python clipshelf.py -
-  python clipshelf.py pending              # JSON list of items awaiting interpretation
-  python clipshelf.py add-extracted f.json # merge findings (see .claude/skills/clipshelf-interpret)
-  python clipshelf.py serve [port]         # localhost server: paste box POSTs dumps,
-                                           # background worker ingests (default port 8765)
+  python clipshelf.py <django-command> [args...]
+      # check, migrate, worker [--once], bootstrap_admin --email EMAIL,
+      # import_library --user EMAIL --input library.json, test, shell, ...
+  python clipshelf.py serve [host][:port]
+      # one-process production Waitress server (default 127.0.0.1:8000)
 
-Data: library.json (source of truth), cache/ (raw pages + images), library.html (browse).
-Seen URLs are skipped; failed fetches are NOT marked seen, so a rerun retries them.
-Stdlib only.
+serve and data-writing commands hold the shared data lock (backup/restore
+take the exclusive one themselves); check/test run unlocked.
 """
-import json
-import re
-import sys
-from pathlib import Path
+import os
+from contextlib import nullcontext
 
-from .lib import (URL_RE, add_extracted, ingest_tiktok, load, norm,
-                  refresh, repo_url, save, scan, triage)
-from .server import serve
+
+def _bind(arg):
+    """'host:port', 'host', ':port', '[v6]:port' -> (host, port); local default."""
+    host, sep, port = arg.rpartition(":")
+    if not sep:
+        host, port = arg, ""
+    try:
+        port = int(port) if port else 8000
+    except ValueError:
+        raise SystemExit(f"clipshelf serve: bad host:port {arg!r}")
+    if not 1 <= port <= 65535:
+        raise SystemExit(f"clipshelf serve: port {port} out of range")
+    return host.strip("[]") or "127.0.0.1", port
+
+
+def _serve(host, port):
+    from clipshelf.management.locks import data_lock
+    from clipshelf.project.wsgi import application
+    from waitress import serve
+    with data_lock():  # shared: a concurrent backup must not snapshot mid-serve
+        print(f"clipshelf on http://{host}:{port} (Ctrl+C stops)")
+        # channel_timeout covers the slowest admin request: the model capability
+        # check talks to the configured endpoint and a local model can be slow.
+        serve(application, host=host, port=port, channel_timeout=900)
+
 
 def main(argv):
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "clipshelf.project.settings")
+    import django
+    django.setup()
     if argv[:1] == ["serve"]:
-        serve(int(argv[1]) if argv[1:] else 8765)
-        return
-    lib = load()
-    if argv[:1] == ["pending"]:
-        print(json.dumps(
-            [{"url": u, "desc": e["desc"], "images": e.get("images", []),
-              "video": e.get("video"), "cache": e.get("cache")}
-             for u, e in lib["links"].items() if e.get("pending")],
-            indent=1, ensure_ascii=False))
-        return
-    if argv[:1] == ["refresh"]:
-        refresh(lib)
-        save(lib)
-        return
-    if argv[:1] == ["triage"]:
-        text = " ".join(sys.stdin.read() if a == "-" else Path(a).read_text(encoding="utf-8")
-                        for a in (argv[1:] or ["-"]))
-        for host, urls in sorted(triage(text, lib).items(), key=lambda g: -len(g[1])):
-            fresh = [u for u, seen in urls if not seen]
-            old = len(urls) - len(fresh)
-            print(f"\n{host} ({len(fresh)} new" + (f", {old} in library" if old else "") + ")")
-            for u in fresh:
-                print(" ", u)
-        return
-    if argv[:1] == ["categorize"]:
-        cats = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
-        hits = 0
-        for key, cat in cats.items():
-            u = repo_url(key) or norm(key)
-            e = (lib["links"].get(u) if u else None) or lib["prompts"].get(key)
-            if e:
-                e["cat"] = cat
-                hits += 1
-            else:
-                print("no entry:", key)
-        save(lib)
-        print(f"{hits} categorized -> library.html")
-        return
-    if argv[:1] == ["add-extracted"]:
-        findings = json.loads(Path(argv[1]).read_text(encoding="utf-8"))
-        queue = add_extracted(lib, findings)
+        return _serve(*_bind(argv[1] if len(argv) > 1 else ""))
+    # backup/restore own the exclusive lock; check/test need no lock
+    unlocked = (argv[0] if argv else "") in ("check", "test", "backup", "restore")
+    if unlocked:
+        lock = nullcontext()
     else:
-        queue = []
-        for arg in argv or ["-"]:
-            raw = (sys.stdin.read() if arg == "-"
-                   else Path(arg).read_text(encoding="utf-8"))
-            if arg.endswith(".json"):
-                queue += ingest_tiktok(json.loads(raw), lib)
-            else:
-                queue += re.findall(URL_RE, raw)
-    new = scan(lib, queue)
-    save(lib)
-    pending = sum(1 for e in lib["links"].values() if e.get("pending"))
-    print(f"{new} scanned, {len(lib['links'])} links, {len(lib['prompts'])} prompts, "
-          f"{pending} pending -> library.html")
+        from clipshelf.management.locks import data_lock
+        lock = data_lock()
+    with lock:
+        from django.core.management import execute_from_command_line
+        execute_from_command_line(["clipshelf.py", *argv])

@@ -1,0 +1,35 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{% block title %}{% block head_title %}clipshelf{% endblock %}{% endblock %}</title>
+<meta name="description" content="clipshelf — private link and prompt library">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<link rel="icon" href="{% static 'clipshelf/favicon.svg' %}" type="image/svg+xml">
+<link rel="stylesheet" href="{% static 'clipshelf/app.css' %}">
+{% block head %}{% endblock %}
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+{% block body %}
+<div class="acct">
+  <header class="acct-top">
+    <a class="brand" href="/">clipshelf</a>
+  </header>
+  {% if messages %}
+  <ul class="messages" role="status">
+    {% for message in messages %}<li class="msg msg-{{ message.tags }}">{{ message }}</li>{% endfor %}
+  </ul>
+  {% endif %}
+  <main id="main" class="acct-card" tabindex="-1">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="foot">
+    <p><a href="/">&#8592; Library</a></p>
+  </footer>
+</div>
+{% endblock %}
+</body>
+</html>

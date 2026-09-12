@@ -1,0 +1,86 @@
+name: docker-publish
+
+# Builds and publishes a versioned image to GHCR. Manual dispatch or v* tag
+# push only — never ordinary pushes, never executed by the agent. The image is
+# built and verified outside the NAS (TrueNAS consumes the published tag).
+# Requires a token with write:packages (workflow GITHUB_TOKEN provides it).
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Numeric image version, e.g. 1.0.0"
+        required: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (amd64) for verification
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: clipshelf:verify
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Verify in-image SQLite runtime (fixed WAL build, not the tag)
+        run: |
+          docker run --rm -e CLIPSHELF_DATA_DIR=/tmp/vdata --entrypoint python clipshelf:verify deploy/check_sqlite.py
+      - name: Verify Django boot path (debug smoke, no secrets)
+        run: |
+          docker run --rm -e CLIPSHELF_DATA_DIR=/tmp/vdata -e CLIPSHELF_DEBUG=1 clipshelf:verify check
+      - name: Entrypoint rejects unknown ops (no shell passthrough)
+        run: |
+          if docker run --rm -e CLIPSHELF_DATA_DIR=/tmp/vdata -e CLIPSHELF_DEBUG=1 clipshelf:verify definitely-not-an-op; then
+            echo "::error::entrypoint accepted an unknown operation"; exit 1
+          fi
+          echo "ok: unknown op rejected"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Resolve versioned tags
+        id: ver
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+        run: |
+          v="${VERSION_INPUT:-${GITHUB_REF_NAME#v}}"
+          case "$v" in ""|*[!0-9.]*) echo "::error::invalid version '$v' (need numeric like 1.0.0)"; exit 1;; esac
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          image="$(printf '%s' 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%.*}"
+          {
+            echo "tags<<TAGS"
+            echo "${image}:${v}"
+            echo "${image}:${major}.${minor}"
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.ver.outputs.tags }}
+          build-args: |
+            IMAGE_VERSION=${{ steps.ver.outputs.version }}
+            IMAGE_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

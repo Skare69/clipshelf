@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds ONLY: allow cleartext to the emulator loopback aliases so the
+     app can talk to a development server on the host machine. Release builds
+     inherit the main manifest (HTTPS only, cleartext forbidden). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application android:networkSecurityConfig="@xml/network_security_config_debug" />
+
+</manifest>

@@ -1,0 +1,100 @@
+name: clipshelf
+
+# Clipshelf on the NAS: one image, two roles (web + one worker), one data volume.
+#
+# First run / upgrades (all explicit — nothing auto-migrates, nothing
+# auto-creates an administrator):
+#   1. cp deploy/clipshelf.env.example .env   then fill in real values
+#   2. docker compose --profile ops run --rm migrate
+#   3. docker compose up -d                   (web + worker)
+#   4. docker compose --profile ops run --rm bootstrap   (first admin only)
+#   5. verify the SQLite runtime any time:
+#      docker compose --profile ops run --rm verify
+#
+# Local verification without a published image (never ship an unpublished tag
+# claim to the NAS):
+#   CLIPSHELF_IMAGE=clipshelf:local docker compose build
+#
+# LAN access: the web port publishes on the LAN interface directly — no
+# Tailscale namespace dependency, no Funnel, no public exposure by default.
+# Reaching it remotely stays the tailnet/subnet routing's job; reachability
+# from the internet is the firewall's job, not this file's.
+
+x-app: &app
+  # REQUIRED: a real versioned image that exists (published GHCR tag, or a local
+  # tag you built yourself as shown above). Never an "example v1" that was never
+  # built or pushed.
+  image: "${CLIPSHELF_IMAGE:?set CLIPSHELF_IMAGE to an existing versioned image, e.g. ghcr.io/<owner>/clipshelf:1.0.0 — or build locally with CLIPSHELF_IMAGE=clipshelf:local docker compose build}"
+  build:
+    context: .
+    dockerfile: Dockerfile
+  # REQUIRED: the unprivileged numeric UID/GID that owns the host data
+  # directory. This is the real runtime identity (PUID/PGID do nothing on a
+  # plain Python image). No docker socket and no host home are mounted.
+  user: "${CLIPSHELF_UID:?numeric uid owning the data dir}:${CLIPSHELF_GID:?numeric gid owning the data dir}"
+  environment: &app-env
+    CLIPSHELF_DATA_DIR: /data
+    CLIPSHELF_ORIGIN: ${CLIPSHELF_ORIGIN:?required, the production https:// origin}
+    # REQUIRED: every hostname the server answers on — the LAN name and the
+    # tailnet name. Forged Host headers are rejected, so this must be explicit.
+    CLIPSHELF_ALLOWED_HOSTS: "${CLIPSHELF_ALLOWED_HOSTS:?required, comma-separated hostnames (LAN + tailnet)}"
+    CLIPSHELF_SECRET_KEY: ${CLIPSHELF_SECRET_KEY:?required in production}
+    CLIPSHELF_DEBUG: ${CLIPSHELF_DEBUG:-0}
+    # SQLite pragmas (WAL, synchronous=FULL, busy timeout) are enforced by the
+    # app settings; do not add database flags here.
+    CLIPSHELF_SQLITE_VERIFIED: ${CLIPSHELF_SQLITE_VERIFIED:-}
+    # SMTP relay for invitations/password recovery. Ordinary login does not
+    # need SMTP; an unset host selects the console backend (development only).
+    CLIPSHELF_SMTP_HOST: ${CLIPSHELF_SMTP_HOST:-}
+    CLIPSHELF_SMTP_PORT: ${CLIPSHELF_SMTP_PORT:-587}
+    CLIPSHELF_SMTP_USER: ${CLIPSHELF_SMTP_USER:-}
+    CLIPSHELF_SMTP_PASSWORD: ${CLIPSHELF_SMTP_PASSWORD:-}
+    CLIPSHELF_SMTP_USE_TLS: ${CLIPSHELF_SMTP_USE_TLS:-1}
+    CLIPSHELF_SMTP_USE_SSL: ${CLIPSHELF_SMTP_USE_SSL:-}
+    CLIPSHELF_EMAIL_FROM: ${CLIPSHELF_EMAIL_FROM:?required envelope-from for account mail}
+  volumes:
+    # REQUIRED: local dataset directory (e.g. a ZFS dataset mountpoint). Not
+    # NFS/SMB: SQLite WAL needs real local filesystem semantics.
+    - ${CLIPSHELF_DATA_DIR:?host path of the local data dataset}:/data
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  web:
+    <<: *app
+    ports:
+      - "${CLIPSHELF_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "python", "deploy/healthcheck.py"]
+      interval: 30s
+      timeout: 15s
+      start_period: 30s
+      retries: 5
+
+  worker:
+    <<: *app
+    command: ["worker"]
+
+  # ---- explicit one-shot operations (profiles keep them out of `up`) ----
+  migrate:
+    <<: *app
+    command: ["migrate"]
+    profiles: ["ops"]
+    restart: "no"
+
+  bootstrap:
+    <<: *app
+    command: ["bootstrap"]
+    profiles: ["ops"]
+    restart: "no"
+    environment:
+      <<: *app-env
+      CLIPSHELF_ADMIN_EMAIL: ${CLIPSHELF_ADMIN_EMAIL:?email of the initial administrator}
+
+  verify:
+    <<: *app
+    entrypoint: ["python", "deploy/check_sqlite.py"]
+    profiles: ["ops"]
+    restart: "no"
