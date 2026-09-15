@@ -26,10 +26,6 @@ if not DEBUG and not SECRET_KEY:
 if DEBUG and not SECRET_KEY:
     SECRET_KEY = "clipshelf-dev-only-insecure-key"  # development convenience only
 
-CLIPSHELF_ORIGIN = os.environ.get("CLIPSHELF_ORIGIN", "").rstrip("/")
-if not DEBUG and not CLIPSHELF_ORIGIN.startswith("https://"):
-    raise ImproperlyConfigured("CLIPSHELF_ORIGIN must be an https:// URL in production.")
-
 _env_data_dir = os.environ.get("CLIPSHELF_DATA_DIR")
 if not DEBUG and not _env_data_dir:
     raise ImproperlyConfigured("CLIPSHELF_DATA_DIR is required in production.")
@@ -45,6 +41,19 @@ if not DEBUG and not ALLOWED_HOSTS:
     raise ImproperlyConfigured("CLIPSHELF_ALLOWED_HOSTS is required in production.")
 if DEBUG:
     ALLOWED_HOSTS += ["localhost", "127.0.0.1", "[::1]", "testserver"]
+
+# Account mail and CLI commands (bootstrap, worker) build absolute links with no
+# HTTP request to read a Host from, so links resolve against one canonical
+# origin. Defaults to the first allowed host; set CLIPSHELF_ORIGIN only for a
+# non-standard port or scheme.
+CLIPSHELF_ORIGIN = os.environ.get("CLIPSHELF_ORIGIN", "").rstrip("/")
+if not CLIPSHELF_ORIGIN and not DEBUG:
+    CLIPSHELF_ORIGIN = f"https://{ALLOWED_HOSTS[0]}"
+if not DEBUG and (not CLIPSHELF_ORIGIN.startswith("https://") or "*" in CLIPSHELF_ORIGIN):
+    raise ImproperlyConfigured(
+        "CLIPSHELF_ORIGIN must be an https:// URL without wildcards; leave it "
+        "unset to use the first CLIPSHELF_ALLOWED_HOSTS entry."
+    )
 
 CSRF_TRUSTED_ORIGINS = [CLIPSHELF_ORIGIN] if CLIPSHELF_ORIGIN else []
 if DEBUG:
@@ -218,9 +227,8 @@ if not DEBUG:
     SECURE_HSTS_INCLUDE_SUBDOMAINS = True
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-DEFAULT_FROM_EMAIL = os.environ.get(
-    "CLIPSHELF_EMAIL_FROM",
-    f"clipshelf@{urlsplit(CLIPSHELF_ORIGIN or 'http://localhost').hostname or 'localhost'}",
+DEFAULT_FROM_EMAIL = os.environ.get("CLIPSHELF_EMAIL_FROM", "").strip() or (
+    f"clipshelf@{urlsplit(CLIPSHELF_ORIGIN or 'http://localhost').hostname or 'localhost'}"
 )
 SECURE_CONTENT_TYPE_NOSNIFF = True
 SECURE_REFERRER_POLICY = "same-origin"

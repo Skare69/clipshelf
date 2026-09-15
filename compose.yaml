@@ -34,7 +34,9 @@ x-app: &app
   user: "${CLIPSHELF_UID:?numeric uid owning the data dir}:${CLIPSHELF_GID:?numeric gid owning the data dir}"
   environment: &app-env
     CLIPSHELF_DATA_DIR: /data
-    CLIPSHELF_ORIGIN: ${CLIPSHELF_ORIGIN:?required, the production https:// origin}
+    # Absolute links in account mail default to https://<first allowed host>.
+    # Set CLIPSHELF_ORIGIN only for a non-standard port or scheme.
+    CLIPSHELF_ORIGIN: ${CLIPSHELF_ORIGIN:-}
     # REQUIRED: every hostname the server answers on — the LAN name and the
     # tailnet name. Forged Host headers are rejected, so this must be explicit.
     CLIPSHELF_ALLOWED_HOSTS: "${CLIPSHELF_ALLOWED_HOSTS:?required, comma-separated hostnames (LAN + tailnet)}"
@@ -51,7 +53,8 @@ x-app: &app
     CLIPSHELF_SMTP_PASSWORD: ${CLIPSHELF_SMTP_PASSWORD:-}
     CLIPSHELF_SMTP_USE_TLS: ${CLIPSHELF_SMTP_USE_TLS:-1}
     CLIPSHELF_SMTP_USE_SSL: ${CLIPSHELF_SMTP_USE_SSL:-}
-    CLIPSHELF_EMAIL_FROM: ${CLIPSHELF_EMAIL_FROM:?required envelope-from for account mail}
+    # Defaults to clipshelf@<origin host>; set to override the envelope-from.
+    CLIPSHELF_EMAIL_FROM: ${CLIPSHELF_EMAIL_FROM:-}
   volumes:
     # REQUIRED: local dataset directory (e.g. a ZFS dataset mountpoint). Not
     # NFS/SMB: SQLite WAL needs real local filesystem semantics.

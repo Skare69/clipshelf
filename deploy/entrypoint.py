@@ -9,7 +9,8 @@ Ops (first argument, default `serve`):
   check              run Django system checks (diagnostics, no production gates)
 
 Production gates (skipped only with CLIPSHELF_DEBUG=1):
-  - CLIPSHELF_ORIGIN must be an https:// URL
+  - CLIPSHELF_ALLOWED_HOSTS must be set; CLIPSHELF_ORIGIN is optional and must
+    be https:// when given (otherwise the first allowed host is used)
   - CLIPSHELF_SECRET_KEY must be set
   - runtime SQLite >= 3.51.3 (WAL-reset fix); never assumed from the image tag
 
@@ -50,8 +51,10 @@ def production_gates():
         print("entrypoint: CLIPSHELF_DEBUG=1 — development mode, production gates skipped")
         return
     origin = os.environ.get("CLIPSHELF_ORIGIN", "")
-    if not origin.startswith("https://"):
-        fail("production requires CLIPSHELF_ORIGIN set to the https:// origin")
+    if origin and not origin.startswith("https://"):
+        fail("CLIPSHELF_ORIGIN must be an https:// origin when set")
+    if not origin and not os.environ.get("CLIPSHELF_ALLOWED_HOSTS", "").strip():
+        fail("production requires CLIPSHELF_ALLOWED_HOSTS (account links use the first entry)")
     if not os.environ.get("CLIPSHELF_SECRET_KEY"):
         fail("production requires CLIPSHELF_SECRET_KEY")
     if not os.environ.get("CLIPSHELF_SMTP_HOST"):
