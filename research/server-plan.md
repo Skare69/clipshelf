@@ -247,7 +247,7 @@ a key is nonempty, selects HTTP processing; a trusted LAN model may not need a k
 Missing/broken configuration leaves captures safely queued with a visible error.
 
 The admin form offers a provider preset list that fills the base URL only —
-OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, xAI, Ollama, llama.cpp,
+OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, xAI, Z.AI, Ollama, llama.cpp,
 LM Studio, vLLM — and any other endpoint remains typeable. Model names are
 never shipped as a hardcoded list because they change faster than releases do:
 `POST /api/admin/llm/models` asks the configured endpoint for its own
