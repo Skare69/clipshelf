@@ -2,9 +2,12 @@
 
 [![tests](https://github.com/Skare69/clipshelf/actions/workflows/ci.yml/badge.svg)](https://github.com/Skare69/clipshelf/actions/workflows/ci.yml)
 
-Share a link from your phone; your own server saves it, fetches the material, and
-an AI endpoint you control turns it into a curated library of repos, prompts and
-guides. Self-hosted, account-based, no third-party service in the loop.
+Share a link from your phone and your own server fetches what is actually in the
+post: TikTok photo carousels slide by slide with their audio, video with its ASR
+captions, pages as text. A vision model you host turns that into typed repo,
+prompt and guide entries — not tags. The Android app queues shares while offline
+and delivers them when it can. Self-hosted, account-based, no third-party
+service in the loop.
 
 ![clipshelf](screenshot.jpg)
 
@@ -39,9 +42,9 @@ relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery.
 ## Deploy on the NAS
 
 Published image (linux/amd64 + linux/arm64), built and verified by CI:
-`ghcr.io/skare69/clipshelf:0.2.0`. The Android APK is built and signed by the
-`android-release` workflow and downloaded from its run artifacts — there is no
-app store, you sideload it.
+`ghcr.io/skare69/clipshelf:0.2.0`. The signed Android APK is attached to the
+[latest release](https://github.com/Skare69/clipshelf/releases/latest) — there
+is no app store, you sideload it.
 
 ```
 cp deploy/clipshelf.env.example .env      # fill in image, UID/GID, data dir, port
