@@ -371,6 +371,26 @@ def llm_check(request, user):
     )
 
 
+@admin_endpoint("POST")
+def llm_models(request, user):
+    """List what the endpoint offers, using the typed base URL/key so the admin
+    can pick a model before committing the settings."""
+    body = _json_body(request)
+    _require_reauth(request, body)
+    s = get_settings()
+    base_url = str(body.get("base_url") or s.llm_base_url or "").strip()
+    if not base_url:
+        raise ApiError(400, detail="Enter a base URL first.")
+    api_key = body["api_key"] if body.get("api_key") else (s.llm_api_key or None)
+    from clipshelf.interpretation import ConfigurationError, list_models
+
+    try:
+        models = list_models({"base_url": base_url, "api_key": api_key})
+    except ConfigurationError as exc:
+        raise ApiError(502, detail=str(exc))
+    return JsonResponse({"models": models})
+
+
 admin_urlpatterns = [
     path("admin/users", user_list, name="clipshelf_admin_users"),
     path(
@@ -389,4 +409,5 @@ admin_urlpatterns = [
     ),
     path("admin/llm", llm_config, name="clipshelf_admin_llm"),
     path("admin/llm/check", llm_check, name="clipshelf_admin_llm_check"),
+    path("admin/llm/models", llm_models, name="clipshelf_admin_llm_models"),
 ]

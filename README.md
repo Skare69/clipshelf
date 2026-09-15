@@ -42,7 +42,7 @@ relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery.
 ## Deploy on the NAS
 
 Published image (linux/amd64 + linux/arm64), built and verified by CI:
-`ghcr.io/skare69/clipshelf:0.2.3`. The signed Android APK is attached to each
+`ghcr.io/skare69/clipshelf:0.3.0`. The signed Android APK is attached to each
 [release](https://github.com/Skare69/clipshelf/releases) — there is no app
 store, you sideload it.
 
@@ -84,6 +84,9 @@ is DNS rebinding; narrow it by setting `CLIPSHELF_ALLOWED_HOSTS`.
 3. **Interpret** — one admin-managed OpenAI-compatible endpoint (any local or
    remote vision model) reads the acquired material and returns repos, prompts,
    links and categories, with warnings for anything it could not see or verify.
+   Pick a provider from the list — OpenAI, Anthropic, Gemini, OpenRouter, Groq,
+   Mistral, xAI, Ollama, llama.cpp, LM Studio, vLLM, or anything else you type —
+   and the model names are fetched from that endpoint rather than guessed.
 4. **Browse** — Library and Inbox per collection, search, categories, source
    viewing, retry. Collections are the access boundary: everyone has a private
    Personal collection, shared collections have explicit members.

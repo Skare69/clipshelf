@@ -246,6 +246,15 @@ Provider billing belongs to the shared account. Endpoint selection, not whether
 a key is nonempty, selects HTTP processing; a trusted LAN model may not need a key.
 Missing/broken configuration leaves captures safely queued with a visible error.
 
+The admin form offers a provider preset list that fills the base URL only —
+OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, xAI, Ollama, llama.cpp,
+LM Studio, vLLM — and any other endpoint remains typeable. Model names are
+never shipped as a hardcoded list because they change faster than releases do:
+`POST /api/admin/llm/models` asks the configured endpoint for its own
+`GET /models` and the form suggests what comes back. The listing accepts an
+unsaved key so a provider can be tried before it is committed, and reports an
+endpoint that cannot list as a 502 rather than an empty picker.
+
 The server, not a tool-less chat completion, gathers the material:
 
 - Bounded readable page text, description, and relevant source links.

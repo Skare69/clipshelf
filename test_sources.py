@@ -2,6 +2,7 @@
 malformed media and output bounds. Offline: sockets and endpoints are faked."""
 import base64
 import gzip
+import json
 import io
 import socket
 import tempfile
@@ -366,6 +367,64 @@ def test_interpretation_bounds():
     print("interpretation bounds ok")
 
 
+def test_list_models():
+    """The admin picker's source of truth: what the endpoint says it has."""
+    calls = []
+
+    class Resp:
+        def __init__(self, body): self.body = body
+        def read(self, n): return self.body[:n]
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_open(req, timeout=None):
+        calls.append((req.full_url, req.get_header("Authorization")))
+        return Resp(json.dumps({"data": [{"id": "b"}, {"id": "a"}, {"id": "a"},
+                                         {"id": 7}, {"id": " "}, {}]}).encode())
+
+    real_open = interp.urllib.request.urlopen
+    interp.urllib.request.urlopen = fake_open
+    try:
+        # sorted, deduped, non-string ids dropped; trailing slash not doubled
+        assert interp.list_models({"base_url": "http://h/v1/", "api_key": "sekret"}) == ["a", "b"]
+        assert calls[0] == ("http://h/v1/models", "Bearer sekret")
+        # a local endpoint without a key sends no Authorization header
+        interp.list_models({"base_url": "http://h/v1"})
+        assert calls[1][1] is None
+
+        def denied(req, timeout=None):
+            raise interp.urllib.error.HTTPError(req.full_url, 401, "no", {}, io.BytesIO(b""))
+
+        interp.urllib.request.urlopen = denied
+        try:
+            interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
+            raise AssertionError("401 accepted")
+        except interp.ConfigurationError as exc:
+            assert "credentials" in str(exc) and "sekret" not in str(exc)
+
+        def unreachable(req, timeout=None):
+            raise interp.urllib.error.URLError("refused by sekret")
+
+        interp.urllib.request.urlopen = unreachable
+        try:
+            interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
+            raise AssertionError("unreachable accepted")
+        except interp.ConfigurationError as exc:
+            assert "sekret" not in str(exc)
+
+        # a server that answers but not with a model list is a config error,
+        # never an empty picker that looks like "no models installed"
+        interp.urllib.request.urlopen = lambda req, timeout=None: Resp(b"<html>nope</html>")
+        try:
+            interp.list_models({"base_url": "http://h/v1"})
+            raise AssertionError("garbage accepted")
+        except interp.ConfigurationError:
+            pass
+    finally:
+        interp.urllib.request.urlopen = real_open
+    print("model listing ok")
+
+
 def test():
     test_ssrf_pinned_transport()
     print("ssrf/pin ok")
@@ -373,6 +432,7 @@ def test():
     print("redirect/bounds ok")
     test_import_media_bounds()
     test_interpretation_bounds()
+    test_list_models()
     print("ok")
 
 

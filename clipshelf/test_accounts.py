@@ -7,6 +7,7 @@ Invitation replay, native token login and session revocation, admin boundary
 import json
 import secrets
 from datetime import timedelta
+from unittest.mock import patch
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
@@ -27,8 +28,9 @@ from clipshelf.accounts import (
     invitation_token_hash,
     json_error,
 )
+from clipshelf.interpretation import ConfigurationError
 from clipshelf.models import Collection, Invitation, Membership
-from clipshelf.services import accessible_collections
+from clipshelf.services import accessible_collections, get_settings
 from django.core import mail
 
 PASSWORD = "correct horse battery staple 42!"
@@ -67,6 +69,7 @@ urlpatterns = [
         "admin/collections/<uuid:collection_id>/transfer",
         admin_views.collection_transfer,
     ),
+    path("admin/llm/models", admin_views.llm_models),
     path("invite/<str:token>", accounts.invite_view, name="clipshelf_invite"),
     path("accounts/", include("allauth.account.urls")),
     path("_allauth/", include("allauth.headless.urls")),
@@ -411,3 +414,53 @@ class AdminBoundaryTests(AccountTestCase):
         self.admin_post(f"/admin/users/{owner.pk}/status", {"active": True})
         shared.refresh_from_db()
         self.assertEqual(shared.owner, member)
+
+
+class LlmModelPickerTests(AccountTestCase):
+    """The admin picker must be usable before settings are committed, and must
+    never fall back to a key the admin did not intend to use."""
+
+    def setUp(self):
+        super().setUp()
+        self.client.force_login(self.admin)
+        self.seen = []
+
+        def fake_list(config, **kw):
+            self.seen.append(config)
+            return ["vision-a", "vision-b"]
+
+        patcher = patch("clipshelf.interpretation.list_models", fake_list)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_typed_key_is_used_before_the_settings_are_saved(self):
+        response = self.admin_post(
+            "/admin/llm/models",
+            {"base_url": "http://endpoint/v1", "api_key": "typed"},
+            reauth=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["models"], ["vision-a", "vision-b"])
+        self.assertEqual(self.seen[-1]["api_key"], "typed")
+
+    def test_saved_key_and_base_url_fill_in_when_omitted(self):
+        settings_row = get_settings()
+        settings_row.llm_base_url = "http://saved/v1"
+        settings_row.llm_api_key = "stored"
+        settings_row.save()
+        self.assertEqual(self.admin_post("/admin/llm/models", {}, reauth=True).status_code, 200)
+        self.assertEqual(self.seen[-1], {"base_url": "http://saved/v1", "api_key": "stored"})
+
+    def test_no_endpoint_is_a_request_error_and_a_bad_one_is_a_gateway_error(self):
+        self.assertEqual(self.admin_post("/admin/llm/models", {}, reauth=True).status_code, 400)
+        with patch("clipshelf.interpretation.list_models",
+                   side_effect=ConfigurationError("endpoint unreachable")):
+            response = self.admin_post(
+                "/admin/llm/models", {"base_url": "http://dead/v1"}, reauth=True)
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("unreachable", response.json()["detail"])
+
+    def test_listing_requires_reauthentication(self):
+        response = self.admin_post("/admin/llm/models", {"base_url": "http://endpoint/v1"})
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.seen, [])

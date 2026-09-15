@@ -21,7 +21,8 @@ from PIL import Image, ImageOps
 from clipshelf.lib import norm, repo_url
 from clipshelf import network
 
-__all__ = ["InterpretationError", "ConfigurationError", "interpret", "check_connection"]
+__all__ = ["InterpretationError", "ConfigurationError", "interpret", "check_connection",
+           "list_models"]
 
 class InterpretationError(Exception):
     """Failed or malformed interpretation; message is safe to surface."""
@@ -112,6 +113,30 @@ def _post(base, key, payload, timeout):
     if len(raw) > LLM_RESPONSE_MAX:
         raise InterpretationError("model response exceeds size bound")
     return json.loads(raw.decode("utf-8", errors="replace"))
+
+
+def list_models(config, timeout=30):
+    """Model ids the endpoint offers, for the admin picker. Any OpenAI-compatible
+    server exposes GET /models; a provider that does not just leaves the admin
+    typing the name by hand."""
+    base, _, key = _config({**config, "model": config.get("model") or "-"})
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    req = urllib.request.Request(base + "/models", headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read(LLM_RESPONSE_MAX + 1)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            raise ConfigurationError(f"endpoint rejected credentials (HTTP {exc.code})")
+        raise ConfigurationError(f"endpoint cannot list models (HTTP {exc.code})")
+    except (urllib.error.URLError, OSError) as exc:
+        raise ConfigurationError(f"endpoint unreachable: {_redact(str(exc)[:200], key)}")
+    try:
+        data = json.loads(raw.decode("utf-8", errors="replace"))["data"]
+        ids = [m["id"] for m in data if isinstance(m.get("id"), str) and m["id"].strip()]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise ConfigurationError(f"endpoint returned no model list ({exc.__class__.__name__})")
+    return sorted(set(ids))[:500]
 
 
 def _chat(base, model, key, messages, timeout):

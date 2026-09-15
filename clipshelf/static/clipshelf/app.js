@@ -1001,17 +1001,50 @@ function adminCollections(cols, err) {
     el("p", { class: "hint", text: "Succession requires a disabled owner and an existing active member. The admin never gains content access through a transfer." }));
   return p;
 }
+/* Base URLs are stable; model names are not, so those are fetched, never hardcoded.
+   Vision is required — the capability check sends an image. */
+const LLM_PROVIDERS = [
+  { id: "", label: "Custom / OpenAI-compatible", url: "" },
+  { id: "openai", label: "OpenAI", url: "https://api.openai.com/v1" },
+  { id: "anthropic", label: "Anthropic", url: "https://api.anthropic.com/v1" },
+  { id: "gemini", label: "Google Gemini", url: "https://generativelanguage.googleapis.com/v1beta/openai" },
+  { id: "openrouter", label: "OpenRouter", url: "https://openrouter.ai/api/v1" },
+  { id: "groq", label: "Groq", url: "https://api.groq.com/openai/v1" },
+  { id: "mistral", label: "Mistral", url: "https://api.mistral.ai/v1" },
+  { id: "xai", label: "xAI", url: "https://api.x.ai/v1" },
+  { id: "ollama", label: "Ollama (local)", url: "http://localhost:11434/v1", local: true },
+  { id: "llamacpp", label: "llama.cpp (local)", url: "http://localhost:8080/v1", local: true },
+  { id: "lmstudio", label: "LM Studio (local)", url: "http://localhost:1234/v1", local: true },
+  { id: "vllm", label: "vLLM (local)", url: "http://localhost:8000/v1", local: true },
+];
 function adminLlm(llm, err) {
   const p = el("section", { class: "panel" }, el("h3", { text: "Shared interpretation endpoint" }));
   if (err) return p.append(errNode(err)), p;
   const base = el("input", { type: "url", value: llm.base_url || "", placeholder: "https://llm.example.internal/v1" });
-  const model = el("input", { type: "text", value: llm.model || "", placeholder: "model name" });
+  const models = el("datalist", { id: "llmModels" });
+  const model = el("input", { type: "text", class: "grow", value: llm.model || "", placeholder: "model name", list: "llmModels" });
+  const load = el("button", { class: "btn small", type: "button", text: "Load models" });
   const conc = el("input", { type: "number", min: 1, max: 16, value: llm.concurrency ?? 2 });
   const key = el("input", { type: "password", placeholder: llm.has_api_key ? "Saved — leave blank to keep" : "No key set (optional for local endpoints)", autocomplete: "new-password" });
   const clear = el("input", { type: "checkbox", id: "llmClearKey" });
+  const provider = el("select", {}, ...LLM_PROVIDERS.map(o => el("option", { value: o.id, text: o.label })));
+  const known = LLM_PROVIDERS.find(o => o.url && (llm.base_url || "").startsWith(o.url));
+  provider.value = known ? known.id : "";
+  const localHint = el("p", { class: "help", hidden: !known?.local,
+    text: "Clipshelf runs in a container, so localhost is the container itself — use the host's address." });
+  provider.addEventListener("change", () => {
+    const o = LLM_PROVIDERS.find(x => x.id === provider.value) || {};
+    if (o.url) base.value = o.url;
+    localHint.hidden = !o.local;
+    models.replaceChildren();
+  });
   const form = el("form", {},
-    el("div", { class: "field" }, el("label", { text: "Base URL" }), base),
-    el("div", { class: "field" }, el("label", { text: "Model" }), model),
+    el("div", { class: "field" }, el("label", { text: "Provider" }), provider,
+      el("p", { class: "help", text: "Presets fill the base URL. Any OpenAI-compatible endpoint works; vision is required." })),
+    el("div", { class: "field" }, el("label", { text: "Base URL" }), base, localHint),
+    el("div", { class: "field" }, el("label", { text: "Model" }),
+      el("div", { class: "row2" }, model, load), models,
+      el("p", { class: "help", text: "Load models asks the endpoint what it offers; you can also type a name." })),
     el("div", { class: "field" }, el("label", { text: "Concurrent requests" }), conc),
     el("div", { class: "field" }, el("label", { text: "API key" }), key,
       el("p", { class: "help", text: "Write-only: never returned by the server" + (llm.has_api_key ? ". A key is saved" : "") + ". Omit to keep; tick to clear." })),
@@ -1021,6 +1054,19 @@ function adminLlm(llm, err) {
     el("div", { class: "acts" },
       el("button", { class: "btn primary", type: "submit", text: "Save settings" }),
       el("button", { class: "btn tonal", type: "button", text: "Check connection" })));
+  load.addEventListener("click", async () => {
+    load.disabled = true; load.textContent = "Loading…";
+    try {
+      const b = { base_url: base.value.trim() };
+      if (key.value) b.api_key = key.value;
+      const list = (await sensitive("/api/admin/llm/models", b)).models || [];
+      models.replaceChildren(...list.map(m => el("option", { value: m })));
+      banner(list.length ? "ok" : "err",
+        list.length ? `${list.length} models offered — the Model box now suggests them.`
+                    : "The endpoint listed no models; type the name instead.", { sticky: !list.length });
+    } catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
+    finally { load.disabled = false; load.textContent = "Load models"; }
+  });
   const body = () => ({ base_url: base.value.trim(), model: model.value.trim(),
     concurrency: Math.max(1, parseInt(conc.value, 10) || 1) });
   form.addEventListener("submit", async ev => {
