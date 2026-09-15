@@ -631,3 +631,14 @@ class ShellAndHealthTests(ApiTestCase):
         response = self._login(self.alice).get("/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response["Cache-Control"], "no-store")
+
+    def test_static_assets_are_served(self):
+        # Tests run with DEBUG=False, which is the path the container uses:
+        # the stylesheet the shell links must come back, not a 500 or a 404.
+        response = Client().get("/static/clipshelf/app.css")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(b"".join(response.streaming_content).strip())
+
+    def test_static_refuses_to_escape_its_directory(self):
+        response = Client().get("/static/../db.sqlite3")
+        self.assertNotEqual(response.status_code, 200)

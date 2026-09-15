@@ -210,8 +210,8 @@ USE_TZ = True
 
 # --- Static files ---
 STATIC_URL = "static/"
-# app static files (clipshelf/static/) are found by AppDirectoriesFinder
-STATIC_ROOT = BASE_DIR / "staticfiles"
+# clipshelf/static/ is served directly by views.static_asset in every mode, so
+# there is no STATIC_ROOT and no collectstatic step in the image build.
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 

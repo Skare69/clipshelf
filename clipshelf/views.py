@@ -12,6 +12,7 @@ import os
 import re
 import uuid as uuid_mod
 from functools import wraps
+from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -26,6 +27,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
+from django.views.static import serve as _static_serve
 
 from clipshelf import accounts, services
 from clipshelf.models import (
@@ -49,6 +51,7 @@ MAX_NAME_LEN = 200
 MAX_IMPORT_DEPTH = 12
 STAGING_SUBDIR = "staging"
 IMPORT_MAX_BYTES_DEFAULT = 32 * 1024 * 1024
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # Browser export must carry media/data only — never session material or tool options.
 _BANNED_IMPORT_KEYS = {
@@ -259,16 +262,11 @@ def healthz(request):
 
 
 def static_asset(request, path):
-    # Only collected STATIC_ROOT is served — never DATA_DIR/media; retained
-    # source bytes go through the authorized /api/assets endpoint only.
-    if settings.DEBUG:
-        from django.contrib.staticfiles import views as staticfiles_views
-
-        return staticfiles_views.serve(request, path)
-    root = getattr(settings, "STATIC_ROOT", None)
-    if not root:
-        raise Http404()
-    return _static_serve(request, path, document_root=root)
+    # The app's own static directory is served straight from the package —
+    # never DATA_DIR/media; retained source bytes go through the authorized
+    # /api/assets endpoint only. No collectstatic step: this is the source of
+    # truth in every mode, so dev and production serve identical bytes.
+    return _static_serve(request, path, document_root=_STATIC_DIR)
 
 
 # --- identity, settings, collections ----------------------------------------
