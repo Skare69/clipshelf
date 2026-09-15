@@ -39,7 +39,7 @@ relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery.
 ## Deploy on the NAS
 
 Published image (linux/amd64 + linux/arm64), built and verified by CI:
-`ghcr.io/skare69/clipshelf:0.1.0`. The Android APK is built and signed by the
+`ghcr.io/skare69/clipshelf:0.2.0`. The Android APK is built and signed by the
 `android-release` workflow and downloaded from its run artifacts — there is no
 app store, you sideload it.
 
