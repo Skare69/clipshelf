@@ -47,8 +47,12 @@ else:
 _hosts_env = os.environ.get("CLIPSHELF_ALLOWED_HOSTS", "").strip()
 if _hosts_env:
     ALLOWED_HOSTS = [host.strip() for host in _hosts_env.split(",") if host.strip()]
+    # The container probes its own /healthz over loopback, so 127.0.0.1 must
+    # keep answering when the operator pins real hostnames. Appended, never
+    # prepended: account links are built from the first entry.
+    ALLOWED_HOSTS += ["localhost", "127.0.0.1", "[::1]"]
     if DEBUG:
-        ALLOWED_HOSTS += ["localhost", "127.0.0.1", "[::1]", "testserver"]
+        ALLOWED_HOSTS.append("testserver")
 else:
     ALLOWED_HOSTS = ["*"]  # LAN behind a VPN; every Host header is fine.
 

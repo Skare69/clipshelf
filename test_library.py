@@ -642,3 +642,28 @@ class ShellAndHealthTests(ApiTestCase):
     def test_static_refuses_to_escape_its_directory(self):
         response = Client().get("/static/../db.sqlite3")
         self.assertNotEqual(response.status_code, 200)
+
+    def test_pinned_hosts_still_answer_the_container_probe(self):
+        # Pinning real hostnames must not make the app reject its own
+        # healthcheck, which reaches it as Host: 127.0.0.1:8000.
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as data_dir:
+            env = {k: v for k, v in os.environ.items() if not k.startswith("CLIPSHELF_")}
+            env.update(
+                CLIPSHELF_ALLOWED_HOSTS="nas.example,nas.tail1234.ts.net",
+                CLIPSHELF_DATA_DIR=data_dir,
+                DJANGO_SETTINGS_MODULE="clipshelf.project.settings",
+            )
+            code = (
+                "import json, django; django.setup();"
+                "from django.conf import settings;"
+                "print(json.dumps(settings.ALLOWED_HOSTS))"
+            )
+            out = subprocess.run(
+                [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
+            )
+        hosts = json.loads(out.stdout)
+        self.assertEqual(hosts[0], "nas.example")
+        self.assertIn("127.0.0.1", hosts)
