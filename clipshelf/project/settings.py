@@ -1,9 +1,10 @@
-"""Django settings for the Clipshelf server (rev. 3).
+"""Django settings for the Clipshelf server (rev. 4).
 
-Environment-driven: development works with CLIPSHELF_DEBUG=1 alone; production
-requires CLIPSHELF_ORIGIN (https), CLIPSHELF_SECRET_KEY, CLIPSHELF_DATA_DIR,
-and CLIPSHELF_ALLOWED_HOSTS. One web process + one worker coordinator; caches
-are process-local on purpose (see CACHES).
+Zero required environment variables: the data directory (CLIPSHELF_DATA_DIR or
+./data) holds the SQLite database and a generated secret key; hosts default to
+"*" for LAN use. CSRF protection and HTTPS hardening are opt-in via
+CLIPSHELF_CSRF=1 and CLIPSHELF_ORIGIN. One web process + one worker
+coordinator; caches are process-local on purpose (see CACHES).
 """
 import os
 import sqlite3
@@ -11,51 +12,64 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from django.core.exceptions import ImproperlyConfigured
+from django.core.management.utils import get_random_secret_key
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 DEBUG = os.environ.get("CLIPSHELF_DEBUG") == "1"
-SECRET_KEY = os.environ.get("CLIPSHELF_SECRET_KEY", "")
+_env_data_dir = os.environ.get("CLIPSHELF_DATA_DIR")
+DATA_DIR = Path(_env_data_dir or (BASE_DIR / "data"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
 SECRET_KEY_FALLBACKS = [
     key.strip()
     for key in os.environ.get("CLIPSHELF_SECRET_KEY_FALLBACKS", "").replace("\n", ",").split(",")
     if key.strip()
 ]
-if not DEBUG and not SECRET_KEY:
-    raise ImproperlyConfigured("CLIPSHELF_SECRET_KEY is required in production.")
-if DEBUG and not SECRET_KEY:
-    SECRET_KEY = "clipshelf-dev-only-insecure-key"  # development convenience only
 
-_env_data_dir = os.environ.get("CLIPSHELF_DATA_DIR")
-if not DEBUG and not _env_data_dir:
-    raise ImproperlyConfigured("CLIPSHELF_DATA_DIR is required in production.")
-DATA_DIR = Path(_env_data_dir or (BASE_DIR / "data"))
-DATA_DIR.mkdir(parents=True, exist_ok=True)
+_secret_path = DATA_DIR / "secret_key"
+if os.environ.get("CLIPSHELF_SECRET_KEY"):
+    SECRET_KEY = os.environ["CLIPSHELF_SECRET_KEY"]
+else:
+    # Generate and persist a secret on first boot. The O_EXCL create is the
+    # race guard: when the web and worker processes start together, exactly
+    # one wins the create and the other reads the winner's key off disk.
+    try:
+        fd = os.open(_secret_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(get_random_secret_key())
+    SECRET_KEY = _secret_path.read_text().strip()
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.environ.get("CLIPSHELF_ALLOWED_HOSTS", "").split(",")
-    if host.strip()
-]
-if not DEBUG and not ALLOWED_HOSTS:
-    raise ImproperlyConfigured("CLIPSHELF_ALLOWED_HOSTS is required in production.")
-if DEBUG:
-    ALLOWED_HOSTS += ["localhost", "127.0.0.1", "[::1]", "testserver"]
 
-# Account mail and CLI commands (bootstrap, worker) build absolute links with no
-# HTTP request to read a Host from, so links resolve against one canonical
-# origin. Defaults to the first allowed host; set CLIPSHELF_ORIGIN only for a
-# non-standard port or scheme.
+_hosts_env = os.environ.get("CLIPSHELF_ALLOWED_HOSTS", "").strip()
+if _hosts_env:
+    ALLOWED_HOSTS = [host.strip() for host in _hosts_env.split(",") if host.strip()]
+    if DEBUG:
+        ALLOWED_HOSTS += ["localhost", "127.0.0.1", "[::1]", "testserver"]
+else:
+    ALLOWED_HOSTS = ["*"]  # LAN behind a VPN; every Host header is fine.
+
+# Canonical origin for link-building with no HTTP request to read a Host from
+# (account mail, CLI commands). Purely optional: set it only for a non-default
+# scheme/port, or to turn on HTTPS transport hardening below.
 CLIPSHELF_ORIGIN = os.environ.get("CLIPSHELF_ORIGIN", "").rstrip("/")
-if not CLIPSHELF_ORIGIN and not DEBUG:
-    CLIPSHELF_ORIGIN = f"https://{ALLOWED_HOSTS[0]}"
-if not DEBUG and (not CLIPSHELF_ORIGIN.startswith("https://") or "*" in CLIPSHELF_ORIGIN):
-    raise ImproperlyConfigured(
-        "CLIPSHELF_ORIGIN must be an https:// URL without wildcards; leave it "
-        "unset to use the first CLIPSHELF_ALLOWED_HOSTS entry."
-    )
+if CLIPSHELF_ORIGIN and not CLIPSHELF_ORIGIN.startswith(("http://", "https://")):
+    raise ImproperlyConfigured("CLIPSHELF_ORIGIN must start with http:// or https://.")
 
-CSRF_TRUSTED_ORIGINS = [CLIPSHELF_ORIGIN] if CLIPSHELF_ORIGIN else []
+CLIPSHELF_CSRF = os.environ.get("CLIPSHELF_CSRF") == "1"
+if CLIPSHELF_CSRF and not CLIPSHELF_ORIGIN and ALLOWED_HOSTS == ["*"]:
+    raise ImproperlyConfigured(
+        "CLIPSHELF_CSRF=1 requires CLIPSHELF_ORIGIN or a concrete "
+        "CLIPSHELF_ALLOWED_HOSTS list; with hosts=\"*\" CSRF cannot be checked."
+    )
+CSRF_TRUSTED_ORIGINS = (
+    [CLIPSHELF_ORIGIN]
+    if CLIPSHELF_ORIGIN
+    else [f"https://{host}" for host in ALLOWED_HOSTS if "*" not in host]
+)
 if DEBUG:
     CSRF_TRUSTED_ORIGINS += [
         "http://localhost:8000",
@@ -123,11 +137,15 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
-    "django.middleware.csrf.CsrfViewMiddleware",
+]
+if CLIPSHELF_CSRF:
+    MIDDLEWARE.append("django.middleware.csrf.CsrfViewMiddleware")
+MIDDLEWARE += [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "allauth.account.middleware.AccountMiddleware",
+    "clipshelf.setup.SetupMiddleware",
 ]
 
 TEMPLATES = [
@@ -216,8 +234,8 @@ else:
     EMAIL_USE_SSL = os.environ.get("CLIPSHELF_SMTP_USE_SSL") == "1"
     EMAIL_USE_TLS = not EMAIL_USE_SSL and os.environ.get("CLIPSHELF_SMTP_USE_TLS", "1") == "1"
     EMAIL_TIMEOUT = 30
-# --- Transport security (production sits behind a trusted TLS ingress) ---
-if not DEBUG:
+# --- Transport security (opt-in: an explicitly configured https:// origin) ---
+if CLIPSHELF_ORIGIN.startswith("https://") and not DEBUG:
     SECURE_SSL_REDIRECT = True
     # The container's loopback readiness probe must not be redirected to a TLS
     # port the app does not terminate; /healthz exposes no account data.

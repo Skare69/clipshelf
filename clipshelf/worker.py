@@ -359,6 +359,23 @@ def run_staged_import(record):
     if not path.resolve().is_relative_to(root) or not path.is_file():
         raise ValidationError("import record staging path is missing or outside DATA_DIR")
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("format") == "legacy" or isinstance(payload, dict):
+        # Legacy library.json upload: media referenced as cache/<sha1>.<ext> is
+        # resolved from <DATA_DIR>/import-cache — copy the old installation's
+        # cache/ directory there before importing to retain its media;
+        # unresolved files are recorded in the manifest's missing list.
+        args = legacy_payload(payload)
+        cache = _data("import-cache")
+        return import_items(
+            user=record.user,
+            collection_id=manifest.get("collection_id"),
+            items=args["items"], prompts=args["prompts"],
+            seen=args["seen"], removed=args["removed"],
+            client_request_id=manifest.get("client_request_id"),
+            record=record,
+            cache_dir=str(cache) if cache.is_dir() else None,
+            origin="legacy-import",
+        )
     if not isinstance(payload, list):
         raise ValidationError("import payload must be a JSON list")
     return import_items(
@@ -482,6 +499,27 @@ def _legacy_findings(item, url):
 
 def _prompt_key(text):
     return hashlib.sha1(" ".join(str(text).split()).lower().encode()).hexdigest()[:16]
+
+
+LEGACY_FIELDS = ("title", "desc", "sources", "tags", "found", "interpreted",
+                 "pending", "cat", "install", "archived", "stars")
+
+
+def legacy_payload(data):
+    """Translate a legacy library.json object into import_items arguments."""
+    if not isinstance(data, dict):
+        raise ValidationError("library.json must be a JSON object")
+    items = []
+    for url, entry in data.get("links", {}).items():
+        item = {"url": url}
+        item.update({k: entry[k] for k in LEGACY_FIELDS if entry.get(k) not in (None, "", [])})
+        for k in ("images", "video", "cache"):
+            if entry.get(k):
+                item[k] = entry[k]
+        items.append(item)
+    prompts = [p for p in data.get("prompts", {}).values() if isinstance(p, dict)]
+    return {"items": items, "prompts": prompts,
+            "seen": data.get("seen", {}), "removed": data.get("removed", {})}
 
 
 def import_items(*, user, collection_id, items, prompts=None, client_request_id=None,

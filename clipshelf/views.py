@@ -692,8 +692,19 @@ def api_import(request):
                 data = json.load(fh)
             except ValueError:
                 raise ApiError(400, "invalid", "file is not valid JSON")
-        if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
-            raise ApiError(400, "invalid", "tiktok.json must be a list of objects")
+        if isinstance(data, list):
+            if not all(isinstance(item, dict) for item in data):
+                raise ApiError(400, "invalid", "tiktok.json must be a list of objects")
+            fmt = "tiktok"
+        elif isinstance(data, dict) and isinstance(data.get("links"), dict):
+            fmt = "legacy"
+        else:
+            raise ApiError(
+                400,
+                "invalid",
+                "file must be a tiktok.json list of objects "
+                "or a legacy library.json object with a 'links' object",
+            )
         _scan_import_keys(data)
 
         try:
@@ -705,6 +716,7 @@ def api_import(request):
                     "staging": rel_path,
                     "collection_id": str(collection.id),
                     "status": "pending",
+                    "format": fmt,
                 },
             )
         except IntegrityError:

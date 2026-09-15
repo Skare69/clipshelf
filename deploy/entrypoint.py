@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """Clipshelf container entrypoint: explicit operations, shell-free.
 
+First run needs no operator commands: `clipshelf.py serve` and `worker` apply
+migrations themselves, and the web UI serves a setup wizard at /setup that
+creates the first administrator — like Jellyfin or the *arr apps.
+
 Ops (first argument, default `serve`):
   serve              run the single waitress web process on 0.0.0.0:8000
   worker [--once]    run the one background coordinator (optionally one pass)
-  migrate            apply Django migrations to the data volume
-  bootstrap          create the initial administrator (explicit operator action)
+  migrate            apply Django migrations to the data volume (run
+                     automatically by serve/worker; kept for operators)
+  bootstrap          create an administrator via CLI (requires
+                     CLIPSHELF_ADMIN_EMAIL; recovery path beside the wizard)
   check              run Django system checks (diagnostics, no production gates)
 
 Production gates (skipped only with CLIPSHELF_DEBUG=1):
-  - CLIPSHELF_ALLOWED_HOSTS must be set; CLIPSHELF_ORIGIN is optional and must
-    be https:// when given (otherwise the first allowed host is used)
-  - CLIPSHELF_SECRET_KEY must be set
   - runtime SQLite >= 3.51.3 (WAL-reset fix); never assumed from the image tag
 
-`bootstrap` additionally requires CLIPSHELF_ADMIN_EMAIL. No anonymous or
-automatic administrator is ever created.
+Origin/secret-key/allowed-hosts validation lives in app settings, which fail
+with a precise message. No anonymous or automatic administrator is ever
+created.
 """
 import os
 import sqlite3
@@ -50,13 +54,8 @@ def production_gates():
     if os.environ.get("CLIPSHELF_DEBUG") == "1":
         print("entrypoint: CLIPSHELF_DEBUG=1 — development mode, production gates skipped")
         return
-    origin = os.environ.get("CLIPSHELF_ORIGIN", "")
-    if origin and not origin.startswith("https://"):
-        fail("CLIPSHELF_ORIGIN must be an https:// origin when set")
-    if not origin and not os.environ.get("CLIPSHELF_ALLOWED_HOSTS", "").strip():
-        fail("production requires CLIPSHELF_ALLOWED_HOSTS (account links use the first entry)")
-    if not os.environ.get("CLIPSHELF_SECRET_KEY"):
-        fail("production requires CLIPSHELF_SECRET_KEY")
+    # Origin, secret key and allowed hosts are validated by app settings,
+    # which raise ImproperlyConfigured with a precise message.
     if not os.environ.get("CLIPSHELF_SMTP_HOST"):
         print(
             "entrypoint: warning CLIPSHELF_SMTP_HOST unset — invitation and "

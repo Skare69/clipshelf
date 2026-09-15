@@ -2,14 +2,15 @@ name: clipshelf
 
 # Clipshelf on the NAS: one image, two roles (web + one worker), one data volume.
 #
-# First run / upgrades (all explicit — nothing auto-migrates, nothing
-# auto-creates an administrator):
-#   1. cp deploy/clipshelf.env.example .env   then fill in real values
-#   2. docker compose --profile ops run --rm migrate
-#   3. docker compose up -d                   (web + worker)
-#   4. docker compose --profile ops run --rm bootstrap   (first admin only)
-#   5. verify the SQLite runtime any time:
-#      docker compose --profile ops run --rm verify
+# First run — no operator commands:
+#   1. cp deploy/clipshelf.env.example .env   then fill in the required values
+#   2. docker compose up -d
+#   3. open the web UI and complete the setup wizard (creates the first admin)
+#
+# One-shot ops (profiles keep them out of `up`):
+#   docker compose --profile ops run --rm bootstrap   CLI recovery path for
+#                                                     the first admin
+#   docker compose --profile ops run --rm verify      check the SQLite runtime
 #
 # Local verification without a published image (never ship an unpublished tag
 # claim to the NAS):
@@ -34,13 +35,15 @@ x-app: &app
   user: "${CLIPSHELF_UID:?numeric uid owning the data dir}:${CLIPSHELF_GID:?numeric gid owning the data dir}"
   environment: &app-env
     CLIPSHELF_DATA_DIR: /data
-    # Absolute links in account mail default to https://<first allowed host>.
-    # Set CLIPSHELF_ORIGIN only for a non-standard port or scheme.
+    # Optional: pin the base URL for account-mail links (e.g.
+    # https://nas.example:8443). An https:// value enables HTTPS hardening.
     CLIPSHELF_ORIGIN: ${CLIPSHELF_ORIGIN:-}
-    # REQUIRED: every hostname the server answers on — the LAN name and the
-    # tailnet name. Forged Host headers are rejected, so this must be explicit.
-    CLIPSHELF_ALLOWED_HOSTS: "${CLIPSHELF_ALLOWED_HOSTS:?required, comma-separated hostnames (LAN + tailnet)}"
-    CLIPSHELF_SECRET_KEY: ${CLIPSHELF_SECRET_KEY:?required in production}
+    # Optional: hostnames the server answers on; unset defaults to * (LAN use).
+    CLIPSHELF_ALLOWED_HOSTS: ${CLIPSHELF_ALLOWED_HOSTS:-}
+    # Optional: generated into the data dir when unset.
+    CLIPSHELF_SECRET_KEY: ${CLIPSHELF_SECRET_KEY:-}
+    # CSRF protection is off by default; enabling it requires CLIPSHELF_ORIGIN or CLIPSHELF_ALLOWED_HOSTS.
+    CLIPSHELF_CSRF: ${CLIPSHELF_CSRF:-}
     CLIPSHELF_DEBUG: ${CLIPSHELF_DEBUG:-0}
     # SQLite pragmas (WAL, synchronous=FULL, busy timeout) are enforced by the
     # app settings; do not add database flags here.
@@ -81,12 +84,8 @@ services:
     command: ["worker"]
 
   # ---- explicit one-shot operations (profiles keep them out of `up`) ----
-  migrate:
-    <<: *app
-    command: ["migrate"]
-    profiles: ["ops"]
-    restart: "no"
-
+  # CLI recovery path for the first admin; the normal first run is the /setup
+  # wizard in the web UI. Migrations are applied automatically by serve/worker.
   bootstrap:
     <<: *app
     command: ["bootstrap"]

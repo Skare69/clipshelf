@@ -83,9 +83,9 @@
   </section>
   <hr>
   <section>
-    <h3>Import TikTok export</h3>
+    <h3>Import TikTok export or library.json</h3>
     <div class="row2">
-      <label class="filebtn">Choose tiktok.json<input id="impFile" type="file" accept=".json,application/json"></label>
+      <label class="filebtn">Choose tiktok.json or library.json<input id="impFile" type="file" accept=".json,application/json"></label>
       <span id="impName" class="hint"></span>
     </div>
     <div class="prog" id="impProg" hidden role="progressbar" aria-label="Import upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="impFill"></div></div>
@@ -94,7 +94,7 @@
       <button id="impBtn" class="btn tonal" disabled>Import</button>
       <span id="impStat" class="hint"></span>
     </div>
-    <p class="hint">Browser media/data export only. Server ceiling applies; oversized imports are rejected whole, never truncated.</p>
+    <p class="hint">Accepts a TikTok browser media/data export (tiktok.json) or a legacy library.json. Server ceiling applies; oversized imports are rejected whole, never truncated. A legacy library imports with its cached media only if the old <code>cache/</code> directory was copied to <code>import-cache/</code> in the server data directory first; otherwise entries import without media and the manifest lists what was missing.</p>
   </section>
 </dialog>
 <dialog id="detailDlg" aria-labelledby="detHead">

@@ -3,13 +3,12 @@ import json
 from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
+from django.core.exceptions import ValidationError
 
 from clipshelf import models, worker
 
 MAX_LIBRARY_BYTES = 64 * 1024 * 1024  # legacy file guard; upload ceiling is separate
 
-LEGACY_FIELDS = ("title", "desc", "sources", "tags", "found", "interpreted",
-                 "pending", "cat", "install", "archived", "stars")
 
 
 class Command(BaseCommand):
@@ -36,22 +35,14 @@ class Command(BaseCommand):
         if source.stat().st_size > MAX_LIBRARY_BYTES:
             raise CommandError(f"input larger than {MAX_LIBRARY_BYTES} bytes; refusing")
         data = json.loads(source.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise CommandError("library.json must be a JSON object")
-
-        items = []
-        for url, entry in data.get("links", {}).items():
-            item = {"url": url}
-            item.update({k: entry[k] for k in LEGACY_FIELDS if entry.get(k) not in (None, "", [])})
-            for k in ("images", "video", "cache"):
-                if entry.get(k):
-                    item[k] = entry[k]
-            items.append(item)
-        prompts = [p for p in data.get("prompts", {}).values() if isinstance(p, dict)]
+        try:
+            args = worker.legacy_payload(data)
+        except ValidationError as exc:
+            raise CommandError("; ".join(exc.messages)) from exc
 
         result = worker.import_items(
-            user=user, collection_id=None, items=items, prompts=prompts,
-            seen=data.get("seen", {}), removed=data.get("removed", {}),
+            user=user, collection_id=None, items=args["items"], prompts=args["prompts"],
+            seen=args["seen"], removed=args["removed"],
             cache_dir=options["cache"], origin="legacy-import",
             dry_run=options["dry_run"])
 

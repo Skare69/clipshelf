@@ -610,7 +610,7 @@ function renderInbox() {
     frag.append(el("div", { class: "empty" },
       el("b", { text: S.capFilter === "all" ? "No captures in this collection yet." :
         S.capFilter === "active" ? "Nothing is processing right now." : "Nothing needs attention." }),
-      S.capFilter === "all" ? " Paste links with the + button, or import a TikTok export." : ""));
+      S.capFilter === "all" ? " Paste links with the + button, or import a TikTok export or an existing library.json." : ""));
   }
   for (const c of caps) {
     const jobs = c.jobs || [];
@@ -697,7 +697,7 @@ impBtn.addEventListener("click", () => {
       impStat.textContent = "";
       impFile.value = ""; $("#impName").textContent = ""; impBtn.disabled = true;
       addDlg.close();
-      banner("ok", "Import accepted — entries appear in the library as the worker processes them.", {
+      banner("ok", "Import accepted — entries from the TikTok export or library.json appear in the library as the worker processes them.", {
         actions: [{ label: "Open library", onclick: () => setView("library") }], ms: 8000 });
       clearTimeout(S.libTimer);
       S.libTimer = setTimeout(() => { if (S.view === "library") loadEntries(true); }, 4000);

@@ -2,12 +2,13 @@
 
 from django.urls import include, path, re_path
 
-from clipshelf import accounts, views
+from clipshelf import accounts, setup, views
 from clipshelf.admin_views import admin_urlpatterns
 
 urlpatterns = [
     path("", views.shell, name="shell"),
     path("healthz", views.healthz, name="healthz"),
+    path("setup", setup.setup_view, name="clipshelf_setup"),
     path("api/me", views.api_me),
     path("api/collections", views.api_collections),
     path("api/collections/<uuid:collection_id>", views.api_collection_detail),

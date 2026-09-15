@@ -26,15 +26,15 @@ the worker makes and the calls to the model endpoint you configure.
 
 ```
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
-CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data python clipshelf.py migrate
-CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data python clipshelf.py bootstrap_admin --email you@example.com
-CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data python clipshelf.py serve 127.0.0.1:8000
-CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data python clipshelf.py worker
+CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data python clipshelf.py serve 127.0.0.1:8000   # shell 1
+CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data python clipshelf.py worker                 # shell 2
 ```
 
-`bootstrap_admin` prints a single-use link to set the first password. In
-development mail goes to the console; production needs a real SMTP relay
-(`CLIPSHELF_SMTP_*`) for invitations and password recovery.
+Open the URL and complete the setup wizard — it creates the first
+administrator. If an administrator locks themselves out, `bootstrap_admin
+--email you@example.com` remains the CLI recovery path and prints a single-use
+link. In development mail goes to the console; production needs a real SMTP
+relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery.
 
 ## Deploy on the NAS
 
@@ -44,16 +44,30 @@ Published image (linux/amd64 + linux/arm64), built and verified by CI:
 app store, you sideload it.
 
 ```
-cp deploy/clipshelf.env.example .env      # fill in image, origin, hosts, data dir, SMTP
-docker compose --profile ops run --rm migrate
+cp deploy/clipshelf.env.example .env      # fill in image, UID/GID, data dir, port
 docker compose up -d
-docker compose --profile ops run --rm bootstrap
-docker compose --profile ops run --rm verify   # SQLite WAL/synchronous check
 ```
 
-The image runs as an unprivileged UID/GID you choose, mounts one local dataset,
-and publishes the web port on the LAN — reaching it remotely is your tailnet's
-job, not the app's. `CLIPSHELF_ALLOWED_HOSTS` must list every hostname you use.
+The container migrates itself on start; open the web UI and complete the setup
+wizard to create the first administrator. `docker compose --profile ops run
+--rm verify` optionally re-checks the SQLite WAL/synchronous settings. The
+image runs as an unprivileged UID/GID you choose, mounts one local dataset, and
+publishes the web port on the LAN — reaching it remotely is your tailnet's job,
+not the app's.
+
+### Configuration and hardening
+
+Nothing is required beyond image, UID/GID, data dir and port. The secret key is
+generated into the data directory on first start. `CLIPSHELF_ALLOWED_HOSTS`
+defaults to `*` because the expected deployment is a LAN with remote access
+behind a VPN. CSRF protection is off by default, like Jellyfin and the *arr
+services; cookie mutations stay protected by `SameSite=Lax` sessions
+regardless. Setting `CLIPSHELF_CSRF=1` turns CSRF verification on and then
+requires `CLIPSHELF_ORIGIN` or a concrete `CLIPSHELF_ALLOWED_HOSTS`. Setting
+`CLIPSHELF_ORIGIN` to an `https://` URL additionally enables the HTTPS
+redirect, HSTS and secure cookies — set it only when a TLS ingress actually
+terminates in front of the app. The residual risk of the wildcard host default
+is DNS rebinding; narrow it by setting `CLIPSHELF_ALLOWED_HOSTS`.
 
 ## The loop
 
@@ -87,6 +101,14 @@ job, not the app's. `CLIPSHELF_ALLOWED_HOSTS` must list every hostname you use.
   forwarded/identity headers never authenticate anyone.
 
 ## Migrating an existing `library.json`
+
+From the running app, an old `library.json` goes through the same import dialog
+as a TikTok export; entries land in the collection you pick. Media referenced
+by the old library is retained only when the old `cache/` directory was copied
+to `<data dir>/import-cache` on the server first; otherwise the manifest lists
+what was missing.
+
+For offline or bulk imports there is the management command:
 
 ```
 python clipshelf.py import_library --user you@example.com --input library.json --cache cache --dry-run

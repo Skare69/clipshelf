@@ -11,6 +11,7 @@ serve and data-writing commands hold the shared data lock (backup/restore
 take the exclusive one themselves); check/test run unlocked.
 """
 import os
+import time
 from contextlib import nullcontext
 
 
@@ -26,6 +27,28 @@ def _bind(arg):
     if not 1 <= port <= 65535:
         raise SystemExit(f"clipshelf serve: port {port} out of range")
     return host.strip("[]") or "127.0.0.1", port
+
+
+def _migrate():
+    """Bring the schema up before a long-running role starts.
+
+    A fresh deployment starts with an empty data directory; web and worker
+    apply migrations themselves so a first run needs no operator command.
+    """
+    from django.core.management import call_command
+    from django.db import OperationalError
+
+    # ponytail: web and worker may start at the same moment against one
+    # SQLite file; the one that loses the write lock retries instead of
+    # coordinating. Five tries covers two local processes — if a deployment
+    # ever starts more, take an flock in DATA_DIR instead.
+    for attempt in range(5):
+        try:
+            return call_command("migrate", verbosity=0)
+        except OperationalError:
+            if attempt == 4:
+                raise
+            time.sleep(2)
 
 
 def _serve(host, port):
@@ -44,7 +67,10 @@ def main(argv):
     import django
     django.setup()
     if argv[:1] == ["serve"]:
+        _migrate()
         return _serve(*_bind(argv[1] if len(argv) > 1 else ""))
+    if argv[:1] == ["worker"]:
+        _migrate()
     # backup/restore own the exclusive lock; check/test need no lock
     unlocked = (argv[0] if argv else "") in ("check", "test", "backup", "restore")
     if unlocked:

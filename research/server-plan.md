@@ -1,4 +1,4 @@
-# Clipshelf server plan (rev. 4)
+# Clipshelf server plan (rev. 5)
 
 Consolidated 2026-09-12 after the user interview. This replaces rev. 2's
 single-user schema, tailnet-as-auth, stdlib HTTP server, and online-only PWA
@@ -10,6 +10,22 @@ Rev. 4 adds the open-source and paid-hosting proposal in **sections 10–12**,
 researched 2026-09-12. Sections 1–9 remain the approved rev. 3 **self-hosted
 baseline**. The extension is a recommendation for review, not approval to change
 the license, weaken privacy rules, purchase services, or launch commercial hosting.
+
+Rev. 5 (2026-09-15) supersedes three contract points on the owner's decision,
+recorded against the stated threat model (**LAN deployment, all external access
+behind a VPN, minimal threat risk**): section 6's operator-controlled
+administrator bootstrap and the operator-run migrate/bootstrap deployment
+sequence (replaced by a first-visit `/setup` wizard on an empty database,
+Jellyfin/*arr style, with the container applying its own migrations and
+`bootstrap_admin` kept as the lock-out recovery path); the unconditional
+secure-cookie/CSRF/allowed-hosts/HTTPS-origin requirements in sections 6–7
+(CSRF and host allowlisting are opt-in via `CLIPSHELF_CSRF=1` and
+`CLIPSHELF_ALLOWED_HOSTS`; HTTPS hardening engages only with an `https://`
+`CLIPSHELF_ORIGIN`); and section 7's CLI-only legacy-library migration (a
+legacy `library.json` now also imports from the running app). Superseded
+passages keep their original text below, each followed by a
+**Rev. 5 (2026-09-15)** note. Sections 10–12 and every other contract term are
+unchanged.
 
 Companions: [authentication and recovery](authentication-recovery.md),
 [TikTok acquisition](tiktok-server-side.md), and the historical
@@ -284,10 +300,29 @@ Before exposure, verify these boundaries, not only successful UI clicks:
 - No unprotected Django admin login or unrestricted UserAdmin for app admins.
   Bootstrap the initial administrator through an explicit operator-controlled
   action, never by letting the first anonymous visitor claim the server.
+  **Rev. 5 (2026-09-15), superseded:** the initial administrator is created by
+  the first browser visit to `/setup` while zero user rows exist —
+  Jellyfin/*arr-style first-run setup on an empty database — and the container
+  applies its own migrations on start, removing the explicit operator
+  migrate/bootstrap steps. Accepted for the LAN-behind-VPN threat model; the
+  wizard is unreachable once any user exists, and `bootstrap_admin` remains
+  the operator-controlled lock-out recovery path.
 - Secure cookies, CSRF on browser mutations, allowed hosts, configured HTTPS
   origin, and trusted-proxy handling. Forged Tailscale/forwarded headers never
   authenticate a caller. Rate limits must use a backend satisfying allauth's
   atomicity/sharing requirements for the actual web-process topology.
+  **Rev. 5 (2026-09-15), superseded:** CSRF verification, host allowlisting,
+  and HTTPS-only cookies are now opt-in. Defaults are `ALLOWED_HOSTS=["*"]`,
+  no CSRF check, and no forced HTTPS; `CLIPSHELF_CSRF=1` turns verification on
+  and then requires `CLIPSHELF_ORIGIN` or `CLIPSHELF_ALLOWED_HOSTS`, and an
+  `https://` origin additionally enables SSL redirect, HSTS, and secure
+  cookies. Session cookies keep `HttpOnly` and `SameSite=Lax` unconditionally —
+  that is what protects cookie mutations in the default configuration.
+  Residual accepted risk: with the defaults, DNS rebinding is the remaining
+  browser-side risk, narrowed by setting `CLIPSHELF_ALLOWED_HOSTS`; the
+  operator accepted it for a VPN-guarded LAN. Forged Tailscale/forwarded
+  headers still authenticate nobody, and the rate-limit, SSRF/egress,
+  authorization, and collection-access boundaries are unchanged.
 - Untrusted capture/enrichment/download URLs cannot reach loopback, private,
   link-local, or other non-public destinations through redirects or DNS rebinding.
   Apply the restriction to extractor traffic too, not only the first URL check.
@@ -326,6 +361,16 @@ Preserve links, prompts, source associations, categories, pending/interpreted
 state, seen history, redirect aliases, tombstones, and referenced source files.
 Keep original data unchanged as rollback input; do not delete it automatically.
 Old executable settings are recorded in the migration report, not activated.
+**Rev. 5 (2026-09-15):** the legacy `library.json` can also be imported from
+the running app: upload through the same endpoint as the TikTok browser export,
+with the JSON shape detected server-side (`ImportRecord.manifest["format"]` is
+`"legacy"` for an object, `"tiktok"` for a list) and processed by the worker
+into the selected collection. Old-installation media is retained only if the
+old `cache/` directory was copied to `<data dir>/import-cache` first;
+otherwise the manifest reports the missing files honestly. The
+`import_library` management command remains for offline/bulk migration, and
+every guarantee above — owner binding, read-only originals as rollback input,
+no automatic deletion — is unchanged.
 
 The earlier inventory (2026-09-11) was 584 links, 70 prompts, 461 seen entries,
 5 tombstones, 1 setting, and 671 cache files totaling about 388 MB. **These are
@@ -362,6 +407,11 @@ domain. Retention/frequency are operator settings; no new backup platform here.
   reachable remotely through the chosen Tailscale routing. Reuse existing LAN
   TLS ingress and tailnet/subnet routing where available. Do not make LAN ingress
   depend on a Tailscale-only network namespace or identity headers.
+  **Rev. 5 (2026-09-15), softened:** an HTTPS origin is optional, not a
+  provisioning requirement. Plain HTTP on the LAN is a supported configuration
+  for a VPN-guarded deployment; configuring an `https://` `CLIPSHELF_ORIGIN`
+  engages SSL redirect, HSTS, and secure cookies. The remaining sentences
+  stand.
 - If a dedicated Tailscale container is needed, persist its state and mount the
   Serve configuration directory rather than only its file. Its HTTPS certificates
   do not by themselves solve independent LAN DNS/TLS. No Funnel/public exposure
@@ -371,6 +421,12 @@ domain. Retention/frequency are operator settings; no new backup platform here.
   permissions, and protected secrets before household use. Deliver a signed APK
   without embedded server credentials; preserve application identity/signing and
   outbox migrations across upgrades.
+  **Rev. 5 (2026-09-15), softened:** origin/certificate provisioning and a
+  pre-set secret key are no longer first-run prerequisites — the server boots
+  onto plain HTTP with `ALLOWED_HOSTS=["*"]` and generates its secret key into
+  the data dir on first start. SMTP delivery and the LLM connection remain
+  prerequisites for onboarding/recovery and interpretation respectively, and
+  the generated secret key joins the backup set.
 
 ## 8. Implementation sequence and observable release gates
 
@@ -381,12 +437,12 @@ real phone and server.
 
 | Milestone | Complete, observable result |
 |---|---|
-| 1. Accounts, collections, private migration | Runnable Django app; real invitation/verification/login flow with a development mail backend, followed by actual SMTP delivery before release. Two accounts prove Personal/shared/contributor permissions. Fresh migration manifest matches; repeat import is unchanged; original files remain intact. |
+| 1. Accounts, collections, private migration | Runnable Django app; a fresh container with an empty database applies its own migrations and the first browser visit to `/setup` reaches a usable login through the wizard (rev. 5). Real invitation/verification/login flow with a development mail backend, followed by actual SMTP delivery before release. Two accounts prove Personal/shared/contributor permissions. Fresh migration manifest matches; repeat import is unchanged; original files remain intact; an in-app legacy `library.json` import matches the CLI result, with media retained only when `import-cache` was populated. |
 | 2. Durable capture and source viewing | Web capture commits receipts/jobs, displays saved input and acquired source, and survives worker/container restart. Lost-response retry creates no duplicate; conflicting request ID is rejected. Destination fallback is visible; disabled users cannot bypass it. No shell/install/path-browsing route remains. |
 | 3. Automatic acquisition and interpretation | Real public page, TikTok video, photo carousel, and shortlink exercise the full worker path. A blocked/gated post remains saved with an honest warning and browser-import completion path. A real image-capable HTTP endpoint produces validated findings; malformed output/configuration failure preserves sources and last good results. |
 | 4. Native Android workflow | Real TikTok/app share persists on the phone, returns to the source app, and delivers without reopening after network restoration, ordinary process death, and reboot/unlock. Exercise the outbox-commit/scheduling gap and lost server response. Changing defaults does not reroute old shares; account switching/revocation retains and isolates them. Library browsing is online-only; outbox remains readable offline. |
 | 5. Recovery and administration | Actual SMTP reset retains identity/content and invalidates old browser/mobile sessions. Authorized admin-assisted mailbox-loss recovery works; non-admin calls fail. Disable/re-enable preserves data without reviving sessions. Ownership transfer accepts only an existing active member, cannot transfer Personal, and grants no new admin browsing access. |
-| 6. Deployment, upgrades, and restore | Published image and signed APK install successfully. Image excludes personal data/secrets and has a verified SQLite build. LAN works with client Tailscale off; remote works through Tailscale, with identical permissions. Restart/update preserves data and jobs; isolated restore recovers DB, assets, configuration, and access. |
+| 6. Deployment, upgrades, and restore | Published image and signed APK install successfully. Image excludes personal data/secrets and has a verified SQLite build. LAN works with client Tailscale off; remote works through Tailscale, with identical permissions. Default configuration serves plain HTTP with no origin/host/secret setup; CSRF rejection, host allowlisting, SSL redirect, HSTS, and secure cookies are verified enabled only when `CLIPSHELF_CSRF=1` or an `https://` origin is configured (rev. 5). Restart/update preserves data and jobs; isolated restore recovers DB, assets, configuration, and access. |
 
 Use existing checks for preserved behavior and keep regressions where they defend
 permissions, data loss, idempotency, or a real uncertain edge. Browser/phone/container
@@ -403,10 +459,13 @@ outbox are required, not deferred. Further ASR capability, extra web/worker repl
 and storage-retention automation need evidence before expansion; do not conceal
 missing audio, acquisition failures, or resource exhaustion as success.
 
-Operational prerequisites still to configure/test are the actual HTTPS origin and
-routing, SMTP service, compatible image-capable LLM, NAS volume/backup setup, and
-Android build/signing/device access. They do not require inventing new product
-roles or changing approved privacy/delivery rules.
+Operational prerequisites still to configure/test are SMTP service, a
+compatible image-capable LLM, NAS volume/backup setup, and Android
+build/signing/device access. Since rev. 5 (2026-09-15) an HTTPS origin is
+optional hardening rather than a prerequisite: plain HTTP on the VPN-guarded
+LAN is the supported default, and TLS ingress is configured when transport
+encryption is wanted. These do not require inventing new product roles or
+changing approved privacy/delivery rules.
 
 **Implementation approved 2026-09-12.** Keep actual verification evidence separate
 from these acceptance requirements; do not switch the primary phone workflow early.

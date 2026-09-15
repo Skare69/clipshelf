@@ -210,6 +210,36 @@ class ImportTests(MigrationMixin, TestCase):
         self.assertIn("queued", out.getvalue())
         self.assertIn("https://example.com/pending", out.getvalue())
 
+    def test_staged_legacy_record_imports_with_missing_media_recorded(self):
+        # The browser-upload path: a legacy library.json staged under DATA_DIR
+        # and drained through run_staged_import, with no import-cache present.
+        staging_rel = "staging/legacy-library.json"
+        with override_settings(DATA_DIR=str(self.tmp)):
+            (Path(self.tmp) / "staging").mkdir(parents=True, exist_ok=True)
+            (Path(self.tmp) / staging_rel).write_bytes(self.input_bytes)
+            record = models.ImportRecord.objects.create(
+                user=self.user, input_digest=uuid.uuid4().hex,
+                manifest={"status": "pending", "format": "legacy",
+                          "staging": staging_rel,
+                          "collection_id": str(self.personal.id)})
+            with mock.patch("clipshelf.acquisition.import_export",
+                            side_effect=fake_import_export):
+                result = worker.run_staged_import(record)
+        # The cache/ page reference cannot be resolved (no import-cache dir):
+        # reported honestly, not fatal.
+        self.assertEqual(result["manifest"]["missing_media"], [CACHE_NAME])
+        self.assertTrue(models.Entry.objects.filter(
+            collection=self.personal, kind="link",
+            key="https://github.com/a/b").exists())
+        self.assertEqual(models.Entry.objects.filter(
+            collection=self.personal, kind="prompt").count(), 1)
+        self.assertFalse(models.Entry.objects.filter(
+            key="https://removed.example/x").exists())
+        self.assertEqual(
+            {c.origin for c in models.Contribution.objects.filter(
+                entry__collection=self.personal)},
+            {"legacy-import"})
+
 
 class BackupRestoreTests(MigrationMixin, TransactionTestCase):
     def test_backup_restore_roundtrip_isolated(self):

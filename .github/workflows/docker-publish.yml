@@ -36,9 +36,9 @@ jobs:
       - name: Verify in-image SQLite runtime (fixed WAL build, not the tag)
         run: |
           docker run --rm -e CLIPSHELF_DATA_DIR=/tmp/vdata --entrypoint python clipshelf:verify deploy/check_sqlite.py
-      - name: Verify Django boot path (debug smoke, no secrets)
+      - name: Verify Django boot path (production mode, no configuration)
         run: |
-          docker run --rm -e CLIPSHELF_DATA_DIR=/tmp/vdata -e CLIPSHELF_DEBUG=1 clipshelf:verify check
+          docker run --rm -e CLIPSHELF_DATA_DIR=/tmp/vdata clipshelf:verify check
       - name: Entrypoint rejects unknown ops (no shell passthrough)
         run: |
           if docker run --rm -e CLIPSHELF_DATA_DIR=/tmp/vdata -e CLIPSHELF_DEBUG=1 clipshelf:verify definitely-not-an-op; then

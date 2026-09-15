@@ -6,6 +6,7 @@ entry link. Admin JSON endpoints live in clipshelf.admin_views.
 """
 
 import hashlib
+import re
 import time
 from datetime import timedelta
 from functools import wraps
@@ -206,16 +207,53 @@ def api_user(request):
     return user
 
 
+def create_admin(email, password=None, *, verified=False):
+    """Create or promote the application administrator for `email`.
+
+    Returns (user, created). The user always ends up with
+    ``is_app_admin=True`` and a primary EmailAddress row for the address;
+    `password` sets a usable password, `verified` marks the address verified.
+    """
+    User = get_user_model()
+    with transaction.atomic():
+        user = User.objects.filter(email__iexact=email).first()
+        created = False
+        if user is None:
+            base = re.sub(r"[^a-z0-9_.-]+", "", email.split("@")[0].lower()) or "clipshelf"
+            username, n = base, 1
+            while User.objects.filter(username__iexact=username).exists():
+                username = f"{base}-{n}"
+                n += 1
+            user = User.objects.create_user(username=username, email=email)
+            created = True  # unusable password: operator or user sets it via the framework
+        user.is_app_admin = True
+        user.save(update_fields=["is_app_admin"])
+        address = EmailAddress.objects.filter(user=user).first()
+        if address is None:
+            address = EmailAddress(user=user, email=email, primary=True, verified=False)
+            address.save()
+        if password is not None:
+            user.set_password(password)
+            user.save(update_fields=["password"])
+        if verified:
+            address.verified = True
+            address.save()
+    return user, created
+
+
 _csrf_middleware = CsrfViewMiddleware(lambda request: None)
 
 
 def api_csrf(view_func):
     """Central CSRF entry for API views.
 
-    The view is marked csrf_exempt; unsafe requests WITHOUT an
-    X-Session-Token header are still run through Django's maintained CSRF
-    verification (cookie sessions must stay protected). Token requests rely
-    on the header being a valid session token, enforced by api_user.
+    CSRF protection is opt-in (``CLIPSHELF_CSRF=1``): the default
+    deployment is plain HTTP on a LAN behind a VPN, and
+    ``SESSION_COOKIE_SAMESITE="Lax"`` is what keeps cookie mutations safe
+    by default. When enabled, the csrf_exempt view's unsafe requests
+    WITHOUT an X-Session-Token header are run through Django's maintained
+    CSRF verification. Token requests rely on the header being a valid
+    session token, enforced by api_user.
     """
 
     @wraps(view_func)
@@ -223,6 +261,7 @@ def api_csrf(view_func):
         if (
             request.method not in _SAFE_METHODS
             and not request.headers.get("x-session-token")
+            and getattr(django_settings, "CLIPSHELF_CSRF", False)
         ):
             rejected = _csrf_middleware.process_view(request, view_func, args, kwargs)
             if rejected is not None:

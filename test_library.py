@@ -135,7 +135,20 @@ class AuthenticationBoundaryTests(ApiTestCase):
         self.assertEqual(response.status_code, 401)
         self.assertIn("application/json", response["Content-Type"])
 
-    def test_cookie_mutation_without_csrf_is_403(self):
+    def test_cookie_mutation_without_csrf_succeeds_by_default(self):
+        # Deliberate Jellyfin-style default: plain HTTP on a LAN behind a VPN;
+        # the Lax HttpOnly session cookie is the mutation boundary, not tokens.
+        client = Client(enforce_csrf_checks=True)
+        client.force_login(self.alice)
+        response = client.post(
+            "/api/collections",
+            data=json.dumps({"name": "Shop"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+
+    @override_settings(CLIPSHELF_CSRF=True)
+    def test_cookie_mutation_without_csrf_is_403_when_csrf_enabled(self):
         client = Client(enforce_csrf_checks=True)
         client.force_login(self.alice)
         response = client.post(
@@ -144,6 +157,7 @@ class AuthenticationBoundaryTests(ApiTestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 403)
+        self.assertIn("application/json", response["Content-Type"])
         # Token requests skip CSRF only when the token itself validates.
         response = client.post(
             "/api/collections",

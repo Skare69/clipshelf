@@ -1,0 +1,35 @@
+{% extends "clipshelf/base.html" %}
+
+{% block title %}{% block head_title %}Set up Clipshelf{% endblock %}{% endblock %}
+
+{% block content %}
+<h1>Set up Clipshelf</h1>
+<p>Create the administrator account for this server.</p>
+
+{% if errors %}
+<ul class="messages" role="alert" id="setup-errors">
+  {% for error in errors %}<li class="msg msg-error">{{ error }}</li>{% endfor %}
+</ul>
+{% endif %}
+
+<form method="post" action="{% url 'clipshelf_setup' %}">
+  {% csrf_token %}
+  <p>
+    <label for="id_email">Email</label>
+    <input type="email" name="email" id="id_email" autocomplete="email"
+           required value="{{ email }}"
+           {% if errors %}aria-describedby="setup-errors"{% endif %}>
+  </p>
+  <p>
+    <label for="id_password1">Password</label>
+    <input type="password" name="password1" id="id_password1"
+           autocomplete="new-password" required>
+  </p>
+  <p>
+    <label for="id_password2">Confirm password</label>
+    <input type="password" name="password2" id="id_password2"
+           autocomplete="new-password" required>
+  </p>
+  <button type="submit">Create administrator</button>
+</form>
+{% endblock %}
