@@ -654,6 +654,9 @@ class ShellAndHealthTests(ApiTestCase):
             env.update(
                 CLIPSHELF_ALLOWED_HOSTS="nas.example,nas.tail1234.ts.net",
                 CLIPSHELF_DATA_DIR=data_dir,
+                # Unrelated deployment gate: runners ship an older SQLite and
+                # this asserts host derivation, not the runtime build.
+                CLIPSHELF_SQLITE_VERIFIED="1",
                 DJANGO_SETTINGS_MODULE="clipshelf.project.settings",
             )
             code = (
@@ -662,8 +665,9 @@ class ShellAndHealthTests(ApiTestCase):
                 "print(json.dumps(settings.ALLOWED_HOSTS))"
             )
             out = subprocess.run(
-                [sys.executable, "-c", code], env=env, capture_output=True, text=True, check=True
+                [sys.executable, "-c", code], env=env, capture_output=True, text=True
             )
+        self.assertEqual(out.returncode, 0, out.stderr)
         hosts = json.loads(out.stdout)
         self.assertEqual(hosts[0], "nas.example")
         self.assertIn("127.0.0.1", hosts)
