@@ -44,7 +44,15 @@ const fmtWhen = s => { if (!s) return ""; const d = new Date(s);
 const safeUrl = u => { try { const p = new URL(u); return p.protocol === "http:" || p.protocol === "https:" ? p.href : null; } catch { return null; } };
 const hostOf = u => { try { const p = new URL(u); return p.host + (p.pathname !== "/" ? p.pathname : ""); } catch { return String(u || ""); } };
 const shortHost = u => { try { return new URL(u).host.replace(/^www\./, ""); } catch { return String(u || ""); } };
-const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : String(crypto.getRandomValues(new Uint32Array(4))));
+const uuid = () => {
+  if (crypto.randomUUID) return crypto.randomUUID();   // secure contexts only
+  // Plain HTTP on the LAN: randomUUID is missing, getRandomValues is not.
+  const b = crypto.getRandomValues(new Uint8Array(16));
+  b[6] = (b[6] & 0x0f) | 0x40;                         // version 4
+  b[8] = (b[8] & 0x3f) | 0x80;                         // variant 10xx
+  const h = [...b].map(x => x.toString(16).padStart(2, "0")).join("");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+};
 async function copyText(t) {
   try { await navigator.clipboard.writeText(t); return true; }
   catch {
