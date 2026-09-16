@@ -251,9 +251,13 @@ OpenAI, Anthropic, Gemini, OpenRouter, Groq, Mistral, xAI, Z.AI, Ollama, llama.c
 LM Studio, vLLM — and any other endpoint remains typeable. Model names are
 never shipped as a hardcoded list because they change faster than releases do:
 `POST /api/admin/llm/models` asks the configured endpoint for its own
-`GET /models` and the form suggests what comes back. The listing accepts an
-unsaved key so a provider can be tried before it is committed, and reports an
-endpoint that cannot list as a 502 rather than an empty picker.
+`GET /models` and the answer replaces the model text box with a dropdown of
+what that endpoint actually has, keeping a "type a name instead" escape. A
+native `datalist` was tried first and rejected: its suggestions stay invisible
+until the field is focused, so pressing the button looked like it did nothing.
+The listing accepts an unsaved key so a provider can be tried before it is
+committed, and reports an endpoint that cannot list as a 502 rather than an
+empty picker.
 
 The server, not a tool-less chat completion, gathers the material:
 

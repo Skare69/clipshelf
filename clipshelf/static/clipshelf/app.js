@@ -1022,8 +1022,24 @@ function adminLlm(llm, err) {
   const p = el("section", { class: "panel" }, el("h3", { text: "Shared interpretation endpoint" }));
   if (err) return p.append(errNode(err)), p;
   const base = el("input", { type: "url", value: llm.base_url || "", placeholder: "https://llm.example.internal/v1" });
-  const models = el("datalist", { id: "llmModels" });
-  const model = el("input", { type: "text", class: "grow", value: llm.model || "", placeholder: "model name", list: "llmModels" });
+  const model = el("input", { type: "text", class: "grow", value: llm.model || "", placeholder: "model name" });
+  // The fetched list replaces the text box with a real picker; a datalist looked
+  // like nothing had happened until the field was focused.
+  let modelSel = null;
+  const modelValue = () => (modelSel ? modelSel.value : model.value).trim();
+  const showModels = list => {
+    const sel = el("select", { class: "grow" },
+      ...list.map(m => el("option", { value: m, text: m })),
+      el("option", { value: "", text: "Type a name instead…" }));
+    sel.value = list.includes(modelValue()) ? modelValue() : list[0];
+    model.value = sel.value;
+    sel.addEventListener("change", () => {
+      if (!sel.value) { modelSel = null; sel.replaceWith(model); model.focus(); }
+      else model.value = sel.value;
+    });
+    (modelSel || model).replaceWith(sel);
+    modelSel = sel;
+  };
   const load = el("button", { class: "btn small", type: "button", text: "Load models" });
   const conc = el("input", { type: "number", min: 1, max: 16, value: llm.concurrency ?? 2 });
   const key = el("input", { type: "password", placeholder: llm.has_api_key ? "Saved — leave blank to keep" : "No key set (optional for local endpoints)", autocomplete: "new-password" });
@@ -1037,15 +1053,16 @@ function adminLlm(llm, err) {
     const o = LLM_PROVIDERS.find(x => x.id === provider.value) || {};
     if (o.url) base.value = o.url;
     localHint.hidden = !o.local;
-    models.replaceChildren();
+    // Another provider's models are not this provider's; go back to free text.
+    if (modelSel) { modelSel.replaceWith(model); modelSel = null; }
   });
   const form = el("form", {},
     el("div", { class: "field" }, el("label", { text: "Provider" }), provider,
       el("p", { class: "help", text: "Presets fill the base URL. Any OpenAI-compatible endpoint works; vision is required." })),
     el("div", { class: "field" }, el("label", { text: "Base URL" }), base, localHint),
     el("div", { class: "field" }, el("label", { text: "Model" }),
-      el("div", { class: "row2" }, model, load), models,
-      el("p", { class: "help", text: "Load models asks the endpoint what it offers; you can also type a name." })),
+      el("div", { class: "row2" }, model, load),
+      el("p", { class: "help", text: "Load models asks the endpoint which models it has and turns this into a list to pick from." })),
     el("div", { class: "field" }, el("label", { text: "Concurrent requests" }), conc),
     el("div", { class: "field" }, el("label", { text: "API key" }), key,
       el("p", { class: "help", text: "Write-only: never returned by the server" + (llm.has_api_key ? ". A key is saved" : "") + ". Omit to keep; tick to clear." })),
@@ -1061,14 +1078,14 @@ function adminLlm(llm, err) {
       const b = { base_url: base.value.trim() };
       if (key.value) b.api_key = key.value;
       const list = (await sensitive("/api/admin/llm/models", b)).models || [];
-      models.replaceChildren(...list.map(m => el("option", { value: m })));
+      if (list.length) showModels(list);
       banner(list.length ? "ok" : "err",
-        list.length ? `${list.length} models offered — the Model box now suggests them.`
+        list.length ? `${list.length} models offered — pick one in the Model box.`
                     : "The endpoint listed no models; type the name instead.", { sticky: !list.length });
     } catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
     finally { load.disabled = false; load.textContent = "Load models"; }
   });
-  const body = () => ({ base_url: base.value.trim(), model: model.value.trim(),
+  const body = () => ({ base_url: base.value.trim(), model: modelValue(),
     concurrency: Math.max(1, parseInt(conc.value, 10) || 1) });
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
