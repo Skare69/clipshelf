@@ -5,7 +5,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 from django.core.exceptions import ValidationError
 
-from clipshelf import models, worker
+from clipshelf import models, services, worker
 
 MAX_LIBRARY_BYTES = 64 * 1024 * 1024  # legacy file guard; upload ceiling is separate
 
@@ -41,7 +41,8 @@ class Command(BaseCommand):
             raise CommandError("; ".join(exc.messages)) from exc
 
         result = worker.import_items(
-            user=user, collection_id=None, items=args["items"], prompts=args["prompts"],
+            user=user, collection_id=services.personal_collection(user).id,
+            items=args["items"], prompts=args["prompts"],
             seen=args["seen"], removed=args["removed"],
             cache_dir=options["cache"], origin="legacy-import",
             dry_run=options["dry_run"])

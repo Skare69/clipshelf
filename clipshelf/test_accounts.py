@@ -4,11 +4,13 @@ Invitation replay, native token login and session revocation, admin boundary
 (never content access), and shared-collection transfer limits.
 """
 
+import io
 import json
 import secrets
 from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
+from urllib.error import URLError
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
@@ -28,9 +30,8 @@ from clipshelf.accounts import (
     invitation_token_hash,
     json_error,
 )
-from clipshelf.interpretation import ConfigurationError
 from clipshelf.models import Collection, Invitation, Membership
-from clipshelf.services import accessible_collections, get_settings
+from clipshelf.services import accessible_collections
 from django.core import mail
 
 PASSWORD = "correct horse battery staple 42!"
@@ -70,6 +71,7 @@ urlpatterns = [
         admin_views.collection_transfer,
     ),
     path("admin/llm/models", admin_views.llm_models),
+    path("admin/llm", admin_views.llm_config),
     path("invite/<str:token>", accounts.invite_view, name="clipshelf_invite"),
     path("accounts/", include("allauth.account.urls")),
     path("_allauth/", include("allauth.headless.urls")),
@@ -417,50 +419,58 @@ class AdminBoundaryTests(AccountTestCase):
 
 
 class LlmModelPickerTests(AccountTestCase):
-    """The admin picker must be usable before settings are committed, and must
-    never fall back to a key the admin did not intend to use."""
-
     def setUp(self):
         super().setUp()
         self.client.force_login(self.admin)
-        self.seen = []
+        self.requests = []
 
-        def fake_list(config, **kw):
-            self.seen.append(config)
-            return ["vision-a", "vision-b"]
+        def respond(request, **kwargs):
+            self.requests.append((request.full_url, request.get_header("Authorization")))
+            return io.BytesIO(b'{"data":[{"id":"vision-a"}]}')
 
-        patcher = patch("clipshelf.interpretation.list_models", fake_list)
+        patcher = patch("urllib.request.urlopen", side_effect=respond)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_typed_key_is_used_before_the_settings_are_saved(self):
-        response = self.admin_post(
-            "/admin/llm/models",
-            {"base_url": "http://endpoint/v1", "api_key": "typed"},
-            reauth=True,
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["models"], ["vision-a", "vision-b"])
-        self.assertEqual(self.seen[-1]["api_key"], "typed")
+    def test_keys_stay_with_their_endpoint_and_explicit_clear_wins(self):
+        saved, other = "http://saved/v1", "http://other/v1"
+        self.admin_post("/admin/llm", {"base_url": saved, "api_key": "stored"}, reauth=True)
+        for body, expected in (
+            ({}, (saved + "/models", "Bearer stored")),
+            ({"base_url": other}, (other + "/models", None)),
+            ({"base_url": other, "api_key": "typed"}, (other + "/models", "Bearer typed")),
+            ({"api_key": ""}, (saved + "/models", None)),
+        ):
+            response = self.admin_post("/admin/llm/models", body)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["models"], ["vision-a"])
+            self.assertEqual(self.requests[-1], expected)
+            self.assertNotIn("stored", response.content.decode())
 
-    def test_saved_key_and_base_url_fill_in_when_omitted(self):
-        settings_row = get_settings()
-        settings_row.llm_base_url = "http://saved/v1"
-        settings_row.llm_api_key = "stored"
-        settings_row.save()
-        self.assertEqual(self.admin_post("/admin/llm/models", {}, reauth=True).status_code, 200)
-        self.assertEqual(self.seen[-1], {"base_url": "http://saved/v1", "api_key": "stored"})
+        response = self.admin_post("/admin/llm", {"base_url": other, "model": "m"})
+        self.assertFalse(response.json()["llm"]["has_api_key"])
+        self.admin_post("/admin/llm/models", {})
+        self.assertEqual(self.requests[-1], (other + "/models", None))
 
-    def test_no_endpoint_is_a_request_error_and_a_bad_one_is_a_gateway_error(self):
+        self.admin_post("/admin/llm", {"api_key": "replacement"})
+        response = self.admin_post("/admin/llm", {"base_url": other, "model": "new"})
+        self.assertTrue(response.json()["llm"]["has_api_key"])
+        self.admin_post("/admin/llm/models", {})
+        self.assertEqual(self.requests[-1], (other + "/models", "Bearer replacement"))
+        response = self.admin_post("/admin/llm", {"api_key": ""})
+        self.assertFalse(response.json()["llm"]["has_api_key"])
+
+    def test_no_endpoint_is_a_request_error_and_an_unreachable_one_is_a_gateway_error(self):
         self.assertEqual(self.admin_post("/admin/llm/models", {}, reauth=True).status_code, 400)
-        with patch("clipshelf.interpretation.list_models",
-                   side_effect=ConfigurationError("endpoint unreachable")):
-            response = self.admin_post(
-                "/admin/llm/models", {"base_url": "http://dead/v1"}, reauth=True)
+        with patch("urllib.request.urlopen", side_effect=URLError("connection refused")):
+            response = self.admin_post("/admin/llm/models", {"base_url": "http://dead/v1"})
         self.assertEqual(response.status_code, 502)
-        self.assertIn("unreachable", response.json()["detail"])
 
-    def test_listing_requires_reauthentication(self):
-        response = self.admin_post("/admin/llm/models", {"base_url": "http://endpoint/v1"})
-        self.assertEqual(response.status_code, 403)
-        self.assertEqual(self.seen, [])
+    def test_listing_requires_admin_reauthentication_before_any_request(self):
+        body = {"base_url": "http://endpoint/v1"}
+        self.assertEqual(self.admin_post("/admin/llm/models", body).status_code, 403)
+        self.client.logout()
+        self.assertEqual(self.admin_post("/admin/llm/models", body).status_code, 401)
+        self.client.force_login(make_user("member@clipshelf.test"))
+        self.assertEqual(self.admin_post("/admin/llm/models", body, reauth=True).status_code, 403)
+        self.assertEqual(self.requests, [])

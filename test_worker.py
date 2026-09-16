@@ -1,9 +1,11 @@
 """Worker coordinator regressions: claims, recovery, pauses, finite failures."""
+import io
 import shutil
 import tempfile
 import uuid
 from pathlib import Path
 from unittest import mock
+from urllib.error import HTTPError, URLError
 
 from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase, override_settings
@@ -137,59 +139,73 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.assertIn("malformed output", job.error)
         self.assertEqual(job.findings["summary"], "good findings")
 
-    def test_finite_backoff_then_blocked(self):
-        def boom(source, config, cats):
-            from clipshelf import interpretation
-            raise interpretation.InterpretationError("nope")
+    def test_access_lost_during_interpretation_blocks_without_losing_findings(self):
+        owner = models.User.objects.create_user(username="owner", email="owner@example.com")
+        shared = models.Collection.objects.create(name="Shared", kind="shared", owner=owner)
+        models.Membership.objects.create(user=self.user, collection=shared)
+        job = self.make_job(collection=shared)
+        self.run_worker()
+        job = self.refresh(job)
+        good = job.findings
+        job.state, job.interpretation = "queued", "pending"
+        job.save()
 
-        job = self.make_job(acquisition="complete", source={})
-        for attempt in range(worker.MAX_ATTEMPTS):
-            if attempt:  # requeue: pull the backoff deadline into the past
-                job.retry_at = timezone.now() - timezone.timedelta(seconds=1)
-                job.save(update_fields=["retry_at"])
-            self.run_worker(interpret=boom)
-            self.refresh(job)
-        self.assertEqual(job.attempts, worker.MAX_ATTEMPTS)
-        self.assertEqual(job.state, "blocked")
-        self.assertIsNone(job.retry_at)
+        def revoked(source, config, cats):
+            models.Membership.objects.filter(user=self.user, collection=shared).delete()
+            return {**FINDINGS, "source": source["url"]}
 
-    def test_refused_endpoint_backs_off_instead_of_retrying_every_poll(self):
-        """A reached-but-refusing endpoint (bad key, spent balance, 429) must not
-        be re-attempted on every poll: with configuration present, CONFIG_ERROR
-        is claimable immediately, which re-uploaded the whole material every
-        five seconds for as long as the condition lasted."""
-        calls = []
+        self.run_worker(interpret=revoked)
+        self.assertEqual(self.refresh(job).state, "blocked")
+        self.assertEqual(job.findings, good)
 
-        def refused(source, config, cats):
-            from clipshelf import interpretation
-            calls.append(1)
-            raise interpretation.EndpointRejected(
-                'endpoint rejected request (HTTP 429): {"error":"Insufficient balance"}')
+    def test_transport_failures_have_one_bounded_retry_owner(self):
+        job = self.make_job(acquisition="complete", source={"url": "https://example.com/a"})
+        cfg = services.get_settings()
+        cfg.llm_api_key = "private-provider-key"
+        cfg.save()
 
-        job = self.make_job(acquisition="complete", source={}, warnings=[])
-        self.run_worker(interpret=refused)
-        self.refresh(job)
-        self.assertEqual(job.state, "retry")
-        self.assertEqual(job.attempts, 1)
-        self.assertNotEqual(job.error, worker.CONFIG_ERROR)
-        self.assertIn("429", job.error)
-        self.assertGreater(job.retry_at, timezone.now())
+        def refused(request, **kwargs):
+            raise HTTPError(request.full_url, 429, "No balance", {},
+                            io.BytesIO(b'{"error":"No balance for private-provider-key"}'))
 
-        # the backoff deadline is honoured: a second poll does not touch the endpoint
-        self.run_worker(interpret=refused)
-        self.assertEqual(len(calls), 1)
+        # Exercise the real interpreter; only the HTTP transport is replaced.
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("urllib.request.urlopen", side_effect=refused) as upstream:
+            for attempt in range(1, worker.MAX_ATTEMPTS + 1):
+                claimed = worker._claim_batch(1)
+                self.assertEqual([j.pk for j in claimed], [job.pk])
+                worker._process(claimed[0])
+                self.refresh(job)
+                self.assertEqual(upstream.call_count, attempt)
+                self.assertEqual(job.attempts, attempt)
+                self.assertIn("429", job.error)
+                self.assertNotIn(cfg.llm_api_key, job.error)
+                self.assertEqual(worker._claim_batch(1), [])
+                if attempt < worker.MAX_ATTEMPTS:
+                    self.assertEqual(job.state, "retry")
+                    self.assertGreater(job.retry_at, timezone.now())
+                    job.retry_at = timezone.now() - timezone.timedelta(seconds=1)
+                    job.save(update_fields=["retry_at"])
+            self.assertEqual(job.state, "blocked")
+            self.assertIsNone(job.retry_at)
+
+        # Connection failures use the same policy, without hidden HTTP retries.
+        job = self.make_job(acquisition="complete", source={"url": "https://example.com/a"})
+        with mock.patch("urllib.request.urlopen", side_effect=URLError("offline")) as upstream:
+            worker._process(worker._claim(job.id))
+        self.assertEqual(upstream.call_count, 1)
         self.assertEqual(self.refresh(job).attempts, 1)
+        self.assertEqual(worker._claim_batch(1), [])
 
-        # and the failure is finite, not an endless loop
-        for _ in range(worker.MAX_ATTEMPTS):
-            job.retry_at = timezone.now() - timezone.timedelta(seconds=1)
-            job.save(update_fields=["retry_at"])
-            self.run_worker(interpret=refused)
-            self.refresh(job)
-        self.assertEqual(job.state, "blocked")
-        self.assertEqual(job.attempts, worker.MAX_ATTEMPTS)
-        self.assertEqual(len(calls), worker.MAX_ATTEMPTS)
-        self.assertEqual(worker._claim_batch(5), [])   # stays stopped
+    def test_invalid_settings_do_not_enter_the_configuration_resume_loop(self):
+        cfg = services.get_settings()
+        cfg.llm_base_url = "not-a-url"
+        cfg.save()
+        job = self.make_job(acquisition="complete", source={"url": "https://example.com/a"})
+        worker._process(worker._claim(job.id))
+        self.assertEqual(self.refresh(job).state, "retry")
+        self.assertEqual(job.attempts, 1)
+        self.assertEqual(worker._claim_batch(1), [])
 
     def test_repeating_warning_is_stored_once(self):
         job = self.make_job(warnings=["endpoint rejected request (HTTP 429)"])
@@ -233,7 +249,10 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
             user=self.user, input_digest=uuid.uuid4().hex,
             manifest={"status": "pending", "staging": staging_rel,
                       "collection_id": str(self.personal.id),
+                      "format": "tiktok",
                       "client_request_id": str(uuid.uuid4())})
+        # Simulate a coordinator crash after claiming but before importing.
+        worker._claim_imports()
         upstream = []
 
         def blocked_acquire(url, directory):
@@ -261,6 +280,12 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
         self.assertEqual({c.user_id for c in contributions}, {self.user.id})
         self.assertEqual(
             sum(1 for c in contributions if (c.data or {}).get("findings")), 1)
+        # A restart-safe checkpoint: draining again changes nothing.
+        before = (models.Job.objects.count(), models.Contribution.objects.count(),
+                  models.Entry.objects.count())
+        self.run_worker(acquire=blocked_acquire)
+        self.assertEqual((models.Job.objects.count(), models.Contribution.objects.count(),
+                          models.Entry.objects.count()), before)
 
 
 class IngestCommandTests(WorkerMixin, TestCase):

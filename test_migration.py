@@ -1,5 +1,6 @@
 """Legacy migration regressions: manifest counts/digests, idempotency, scope,
 settings recording, and backup/restore roundtrip."""
+import base64
 import hashlib
 import io
 import json
@@ -14,6 +15,7 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase, TransactionTestCase, override_settings
+from PIL import Image
 
 from clipshelf import models, services, worker
 
@@ -202,6 +204,40 @@ class ImportTests(MigrationMixin, TestCase):
             self.direct_import(items=[{"url": "https://example.com/b"}],
                                prompts=[], client_request_id=crid)
 
+    def test_import_rejects_server_paths_outside_cache(self):
+        secret = self.tmp / "secret_key"
+        secret.write_bytes(b"private server bytes")
+        for cache in ({"path": str(secret)}, str(secret), "../secret_key", r"C:\data\secret_key"):
+            with self.subTest(cache=cache), self.assertRaises(ValidationError):
+                self.direct_import(items=[{"url": "https://example.com/private",
+                                           "error": "offline", "cache": cache}], prompts=[])
+        self.assertEqual(secret.read_bytes(), b"private server bytes")
+        self.assertFalse(models.Asset.objects.exists())
+
+    def test_imported_media_never_overwrites_another_accounts_asset(self):
+        retained = []
+        with override_settings(DATA_DIR=str(self.tmp)):
+            for i, color in enumerate(("red", "green", "blue")):
+                user = models.User.objects.create_user(username=f"image-{i}", email=f"image-{i}@example.com")
+                data = io.BytesIO()
+                Image.new("RGB", (4, 4), color).save(data, "PNG")
+                worker.import_items(user=user, collection_id=None, items=[{
+                    "url": "https://example.com/shared-url",
+                    "images": [{"b64": base64.b64encode(data.getvalue()).decode()}],
+                }])
+                asset = models.Asset.objects.get(collection=services.personal_collection(user))
+                retained.append((self.tmp / asset.path, data.getvalue()))
+                for path, expected in retained:
+                    self.assertEqual(path.read_bytes(), expected)
+
+    def test_cli_migration_ignores_shared_default_collection(self):
+        shared = models.Collection.objects.create(name="Shared", kind="shared", owner=self.user)
+        self.user.default_collection = shared
+        self.user.save()
+        self.run_import_command()
+        self.assertFalse(models.Entry.objects.filter(collection=shared).exists())
+        self.assertTrue(models.Entry.objects.filter(collection=self.personal).exists())
+
     def test_pending_lists_queued_job(self):
         self.run_import_command()
         out = io.StringIO()
@@ -225,6 +261,9 @@ class ImportTests(MigrationMixin, TestCase):
             with mock.patch("clipshelf.acquisition.import_export",
                             side_effect=fake_import_export):
                 result = worker.run_staged_import(record)
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "done")
+        self.assertEqual(record.manifest["result"]["counts"], result["counts"])
         # The cache/ page reference cannot be resolved (no import-cache dir):
         # reported honestly, not fatal.
         self.assertEqual(result["manifest"]["missing_media"], [CACHE_NAME])

@@ -8,9 +8,9 @@ leave "done" pointing at partial files. Disabled accounts pause instead of
 processing; lost collection rights pause instead of processing.
 
 Finite failure policy: transient errors retry with capped exponential backoff
-up to MAX_ATTEMPTS, then block. Missing/broken LLM configuration blocks with
-the CONFIG_ERROR marker (attempts untouched) and auto-resumes once an admin
-configures the endpoint. Malformed interpretation output is retried once
+up to MAX_ATTEMPTS, then block. Missing LLM settings use the CONFIG_ERROR
+marker (attempts untouched) and resume when configured. Invalid settings and
+endpoint failures use the finite failure policy. Malformed output is retried once
 inside clipshelf.interpretation, then preserved as an actionable failure with
 the last good findings intact.
 """
@@ -23,7 +23,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
@@ -39,7 +39,6 @@ log = logging.getLogger(__name__)
 CONFIG_ERROR = "llm-not-configured"  # blocked marker; claim resumes when config exists
 MAX_ATTEMPTS = 5
 POLL_SECONDS = 5
-CONFIG_POLL_SECONDS = 60
 MAX_IMPORT_ITEMS = 5000  # own payload bound; acquisition.import_export batches at 500
 IMPORT_BATCH = 500
 
@@ -105,8 +104,6 @@ def main(once=False, stdout=None):
                 futures += [pool.submit(_process, job) for job in jobs]
                 for f in futures:
                     f.result()
-                if once:
-                    continue  # drain until nothing is claimable
         except KeyboardInterrupt:
             say("interrupted: finishing in-flight jobs; remaining work stays queued")
             raise
@@ -115,12 +112,15 @@ def main(once=False, stdout=None):
 
 
 def _recover_abandoned():
-    """Reset jobs stuck in running from a previous crash. Caller holds the
-    exclusive coordinator lock, so no live owner exists for them."""
+    """Recover in-flight work while holding the exclusive coordinator lock."""
     with transaction.atomic():
-        return models.Job.objects.filter(state="running").update(
+        recovered = models.Job.objects.filter(state="running").update(
             state="retry", retry_at=timezone.now()
         )
+        for record in models.ImportRecord.objects.filter(manifest__status="running"):
+            _update_manifest(record, {"status": "pending"})
+            recovered += 1
+        return recovered
 
 
 def _llm_configured():
@@ -128,21 +128,17 @@ def _llm_configured():
     return bool(cfg.llm_base_url and cfg.llm_model)
 
 
+def _claimable_jobs():
+    due = Q(retry_at__isnull=True) | Q(retry_at__lte=timezone.now())
+    ready = Q(state__in=("queued", "retry")) & due
+    if _llm_configured():
+        ready |= Q(state="blocked", error=CONFIG_ERROR)
+    return models.Job.objects.filter(ready, capture__user__is_active=True)
+
+
 def _claim_batch(limit):
-    now = timezone.now()
-    # A job blocked only because the shared model was unconfigured resumes as
-    # soon as configuration exists; the poll interval is a fallback, not a wait.
-    config_block = Q(state="blocked", error=CONFIG_ERROR)
-    if not _llm_configured():
-        config_block &= Q(retry_at__lte=now)
-    candidates = models.Job.objects.filter(
-        (
-            (Q(state__in=("queued", "retry"))
-             & (Q(retry_at__isnull=True) | Q(retry_at__lte=now)))
-            | config_block
-        ),
-        capture__user__is_active=True,  # disabled accounts pause, never process
-    ).order_by("retry_at", "id").values_list("id", flat=True)[: limit * 4]
+    candidates = (_claimable_jobs().order_by("retry_at", "id")
+                  .values_list("id", flat=True)[:limit * 4])
     claimed = []
     for jid in candidates:
         job = _claim(jid)
@@ -157,17 +153,7 @@ def _claim(jid):
     """Atomically flip one claimable job to running, or leave it alone."""
     try:
         with transaction.atomic():
-            job = models.Job.objects.select_for_update().get(pk=jid)
-            now = timezone.now()
-            retry_due = job.retry_at is None or job.retry_at <= now
-            claimable = (
-                job.state in ("queued", "retry") and retry_due
-            ) or (
-                job.state == "blocked" and job.error == CONFIG_ERROR
-                and (_llm_configured() or (job.retry_at or now) <= now)
-            )
-            if not claimable:
-                return None
+            job = _claimable_jobs().select_for_update().get(pk=jid)
             job.state = "running"
             job.retry_at = None
             job.save()
@@ -183,10 +169,7 @@ def _set(job, **fields):
 
 
 def _warn(job, *messages):
-    # Deduplicated and capped like services.store_findings: a failure that
-    # repeats must not grow the row, or the wall of identical lines, forever.
-    return list(dict.fromkeys([*(job.warnings or []),
-                               *(m for m in messages if m)]))[:100]
+    return list(dict.fromkeys((job.warnings or []) + [m for m in messages if m]))[:100]
 
 
 # -------------------------------------------------------------- job pipeline
@@ -245,15 +228,15 @@ def _acquire_phase(job):
 
 
 def _publish(job, source):
-    """Move complete staged files to DATA_DIR/assets/<job>/ atomically."""
-    root = _data("assets", str(job.id))
+    """Publish one acquisition into a fresh directory, never over retained bytes."""
+    root = _data("assets", str(job.id), uuid.uuid4().hex)
     root.mkdir(parents=True, exist_ok=True)
     assets = source.get("assets") or []
     for i, asset in enumerate(assets):
-        src = Path(asset["path"])
-        dest = root / src.name
-        if dest.exists():
-            dest = root / f"{i}-{src.name}"
+        src = Path(asset["path"]).resolve()
+        if not src.is_relative_to(_data("staging", f"job-{job.id}").resolve()):
+            raise ValidationError("acquired asset is outside its staging directory")
+        dest = root / f"{i}-{src.name}"
         os.replace(src, dest)  # atomic: file appears complete at final path
         assets[i] = {**asset, "path": str(dest)}
     if assets:
@@ -262,41 +245,22 @@ def _publish(job, source):
 
 
 def _interpret_phase(job):
-    cfg = services.get_settings()
-    if not (cfg.llm_base_url and cfg.llm_model):
-        # configuration failure is not a job failure: block without burning
-        # attempts; claim query picks these up again once config exists
-        _set(job, state="blocked", error=CONFIG_ERROR,
-             retry_at=timezone.now() + timedelta(seconds=CONFIG_POLL_SECONDS))
-        return
     if lib.is_terminal(job.url):
-        _set(job, interpretation="blocked", state="done",
+        _set(job, interpretation="blocked", state="done", error="",
              warnings=_warn(job, "terminal host: retained as metadata only, never interpreted"))
         return
-    config = {"base_url": cfg.llm_base_url, "model": cfg.llm_model,
-              "api_key": cfg.llm_api_key or ""}
+    cfg = services.get_settings()
+    if not (cfg.llm_base_url and cfg.llm_model):
+        _set(job, state="blocked", error=CONFIG_ERROR, retry_at=None)
+        return
     try:
         findings = interpretation.interpret(
-            _material(job), config, _categories(job.collection))
-    except interpretation.EndpointRejected as exc:
-        # The endpoint answered and refused. CONFIG_ERROR would make this
-        # claimable again on the next 5s poll for as long as configuration
-        # exists, re-uploading the whole material every cycle; burn attempts
-        # and back off instead.
+            _material(job), cfg.llm_config(), _categories(job.collection))
+    except (interpretation.ConfigurationError, interpretation.InterpretationError) as exc:
         _fail(job, exc)
         return
-    except interpretation.ConfigurationError as exc:
-        _set(job, state="blocked", error=CONFIG_ERROR, warnings=_warn(job, str(exc)),
-             retry_at=timezone.now() + timedelta(seconds=CONFIG_POLL_SECONDS))
-        return
-    except interpretation.InterpretationError as exc:
-        _fail(job, exc)  # last good findings in job.findings stay untouched
-        return
-    with transaction.atomic():
-        # store_findings already sets done/complete; a blocked publish (lost
-        # collection access) must not be overwritten with success here.
-        if services.store_findings(job, findings):
-            _set(job, interpretation="complete", state="done", error="")
+    # store_findings owns the transaction and final job state, including access loss.
+    services.store_findings(job, findings)
 
 
 def _categories(collection):
@@ -422,8 +386,16 @@ def _legacy_media_path(rel, cache_dir):
     library.json stores repo-relative paths ("cache/<sha1>.<ext>") while
     --cache points at the cache directory itself, so both spellings resolve.
     """
-    base = Path(cache_dir) if cache_dir else Path(".")
-    for candidate in (base / rel, base / Path(rel).name, base.parent / rel):
+    relative = PureWindowsPath(rel)
+    if relative.drive or relative.root or ".." in relative.parts:
+        raise ValidationError("legacy media must be relative to the cache directory")
+    if not cache_dir:
+        return None
+    base = Path(cache_dir).resolve()
+    for candidate in (base / rel, base / Path(rel).name):
+        candidate = candidate.resolve()
+        if not candidate.is_relative_to(base):
+            raise ValidationError("legacy media is outside the cache directory")
         if candidate.is_file():
             return candidate
     return None
@@ -439,8 +411,12 @@ def _resolve_media(value, cache_dir, staging, files_record):
     """
     if value is None or value == "" or value == []:
         return None
-    if isinstance(value, dict):  # already a spec: path/b64/url pass through
-        return value
+    if isinstance(value, dict):
+        if "path" not in value:
+            return value
+        value = value["path"]
+        if not isinstance(value, str):
+            raise ValidationError("media path must be a relative filename")
     if isinstance(value, list):  # legacy: images lists handled per entry
         return None
     text = str(value).strip()
@@ -707,7 +683,7 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
     """Publish all files, then create every row in one transaction."""
     # Publish job files first: complete bytes at final paths before any reference.
     for plan in plans:
-        plan["published"] = _publish_paths(plan["source"], plan["url"])
+        plan["published"] = _publish_paths(plan["source"], staging)
 
     crid = client_request_id or str(uuid.uuid5(
         uuid.NAMESPACE_URL, f"clipshelf-import:{user.id}:{digest}"))
@@ -757,30 +733,34 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
                 defaults={"capture": capture, "data": plan["data"]})
             counts["prompts"] += 1
             counts["entries"] += 1
+        result = {"created": True, "digest": digest, "counts": counts, "manifest": manifest,
+                  "notice": notice, "collection_id": str(collection.id)}
         if record is None:
             models.ImportRecord.objects.create(
                 user=user, input_digest=digest, manifest=manifest)
-    return {"created": True, "digest": digest, "counts": counts, "manifest": manifest,
-            "notice": notice, "collection_id": str(collection.id)}
+        else:
+            # Commit the checkpoint with its rows: a restart must not import twice.
+            _update_manifest(record, {"status": "done", "result": result})
+    return result
 
 
-def _publish_paths(source, url):
-    """Stage → final move for import sources (job id unknown yet: publish under
-    the entry key digest, referenced by Asset rows created in the same commit)."""
+def _publish_paths(source, staging):
+    """Publish only staged import bytes, isolated from every previous import."""
     if not source.get("assets"):
         return []
-    root = _data("assets", hashlib.sha256(url.encode()).hexdigest()[:32])
+    root = _data("assets", uuid.uuid4().hex)
     root.mkdir(parents=True, exist_ok=True)
-    moved = []
+    published = []
     for i, asset in enumerate(source["assets"]):
-        src = Path(asset["path"])
-        dest = root / src.name
-        if dest.exists():
-            dest = root / f"{i}-{src.name}"
-        os.replace(src, dest)
-        moved.append({**asset, "path": str(dest)})
-    source["assets"] = moved
-    return moved
+        src = Path(asset["path"]).resolve()
+        if not src.is_relative_to(staging.resolve()):
+            raise ValidationError("imported asset is outside its staging directory")
+        dest = root / f"{i}-{src.name}"
+        # Shared cache files can feed several entries; staging is removed by the caller.
+        shutil.copy2(src, dest)
+        published.append({**asset, "path": str(dest)})
+    source["assets"] = published
+    return published
 
 
 def _legacy_contribution_data(item):

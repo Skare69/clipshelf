@@ -380,7 +380,7 @@ def test_list_models():
     def fake_open(req, timeout=None):
         calls.append((req.full_url, req.get_header("Authorization")))
         return Resp(json.dumps({"data": [{"id": "b"}, {"id": "a"}, {"id": "a"},
-                                         {"id": 7}, {"id": " "}, {}]}).encode())
+                                         {"id": 7}, {"id": " "}, {}, None, "junk"]}).encode())
 
     real_open = interp.urllib.request.urlopen
     interp.urllib.request.urlopen = fake_open
@@ -420,6 +420,23 @@ def test_list_models():
             raise AssertionError("garbage accepted")
         except interp.ConfigurationError:
             pass
+        interp.urllib.request.urlopen = lambda req, timeout=None: Resp(b'{"data":{}}')
+        try:
+            interp.list_models({"base_url": "http://h/v1"})
+            raise AssertionError("non-list data accepted")
+        except interp.ConfigurationError:
+            pass
+        limit = interp.LLM_RESPONSE_MAX
+        interp.LLM_RESPONSE_MAX = 16
+        try:
+            interp.urllib.request.urlopen = lambda req, timeout=None: Resp(b'{"data":[]}' + b" " * 20)
+            try:
+                interp.list_models({"base_url": "http://h/v1"})
+                raise AssertionError("oversized response accepted")
+            except interp.ConfigurationError:
+                pass
+        finally:
+            interp.LLM_RESPONSE_MAX = limit
     finally:
         interp.urllib.request.urlopen = real_open
     print("model listing ok")

@@ -13,7 +13,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import time
 import urllib.error
 import urllib.request
 
@@ -21,7 +20,7 @@ from PIL import Image, ImageOps
 from clipshelf.lib import norm, repo_url
 from clipshelf import network
 
-__all__ = ["InterpretationError", "ConfigurationError", "EndpointRejected",
+__all__ = ["InterpretationError", "ConfigurationError",
            "interpret", "check_connection", "list_models"]
 
 class InterpretationError(Exception):
@@ -29,14 +28,8 @@ class InterpretationError(Exception):
 
 
 class ConfigurationError(Exception):
-    """Shared LLM connection is missing or invalid; captures stay queued."""
+    """Shared LLM settings are missing or invalid."""
 
-
-class EndpointRejected(ConfigurationError):
-    """The endpoint was reached and refused: bad credentials, exhausted balance,
-    rate limit, unknown model. Repeating the identical call cannot fix it, so
-    the caller must back off and stop — unlike a local misconfiguration, which
-    costs nothing to re-check."""
 
 def _redact(text, key):
     return text.replace(key, "***") if key else text
@@ -101,8 +94,7 @@ def _config(config):
 
 # ------------------------------------------------------------- HTTP core
 def _post(base, key, payload, timeout):
-    """One bounded POST to the trusted endpoint; a reached-but-refusing endpoint
-    raises EndpointRejected, urllib errors propagate as transient."""
+    """One bounded request. The worker owns transport retries and backoff."""
     body = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if key:
@@ -113,19 +105,22 @@ def _post(base, key, payload, timeout):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read(LLM_RESPONSE_MAX + 1)
     except urllib.error.HTTPError as exc:
-        detail = exc.read(4096).decode(errors="replace")
+        detail = _redact(exc.read(4096).decode(errors="replace"), key)[:300]
         if exc.code in (401, 403):
-            raise EndpointRejected(f"endpoint rejected credentials (HTTP {exc.code})")
-        raise EndpointRejected(f"endpoint rejected request (HTTP {exc.code}): {detail[:300]}")
+            raise InterpretationError(f"endpoint rejected credentials (HTTP {exc.code})") from None
+        raise InterpretationError(f"endpoint rejected request (HTTP {exc.code}): {detail}") from None
+    except (urllib.error.URLError, OSError) as exc:
+        raise InterpretationError(f"endpoint unreachable: {_redact(str(exc), key)[:300]}") from None
     if len(raw) > LLM_RESPONSE_MAX:
         raise InterpretationError("model response exceeds size bound")
-    return json.loads(raw.decode("utf-8", errors="replace"))
+    try:
+        return json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise InterpretationError("endpoint returned invalid JSON") from None
 
 
 def list_models(config, timeout=30):
-    """Model ids the endpoint offers, for the admin picker. Any OpenAI-compatible
-    server exposes GET /models; a provider that does not just leaves the admin
-    typing the name by hand."""
+    """Fetch model IDs for the picker; unsupported endpoints allow manual entry."""
     base, _, key = _config({**config, "model": config.get("model") or "-"})
     headers = {"Authorization": f"Bearer {key}"} if key else {}
     req = urllib.request.Request(base + "/models", headers=headers, method="GET")
@@ -134,33 +129,22 @@ def list_models(config, timeout=30):
             raw = resp.read(LLM_RESPONSE_MAX + 1)
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
-            raise EndpointRejected(f"endpoint rejected credentials (HTTP {exc.code})")
-        raise EndpointRejected(f"endpoint cannot list models (HTTP {exc.code})")
+            raise ConfigurationError(f"endpoint rejected credentials (HTTP {exc.code})") from None
+        raise ConfigurationError(f"endpoint cannot list models (HTTP {exc.code})") from None
     except (urllib.error.URLError, OSError) as exc:
-        raise ConfigurationError(f"endpoint unreachable: {_redact(str(exc)[:200], key)}")
+        raise ConfigurationError(f"endpoint unreachable: {_redact(str(exc), key)[:200]}") from None
+    if len(raw) > LLM_RESPONSE_MAX:
+        raise ConfigurationError("model list exceeds size bound")
     try:
-        data = json.loads(raw.decode("utf-8", errors="replace"))["data"]
-        ids = [m["id"] for m in data if isinstance(m.get("id"), str) and m["id"].strip()]
-    except (json.JSONDecodeError, KeyError, TypeError) as exc:
-        raise ConfigurationError(f"endpoint returned no model list ({exc.__class__.__name__})")
-    return sorted(set(ids))[:500]
+        data = json.loads(raw)["data"]
+        if not isinstance(data, list):
+            raise ValueError("data must be a list")
+    except (ValueError, UnicodeError, KeyError, TypeError):
+        raise ConfigurationError("endpoint returned an invalid model list") from None
+    return sorted({m["id"] for m in data if isinstance(m, dict)
+                   and isinstance(m.get("id"), str) and m["id"].strip()})[:500]
 
 
-def _chat(base, model, key, messages, timeout):
-    """Chat completion with finite transient retry; 4xx never retries."""
-    payload = {"model": model, "messages": messages, "max_tokens": OUTPUT_TOKENS_MAX,
-               "temperature": 0.2}
-    last = None
-    for attempt in range(3):
-        try:
-            return _post(base, key, payload, timeout)
-        except ConfigurationError:
-            raise
-        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
-            last = exc
-            if attempt < 2:
-                time.sleep(1 * (attempt + 1) ** 2)
-    raise InterpretationError(f"endpoint unreachable after retries: {_redact(str(last)[:300], key)}")
 
 
 def _content(response, key):
@@ -169,9 +153,9 @@ def _content(response, key):
         if not isinstance(content, str) or not content.strip():
             raise ValueError("empty content")
         return content
-    except (KeyError, IndexError, TypeError) as exc:
+    except (KeyError, IndexError, TypeError, ValueError):
         raise InterpretationError(
-            f"unparsable model response: {_redact(repr(response)[:300], key)}") from exc
+            f"unparsable model response: {_redact(repr(response), key)[:300]}") from None
 
 
 # ------------------------------------------------- image + video frames
@@ -402,7 +386,10 @@ def interpret(source, config, categories):
         if reason:
             messages = messages + [{"role": "user",
                                     "content": _RETRY_NOTE.format(reason=reason)}]
-        content = _content(_chat(base, model, key, messages, LLM_TIMEOUT), key)
+        response = _post(base, key, {"model": model, "messages": messages,
+                                    "max_tokens": OUTPUT_TOKENS_MAX,
+                                    "temperature": 0.2}, LLM_TIMEOUT)
+        content = _content(response, key)
         try:
             findings = _validated(_parse_json_content(content), source["url"],
                                   categories, warnings)
@@ -446,9 +433,5 @@ def check_connection(config):
                     f"contract: {raw[:200]}"}
         color = str(parsed.get("color") or "?")
         return {"ok": True, "message": f"image+JSON ok via {model} (saw: {color[:40]})"}
-    except ConfigurationError as exc:
-        return {"ok": False, "message": _redact(str(exc), key)}
-    except InterpretationError as exc:
-        return {"ok": False, "message": _redact(str(exc), key)}
     except Exception as exc:
-        return {"ok": False, "message": _redact(str(exc)[:300], key)}
+        return {"ok": False, "message": _redact(str(exc), key)[:300]}

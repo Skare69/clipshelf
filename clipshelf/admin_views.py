@@ -322,8 +322,7 @@ def llm_config(request, user):
         updates["llm_model"] = str(body["model"] or "").strip()
         capability_change = True
     if "api_key" in body:
-        # Omitted key keeps the stored one; explicit empty string clears it.
-        # The key itself is never serialized back out.
+        # Explicit empty clears the key; omission keeps it only for this endpoint.
         updates["llm_api_key"] = str(body["api_key"] or "")
         capability_change = True
     if "concurrency" in body:
@@ -331,9 +330,14 @@ def llm_config(request, user):
             concurrency = int(body["concurrency"])
         except (TypeError, ValueError):
             raise ApiError(400, detail="concurrency must be an integer.")
-        if not 1 <= concurrency <= 16:
-            raise ApiError(400, detail="concurrency must be between 1 and 16.")
+        if not 1 <= concurrency <= 8:
+            raise ApiError(400, detail="concurrency must be between 1 and 8.")
         updates["llm_concurrency"] = concurrency
+    if (updates.get("llm_base_url", s.llm_base_url).rstrip("/") != s.llm_base_url.rstrip("/")
+            and "llm_api_key" not in updates):
+        # A stored key belongs to the old endpoint; never carry it over.
+        updates["llm_api_key"] = ""
+        capability_change = True
     if capability_change:
         updates["llm_verified_at"] = None
     for field, value in updates.items():
@@ -346,29 +350,8 @@ def llm_config(request, user):
 def llm_check(request, user):
     _require_reauth(request, _json_body(request))
     s = get_settings()
-    config = {
-        "base_url": s.llm_base_url,
-        "model": s.llm_model,
-        "api_key": s.llm_api_key or None,
-    }
-    from clipshelf.interpretation import (
-        ConfigurationError,
-        InterpretationError,
-        check_connection,
-    )
-
-    try:
-        result = check_connection(config)
-    except (ConfigurationError, InterpretationError) as exc:
-        result = {"ok": False, "message": str(exc)}
-    return JsonResponse(
-        {
-            "check": {
-                "ok": bool(result.get("ok")),
-                "message": str(result.get("message", "")),
-            }
-        }
-    )
+    from clipshelf.interpretation import check_connection
+    return JsonResponse({"check": check_connection(s.llm_config())})
 
 
 @admin_endpoint("POST")
@@ -381,7 +364,9 @@ def llm_models(request, user):
     base_url = str(body.get("base_url") or s.llm_base_url or "").strip()
     if not base_url:
         raise ApiError(400, detail="Enter a base URL first.")
-    api_key = body["api_key"] if body.get("api_key") else (s.llm_api_key or None)
+    # Omission may reuse the saved key; explicit empty must send no credentials.
+    saved_key = s.llm_api_key if base_url.rstrip("/") == s.llm_base_url.rstrip("/") else None
+    api_key = body.get("api_key", saved_key)
     from clipshelf.interpretation import ConfigurationError, list_models
 
     try:

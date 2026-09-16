@@ -594,6 +594,12 @@ class ImportTests(ApiTestCase):
         self.assertEqual(response.status_code, 400)
         response = self._post_import(alice, b"not json at all")
         self.assertEqual(response.status_code, 400)
+        response = self._post_import(alice, json.dumps([{
+            "url": "https://example.com/clip", "error": "offline",
+            "cache": {"path": "/data/secret_key"},
+        }]).encode())
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(ImportRecord.objects.exists())
 
     def test_import_enforces_ceiling(self):
         from django.test import override_settings as os_

@@ -237,6 +237,17 @@ streaming parser when real exports require it. Staging an upload on disk alone
 does not prove bounded parse memory. A failed import must remain retryable without
 partial findings or duplicate contributions.
 
+**Rev. 6 (2026-09-16):** an upload is data, never a filesystem instruction. A
+browser payload may not name a local `path`; legacy references resolve only
+beneath the import cache with a resolved-path containment check, and only bytes
+copied into the current staging directory are ever published. Each publication
+writes a fresh directory, so retained assets are immutable and two accounts
+importing the same URL can never overwrite each other's bytes. The coordinator
+resets an import abandoned mid-run and commits its completion checkpoint inside
+the same transaction as its rows, so a restart re-imports nothing. The CLI
+migration names the owner's Personal collection explicitly rather than following
+the capture-time default, which may be shared.
+
 ### Shared HTTP model
 
 Use one configured OpenAI-compatible HTTP connection, not an adapter registry.
@@ -278,10 +289,14 @@ cannot authorize filesystem access, shell commands, or collection changes.
 Enrich/verify emitted URLs with the same bounded public-fetch policy; unsupported
 or unverifiable findings need honest warnings, not invented verification.
 
-Use finite timeouts and bounded retries: transient network failures can retry with
-backoff; one malformed-output retry is a reasonable starting point, then preserve
-an actionable failure. A persistent authentication/configuration error must not
-loop through paid requests. Keep concurrency configurable for the real model host.
+Use finite timeouts and bounded retries with exactly one owner. Transport
+failures — refused credentials, exhausted balance, rate limits, unreachable
+hosts — are ordinary job failures: the worker counts the attempt and backs off,
+capped, then blocks. Only genuinely absent settings use the configuration marker
+that resumes for free, because that path costs no request; treating a refusing
+endpoint as "unconfigured" re-sent the whole capture, images included, on every
+poll. One malformed-output retry stays inside the interpreter, then the failure
+is preserved. Keep concurrency configurable for the real model host.
 
 ## 6. Web UI, administration, and trust boundaries
 

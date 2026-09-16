@@ -384,6 +384,7 @@ def store_findings(job, findings):
             # Access lost after acquisition: keep the last good findings, do
             # not write into a collection the user can no longer write.
             job.interpretation = Job.InterpretationStatus.BLOCKED
+            job.state = Job.State.BLOCKED
             job.error = "Collection access was lost; previous findings were kept."
             job.save()
             caller_job.refresh_from_db()

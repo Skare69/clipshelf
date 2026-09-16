@@ -61,6 +61,7 @@ _BANNED_IMPORT_KEYS = {
     "credentials",
     "sessionid",
     "options",
+    "path",
 }
 _INERT_TYPES = {"text/html", "application/xhtml+xml", "application/xml", "text/xml"}
 
@@ -623,7 +624,7 @@ def api_job_retry(request, job_id):
 
 def _scan_import_keys(node, depth=0):
     if depth > MAX_IMPORT_DEPTH:
-        return
+        raise ApiError(400, "invalid", "export nesting exceeds the supported depth")
     if isinstance(node, dict):
         for key, value in node.items():
             if str(key).lower() in _BANNED_IMPORT_KEYS:

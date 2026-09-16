@@ -1021,31 +1021,36 @@ const LLM_PROVIDERS = [
 function adminLlm(llm, err) {
   const p = el("section", { class: "panel" }, el("h3", { text: "Shared interpretation endpoint" }));
   if (err) return p.append(errNode(err)), p;
-  const base = el("input", { type: "url", value: llm.base_url || "", placeholder: "https://llm.example.internal/v1" });
-  const model = el("input", { type: "text", class: "grow", value: llm.model || "", placeholder: "model name" });
-  // The fetched list replaces the text box with a real picker; a datalist looked
-  // like nothing had happened until the field was focused.
-  let modelSel = null;
-  const modelValue = () => (modelSel ? modelSel.value : model.value).trim();
+  const base = el("input", { type: "url", id: "llmBase", value: llm.base_url || "", placeholder: "https://llm.example.internal/v1" });
+  let modelCtl = el("input", { type: "text", id: "llmModel", class: "grow",
+    value: llm.model || "", placeholder: "model name" });
+  const modelValue = () => modelCtl.value.trim();
+  const textModel = () => {
+    const input = el("input", { type: "text", id: "llmModel", class: "grow",
+      value: modelValue(), placeholder: "model name" });
+    modelCtl.replaceWith(input); modelCtl = input;
+  };
   const showModels = list => {
-    const sel = el("select", { class: "grow" },
-      ...list.map(m => el("option", { value: m, text: m })),
-      el("option", { value: "", text: "Type a name instead…" }));
-    sel.value = list.includes(modelValue()) ? modelValue() : list[0];
-    model.value = sel.value;
+    const current = modelValue();
+    const custom = el("option", { text: "Type a name instead…" });
+    const sel = el("select", { id: "llmModel", class: "grow" },
+      el("option", { value: "", text: "Choose a model…", disabled: true }),
+      ...[...new Set([current, ...list].filter(Boolean))].map(m => el("option", { value: m, text: m })),
+      custom);
+    sel.value = current;
+    let picked = current;   // the restore point when the admin escapes to free text
     sel.addEventListener("change", () => {
-      if (!sel.value) { modelSel = null; sel.replaceWith(model); model.focus(); }
-      else model.value = sel.value;
+      if (sel.selectedOptions[0] !== custom) { picked = sel.value; return; }
+      sel.value = picked; textModel(); modelCtl.focus();
     });
-    (modelSel || model).replaceWith(sel);
-    modelSel = sel;
+    modelCtl.replaceWith(sel); modelCtl = sel;
   };
   const load = el("button", { class: "btn small", type: "button", text: "Load models" });
-  const conc = el("input", { type: "number", min: 1, max: 16, value: llm.concurrency ?? 2 });
-  const key = el("input", { type: "password", placeholder: llm.has_api_key ? "Saved — leave blank to keep" : "No key set (optional for local endpoints)", autocomplete: "new-password" });
+  const conc = el("input", { type: "number", id: "llmConc", min: 1, max: 8, value: llm.concurrency ?? 2 });
+  const key = el("input", { type: "password", id: "llmKey", placeholder: llm.has_api_key ? "Saved — leave blank to keep" : "No key set (optional for local endpoints)", autocomplete: "new-password" });
   const clear = el("input", { type: "checkbox", id: "llmClearKey" });
-  const provider = el("select", {}, ...LLM_PROVIDERS.map(o => el("option", { value: o.id, text: o.label })));
-  const known = LLM_PROVIDERS.find(o => o.url && (llm.base_url || "").startsWith(o.url));
+  const provider = el("select", { id: "llmProvider" }, ...LLM_PROVIDERS.map(o => el("option", { value: o.id, text: o.label })));
+  const known = LLM_PROVIDERS.find(o => o.url && (llm.base_url || "").replace(/\/+$/, "") === o.url);
   provider.value = known ? known.id : "";
   const localHint = el("p", { class: "help", hidden: !known?.local,
     text: "Clipshelf runs in a container, so localhost is the container itself — use the host's address." });
@@ -1053,19 +1058,20 @@ function adminLlm(llm, err) {
     const o = LLM_PROVIDERS.find(x => x.id === provider.value) || {};
     if (o.url) base.value = o.url;
     localHint.hidden = !o.local;
-    // Another provider's models are not this provider's; go back to free text.
-    if (modelSel) { modelSel.replaceWith(model); modelSel = null; }
+    key.value = "";
+    if (modelCtl.tagName === "SELECT") textModel();
   });
+  base.addEventListener("input", () => { if (modelCtl.tagName === "SELECT") textModel(); });
   const form = el("form", {},
-    el("div", { class: "field" }, el("label", { text: "Provider" }), provider,
+    el("div", { class: "field" }, el("label", { for: "llmProvider", text: "Provider" }), provider,
       el("p", { class: "help", text: "Presets fill the base URL. Any OpenAI-compatible endpoint works; vision is required." })),
-    el("div", { class: "field" }, el("label", { text: "Base URL" }), base, localHint),
-    el("div", { class: "field" }, el("label", { text: "Model" }),
-      el("div", { class: "row2" }, model, load),
+    el("div", { class: "field" }, el("label", { for: "llmBase", text: "Base URL" }), base, localHint),
+    el("div", { class: "field" }, el("label", { for: "llmModel", text: "Model" }),
+      el("div", { class: "row2" }, modelCtl, load),
       el("p", { class: "help", text: "Load models asks the endpoint which models it has and turns this into a list to pick from." })),
-    el("div", { class: "field" }, el("label", { text: "Concurrent requests" }), conc),
-    el("div", { class: "field" }, el("label", { text: "API key" }), key,
-      el("p", { class: "help", text: "Write-only: never returned by the server" + (llm.has_api_key ? ". A key is saved" : "") + ". Omit to keep; tick to clear." })),
+    el("div", { class: "field" }, el("label", { for: "llmConc", text: "Concurrent requests" }), conc),
+    el("div", { class: "field" }, el("label", { for: "llmKey", text: "API key" }), key,
+      el("p", { class: "help", text: "Write-only: never returned by the server. Leave blank to keep a key for this endpoint; changing the URL clears it." })),
     el("div", { class: "field" },
       el("label", { for: "llmClearKey" }, clear, " Clear the saved key")),
     llm.verified_at ? el("p", { class: "hint", text: "Capability check passed " + fmtWhen(llm.verified_at) + ". Any settings change clears it." }) : el("p", { class: "hint", text: "Not verified yet — run the capability check after saving." }),
@@ -1076,9 +1082,12 @@ function adminLlm(llm, err) {
     load.disabled = true; load.textContent = "Loading…";
     try {
       const b = { base_url: base.value.trim() };
-      if (key.value) b.api_key = key.value;
+      if (clear.checked) b.api_key = "";
+      else if (key.value) b.api_key = key.value;
       const list = (await sensitive("/api/admin/llm/models", b)).models || [];
+      if (base.value.trim() !== b.base_url) return;
       if (list.length) showModels(list);
+      else if (modelCtl.tagName === "SELECT") textModel();
       banner(list.length ? "ok" : "err",
         list.length ? `${list.length} models offered — pick one in the Model box.`
                     : "The endpoint listed no models; type the name instead.", { sticky: !list.length });
@@ -1086,7 +1095,7 @@ function adminLlm(llm, err) {
     finally { load.disabled = false; load.textContent = "Load models"; }
   });
   const body = () => ({ base_url: base.value.trim(), model: modelValue(),
-    concurrency: Math.max(1, parseInt(conc.value, 10) || 1) });
+    concurrency: Math.min(8, Math.max(1, parseInt(conc.value, 10) || 1)) });
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     const b = body();
