@@ -183,7 +183,10 @@ def _set(job, **fields):
 
 
 def _warn(job, *messages):
-    return list(job.warnings or []) + [m for m in messages if m]
+    # Deduplicated and capped like services.store_findings: a failure that
+    # repeats must not grow the row, or the wall of identical lines, forever.
+    return list(dict.fromkeys([*(job.warnings or []),
+                               *(m for m in messages if m)]))[:100]
 
 
 # -------------------------------------------------------------- job pipeline
@@ -275,6 +278,13 @@ def _interpret_phase(job):
     try:
         findings = interpretation.interpret(
             _material(job), config, _categories(job.collection))
+    except interpretation.EndpointRejected as exc:
+        # The endpoint answered and refused. CONFIG_ERROR would make this
+        # claimable again on the next 5s poll for as long as configuration
+        # exists, re-uploading the whole material every cycle; burn attempts
+        # and back off instead.
+        _fail(job, exc)
+        return
     except interpretation.ConfigurationError as exc:
         _set(job, state="blocked", error=CONFIG_ERROR, warnings=_warn(job, str(exc)),
              retry_at=timezone.now() + timedelta(seconds=CONFIG_POLL_SECONDS))

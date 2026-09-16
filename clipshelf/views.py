@@ -205,7 +205,9 @@ def _job_json(job):
         "state": job.state,
         "acquisition": job.acquisition,
         "interpretation": job.interpretation,
-        "warnings": job.warnings or [],
+        # Rows written before the write-side cap can hold repeats; the reader
+        # shows each distinct warning once.
+        "warnings": list(dict.fromkeys(job.warnings or [])),
         "error": job.error,
         "attempts": job.attempts,
     }

@@ -21,8 +21,8 @@ from PIL import Image, ImageOps
 from clipshelf.lib import norm, repo_url
 from clipshelf import network
 
-__all__ = ["InterpretationError", "ConfigurationError", "interpret", "check_connection",
-           "list_models"]
+__all__ = ["InterpretationError", "ConfigurationError", "EndpointRejected",
+           "interpret", "check_connection", "list_models"]
 
 class InterpretationError(Exception):
     """Failed or malformed interpretation; message is safe to surface."""
@@ -30,6 +30,13 @@ class InterpretationError(Exception):
 
 class ConfigurationError(Exception):
     """Shared LLM connection is missing or invalid; captures stay queued."""
+
+
+class EndpointRejected(ConfigurationError):
+    """The endpoint was reached and refused: bad credentials, exhausted balance,
+    rate limit, unknown model. Repeating the identical call cannot fix it, so
+    the caller must back off and stop — unlike a local misconfiguration, which
+    costs nothing to re-check."""
 
 def _redact(text, key):
     return text.replace(key, "***") if key else text
@@ -94,8 +101,8 @@ def _config(config):
 
 # ------------------------------------------------------------- HTTP core
 def _post(base, key, payload, timeout):
-    """One bounded POST to the trusted endpoint; raises ConfigurationError on
-    rejection, urllib errors propagate as transient."""
+    """One bounded POST to the trusted endpoint; a reached-but-refusing endpoint
+    raises EndpointRejected, urllib errors propagate as transient."""
     body = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if key:
@@ -108,8 +115,8 @@ def _post(base, key, payload, timeout):
     except urllib.error.HTTPError as exc:
         detail = exc.read(4096).decode(errors="replace")
         if exc.code in (401, 403):
-            raise ConfigurationError(f"endpoint rejected credentials (HTTP {exc.code})")
-        raise ConfigurationError(f"endpoint rejected request (HTTP {exc.code}): {detail[:300]}")
+            raise EndpointRejected(f"endpoint rejected credentials (HTTP {exc.code})")
+        raise EndpointRejected(f"endpoint rejected request (HTTP {exc.code}): {detail[:300]}")
     if len(raw) > LLM_RESPONSE_MAX:
         raise InterpretationError("model response exceeds size bound")
     return json.loads(raw.decode("utf-8", errors="replace"))
@@ -127,8 +134,8 @@ def list_models(config, timeout=30):
             raw = resp.read(LLM_RESPONSE_MAX + 1)
     except urllib.error.HTTPError as exc:
         if exc.code in (401, 403):
-            raise ConfigurationError(f"endpoint rejected credentials (HTTP {exc.code})")
-        raise ConfigurationError(f"endpoint cannot list models (HTTP {exc.code})")
+            raise EndpointRejected(f"endpoint rejected credentials (HTTP {exc.code})")
+        raise EndpointRejected(f"endpoint cannot list models (HTTP {exc.code})")
     except (urllib.error.URLError, OSError) as exc:
         raise ConfigurationError(f"endpoint unreachable: {_redact(str(exc)[:200], key)}")
     try:

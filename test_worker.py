@@ -153,6 +153,51 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.assertEqual(job.state, "blocked")
         self.assertIsNone(job.retry_at)
 
+    def test_refused_endpoint_backs_off_instead_of_retrying_every_poll(self):
+        """A reached-but-refusing endpoint (bad key, spent balance, 429) must not
+        be re-attempted on every poll: with configuration present, CONFIG_ERROR
+        is claimable immediately, which re-uploaded the whole material every
+        five seconds for as long as the condition lasted."""
+        calls = []
+
+        def refused(source, config, cats):
+            from clipshelf import interpretation
+            calls.append(1)
+            raise interpretation.EndpointRejected(
+                'endpoint rejected request (HTTP 429): {"error":"Insufficient balance"}')
+
+        job = self.make_job(acquisition="complete", source={}, warnings=[])
+        self.run_worker(interpret=refused)
+        self.refresh(job)
+        self.assertEqual(job.state, "retry")
+        self.assertEqual(job.attempts, 1)
+        self.assertNotEqual(job.error, worker.CONFIG_ERROR)
+        self.assertIn("429", job.error)
+        self.assertGreater(job.retry_at, timezone.now())
+
+        # the backoff deadline is honoured: a second poll does not touch the endpoint
+        self.run_worker(interpret=refused)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(self.refresh(job).attempts, 1)
+
+        # and the failure is finite, not an endless loop
+        for _ in range(worker.MAX_ATTEMPTS):
+            job.retry_at = timezone.now() - timezone.timedelta(seconds=1)
+            job.save(update_fields=["retry_at"])
+            self.run_worker(interpret=refused)
+            self.refresh(job)
+        self.assertEqual(job.state, "blocked")
+        self.assertEqual(job.attempts, worker.MAX_ATTEMPTS)
+        self.assertEqual(len(calls), worker.MAX_ATTEMPTS)
+        self.assertEqual(worker._claim_batch(5), [])   # stays stopped
+
+    def test_repeating_warning_is_stored_once(self):
+        job = self.make_job(warnings=["endpoint rejected request (HTTP 429)"])
+        self.assertEqual(
+            worker._warn(job, "endpoint rejected request (HTTP 429)", "new one"),
+            ["endpoint rejected request (HTTP 429)", "new one"])
+        self.assertEqual(len(worker._warn(job, *(["same"] * 300))), 2)
+
     def test_claim_is_atomic(self):
         job = self.make_job()
         self.assertIsNotNone(worker._claim(job.id))
