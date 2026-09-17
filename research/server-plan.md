@@ -298,6 +298,10 @@ endpoint as "unconfigured" re-sent the whole capture, images included, on every
 poll. One malformed-output retry stays inside the interpreter, then the failure
 is preserved. Keep concurrency configurable for the real model host.
 
+Library `interpreted` status reflects successful results on the entry's remaining
+contributions, including legacy imports and extracted prompts. A failed retry
+does not erase that status; the latest processing attempt is shown separately.
+
 ## 6. Web UI, administration, and trust boundaries
 
 The web UI must expose the complete flow: collection-scoped Library and Inbox,

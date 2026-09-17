@@ -182,6 +182,10 @@ class ImportTests(MigrationMixin, TestCase):
             origin="legacy-import")
         self.assertEqual(contribution.data["install"], "pip install x")
         self.assertEqual(contribution.data["cat"], "ml")
+        entries = (services.serialize_entry(entry, self.user)
+                   for entry in models.Entry.objects.filter(collection=self.personal))
+        statuses = {item["title"]: item["interpreted"] for item in entries}
+        self.assertEqual(statuses, {"Repo A": True, "P": False, "Prompt title": True})
 
     def test_repeat_import_unchanged(self):
         self.run_import_command()

@@ -543,6 +543,37 @@ class EntryApiTests(ApiTestCase):
         ).json()
         self.assertEqual(listing["count"], 1)
 
+    def test_interpretation_status_tracks_retained_results(self):
+        shared = Collection.objects.create(name="Shared", kind="shared", owner=self.alice)
+        Membership.objects.create(collection=shared, user=self.bob)
+        entry, _ = self._contribute(self.alice, shared, asset_ct=None)
+        _, job = self._contribute(self.bob, shared, asset_ct=None)
+        alice, bob = self._login(self.alice), self._login(self.bob)
+
+        def statuses():
+            response = alice.get("/api/entries", {"collection_id": str(shared.id)})
+            self.assertEqual(response.status_code, 200)
+            entries = response.json()["entries"]
+            for item in entries:
+                detail = alice.get(f"/api/entries/{item['id']}")
+                self.assertEqual(detail.status_code, 200)
+                self.assertIs(detail.json()["entry"]["interpreted"], item["interpreted"])
+            return {item["kind"]: item["interpreted"] for item in entries}
+
+        # Acquisition/job completion alone does not mean findings were published.
+        self.assertEqual(statuses(), {"link": False})
+        services.store_findings(job, {"source": job.url, "prompts": ["Use native interfaces."]})
+        self.assertEqual(statuses(), {"link": True, "prompt": True})
+
+        # A failed reprocess retains the last successful interpretation.
+        job.state, job.interpretation = "blocked", "error"
+        job.save(update_fields=["state", "interpretation"])
+        self.assertEqual(statuses(), {"link": True, "prompt": True})
+
+        # Bob's job still exists, but his removed result no longer describes this link.
+        self.assertEqual(bob.delete(f"/api/entries/{entry.id}").status_code, 200)
+        self.assertEqual(statuses(), {"link": False, "prompt": True})
+
 
 class ImportTests(ApiTestCase):
     def _post_import(self, client, content, crid=None, collection=None,

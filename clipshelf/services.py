@@ -199,7 +199,9 @@ def receipt(capture):
 def serialize_entry(entry, user):
     """Flat API entry merged from the contributions REMAINING in this
     collection. Private data of removed contributions never appears."""
-    contributions = list(entry.contributions.select_related("user").order_by("created_at", "id"))
+    contributions = entry.contributions.select_related("user").annotate(
+        has_findings=Q(job__isnull=False) & ~Q(job__findings={}),
+    ).order_by("created_at", "id")
     title = desc = text = install = ""
     categories, tags, sources = set(), set(), []
     source_urls = set()
@@ -208,6 +210,10 @@ def serialize_entry(entry, user):
     user_contributed = False
     for contribution in contributions:
         data = contribution.data or {}
+        # Retained success survives retries; legacy imports may have no job.
+        interpreted = interpreted or bool(
+            data.get("interpreted_at") or data.get("interpreted") or contribution.has_findings
+        )
         title = title or _str(data.get("title"))
         desc = desc or _str(data.get("desc"))
         text = text or _str(data.get("text"))
