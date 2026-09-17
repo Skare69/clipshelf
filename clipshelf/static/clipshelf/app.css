@@ -273,6 +273,7 @@ dialog::backdrop{background:rgba(10,5,20,.45);backdrop-filter:blur(2px)}
   border-color:transparent}
 .foot{margin-top:auto;padding:18px 0;font-size:12.5px;color:var(--outline)}
 .foot a{color:var(--outline)}
+.ver{text-align:center;padding:10px 0 22px;font-size:12px;color:var(--outline)}
 /* ---------- mobile ---------- */
 #scrim{position:fixed;inset:0;z-index:15;background:rgba(0,0,0,.4)}
 @media (max-width:960px){

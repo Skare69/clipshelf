@@ -74,6 +74,7 @@ EXPOSE 8000
 
 ARG IMAGE_VERSION=dev
 ARG IMAGE_REVISION=dev
+ENV CLIPSHELF_VERSION=${IMAGE_VERSION}
 LABEL org.opencontainers.image.title="clipshelf" \
     org.opencontainers.image.description="Clipshelf capture/library server (Django, SQLite WAL, one worker)" \
     org.opencontainers.image.licenses="MIT" \
