@@ -1062,6 +1062,12 @@ function adminLlm(llm, err) {
     if (modelCtl.tagName === "SELECT") textModel();
   });
   base.addEventListener("input", () => { if (modelCtl.tagName === "SELECT") textModel(); });
+  const note = el("p", { class: "hint", hidden: true });
+  const showNote = (ok, text) => {
+    note.className = ok ? "hint" : "err";
+    note.textContent = text;
+    note.hidden = false;
+  };
   const form = el("form", {},
     el("div", { class: "field" }, el("label", { for: "llmProvider", text: "Provider" }), provider,
       el("p", { class: "help", text: "Presets fill the base URL. Any OpenAI-compatible endpoint works; vision is required." })),
@@ -1077,7 +1083,8 @@ function adminLlm(llm, err) {
     llm.verified_at ? el("p", { class: "hint", text: "Capability check passed " + fmtWhen(llm.verified_at) + ". Any settings change clears it." }) : el("p", { class: "hint", text: "Not verified yet — run the capability check after saving." }),
     el("div", { class: "acts" },
       el("button", { class: "btn primary", type: "submit", text: "Save settings" }),
-      el("button", { class: "btn tonal", type: "button", text: "Check connection" })));
+      el("button", { class: "btn tonal", type: "button", text: "Check connection" })),
+    note);
   load.addEventListener("click", async () => {
     load.disabled = true; load.textContent = "Loading…";
     try {
@@ -1088,10 +1095,10 @@ function adminLlm(llm, err) {
       if (base.value.trim() !== b.base_url) return;
       if (list.length) showModels(list);
       else if (modelCtl.tagName === "SELECT") textModel();
-      banner(list.length ? "ok" : "err",
-        list.length ? `${list.length} models offered — pick one in the Model box.`
-                    : "The endpoint listed no models; type the name instead.", { sticky: !list.length });
-    } catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
+      showNote(list.length, list.length
+        ? `${list.length} models offered — pick one in the Model box.`
+        : "The endpoint listed no models; type the name instead.");
+    } catch (e) { if (e.status !== 401 && !e.cancelled) showNote(false, e.message); }
     finally { load.disabled = false; load.textContent = "Load models"; }
   });
   const body = () => ({ base_url: base.value.trim(), model: modelValue(),
@@ -1106,13 +1113,16 @@ function adminLlm(llm, err) {
     catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
   });
   form.querySelector(".tonal").addEventListener("click", async () => {
+    const b = { base_url: base.value.trim(), model: modelValue() };
+    if (clear.checked) b.api_key = "";
+    else if (key.value) b.api_key = key.value;
+    note.hidden = true;
     try {
-      const j = await sensitive("/api/admin/llm/check", {});
+      const j = await sensitive("/api/admin/llm/check", b);
       const ok = j.check?.ok;
-      banner(ok ? "ok" : "err",
-        (ok ? "Capability check passed: " : "Capability check failed: ") + (j.check?.message || ""), { sticky: !ok });
-      if (ok) renderAdmin();
-    } catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
+      showNote(ok, (ok ? "Capability check passed: " : "Capability check failed: ")
+        + (j.check?.message || ""));
+    } catch (e) { if (e.status !== 401 && !e.cancelled) showNote(false, e.message); }
   });
   p.append(form,
     el("p", { class: "hint", text: "One admin-managed endpoint serves every capture, including Personal collections. The key stays server-side." }));

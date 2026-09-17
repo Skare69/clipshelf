@@ -71,6 +71,7 @@ urlpatterns = [
         admin_views.collection_transfer,
     ),
     path("admin/llm/models", admin_views.llm_models),
+    path("admin/llm/check", admin_views.llm_check),
     path("admin/llm", admin_views.llm_config),
     path("invite/<str:token>", accounts.invite_view, name="clipshelf_invite"),
     path("accounts/", include("allauth.account.urls")),
@@ -459,6 +460,29 @@ class LlmModelPickerTests(AccountTestCase):
         self.assertEqual(self.requests[-1], (other + "/models", "Bearer replacement"))
         response = self.admin_post("/admin/llm", {"api_key": ""})
         self.assertFalse(response.json()["llm"]["has_api_key"])
+
+    def test_check_probes_the_typed_values_not_stale_saved_ones(self):
+        saved = "http://saved/v1"
+        self.admin_post("/admin/llm", {"base_url": saved, "model": "old",
+                                       "api_key": "stored"}, reauth=True)
+        for body, expected in (
+            ({}, (saved + "/chat/completions", "Bearer stored")),
+            ({"base_url": "http://typed/v1", "model": "new"},
+             ("http://typed/v1/chat/completions", None)),
+            ({"api_key": "typed"}, (saved + "/chat/completions", "Bearer typed")),
+            ({"api_key": ""}, (saved + "/chat/completions", None)),
+        ):
+            response = self.admin_post("/admin/llm/check", body)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(self.requests[-1], expected)
+
+    def test_check_with_no_config_reports_inline_without_a_request(self):
+        response = self.admin_post("/admin/llm/check", {}, reauth=True)
+        self.assertEqual(response.status_code, 200)
+        check = response.json()["check"]
+        self.assertFalse(check["ok"])
+        self.assertIn("http(s)", check["message"])
+        self.assertEqual(self.requests, [])
 
     def test_no_endpoint_is_a_request_error_and_an_unreachable_one_is_a_gateway_error(self):
         self.assertEqual(self.admin_post("/admin/llm/models", {}, reauth=True).status_code, 400)

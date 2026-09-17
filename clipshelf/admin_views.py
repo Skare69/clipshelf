@@ -348,10 +348,22 @@ def llm_config(request, user):
 
 @admin_endpoint("POST")
 def llm_check(request, user):
-    _require_reauth(request, _json_body(request))
+    """Probe the values on screen; omission falls back to the saved ones."""
+    body = _json_body(request)
+    _require_reauth(request, body)
     s = get_settings()
+    cfg = s.llm_config()
+    if "base_url" in body:
+        cfg["base_url"] = str(body["base_url"] or "").strip()
+        if cfg["base_url"].rstrip("/") != (s.llm_base_url or "").rstrip("/"):
+            cfg["api_key"] = None  # a stored key belongs to the old endpoint
+    if "model" in body:
+        cfg["model"] = str(body["model"] or "").strip()
+    if "api_key" in body:
+        # Explicit empty means no credentials; omission keeps the saved key.
+        cfg["api_key"] = str(body["api_key"] or "") or None
     from clipshelf.interpretation import check_connection
-    return JsonResponse({"check": check_connection(s.llm_config())})
+    return JsonResponse({"check": check_connection(cfg)})
 
 
 @admin_endpoint("POST")

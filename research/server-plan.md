@@ -268,7 +268,13 @@ native `datalist` was tried first and rejected: its suggestions stay invisible
 until the field is focused, so pressing the button looked like it did nothing.
 The listing accepts an unsaved key so a provider can be tried before it is
 committed, and reports an endpoint that cannot list as a 502 rather than an
-empty picker.
+empty picker. `POST /api/admin/llm/check` probes the same on-screen values for
+the same reason — checking the saved row instead reported "base_url must be an
+http(s) URL" while a valid URL sat in the field. A typed URL that differs from
+the saved one never inherits the saved key, matching the save path: a stored
+key belongs to the endpoint it was entered for. Both results render inline
+under the buttons, because the page-top banner sits out of view once the admin
+has scrolled down to the form.
 
 The server, not a tool-less chat completion, gathers the material:
 
