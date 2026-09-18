@@ -98,7 +98,7 @@ button{font:inherit;cursor:pointer}
 .toc a.on .count{background:var(--surface)}
 .tsep{border-top:1px solid var(--outline-var);margin:10px 14px}
 .tsec{display:block;overflow:auto;flex:1;min-height:0;padding-right:2px}
-#main{flex:1;min-width:0;padding:8px 24px 128px 20px}
+.shell #main{flex:1;min-width:0;padding:8px 24px 128px 20px}
 #main:focus{outline:none}
 h1{font-size:24px;font-weight:600;letter-spacing:-.02em;margin:18px 0 6px}
 h2{font-size:21px;font-weight:500;letter-spacing:-.01em;margin:36px 0 12px;
@@ -252,15 +252,24 @@ dialog::backdrop{background:rgba(10,5,20,.45);backdrop-filter:blur(2px)}
 .acct{min-height:100dvh;display:flex;flex-direction:column;align-items:center;padding:0 16px}
 .acct-top{width:100%;max-width:920px;display:flex;align-items:center;padding:18px 0}
 .acct-card{width:100%;max-width:460px;background:var(--surface-low);border:1px solid var(--outline-var);
-  border-radius:20px;padding:26px 28px;margin:4vh 0 24px}
+  border-radius:20px;padding:26px 28px;margin:auto 0}
 .acct-card h1{font-size:22px;margin:0 0 14px}
-.acct-card form p{margin:0 0 13px}
+.acct-card>p{color:var(--outline);font-size:13.5px;margin:0 0 18px}
+.fld{margin:0 0 14px}
+.fld-check{display:flex;align-items:center;gap:8px;margin:0 0 14px;font-size:13.5px}
+.fld-check label{margin:0;font-weight:400}
+.fld-help{font-size:12px;color:var(--outline);margin-top:4px}
 .acct-card label{display:block;font-size:13px;font-weight:500;margin-bottom:4px}
 .acct-card input:not([type=checkbox]):not([type=radio]),.acct-card select{width:100%}
 .acct-card input[type=checkbox]{width:auto;accent-color:var(--primary)}
 .acct-card ul.errorlist{list-style:none;margin:0 0 12px;padding:8px 12px;border-radius:8px;
   background:var(--error-container);color:var(--on-error-container);font-size:13px}
-.acct-card button[type=submit],.acct-card .buttons button,.acct-card .btn{margin-top:6px}
+.acct-card button[type=submit]{display:block;width:100%;margin-top:16px;border:0;
+  border-radius:99px;padding:11px 18px;font-weight:500;font-size:14px;
+  background:var(--primary);color:var(--on-primary);cursor:pointer;transition:filter .2s}
+.acct-card button[type=submit]:hover{filter:brightness(1.08)}
+.acct-card button[type=submit]:active{transform:translateY(1px)}
+.acct-card .buttons button,.acct-card .btn{margin-top:6px}
 .acct-card .actions{margin:16px 0 0;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 .acct-card .hint{margin-top:14px}
 .acct-card a:not(.btn){color:var(--primary)}
@@ -271,7 +280,7 @@ dialog::backdrop{background:rgba(10,5,20,.45);backdrop-filter:blur(2px)}
 .msg-success{background:color-mix(in srgb,var(--ok) 14%,transparent)}
 .msg-warning,.msg-info{background:var(--warn-container);color:var(--on-warn-container);
   border-color:transparent}
-.foot{margin-top:auto;padding:18px 0;font-size:12.5px;color:var(--outline)}
+.foot{padding:18px 0;font-size:12.5px;color:var(--outline)}
 .foot a{color:var(--outline)}
 .ver{text-align:center;padding:10px 0 22px;font-size:12px;color:var(--outline)}
 /* ---------- mobile ---------- */
@@ -285,7 +294,7 @@ dialog::backdrop{background:rgba(10,5,20,.45);backdrop-filter:blur(2px)}
     background:var(--surface-low);border-right:1px solid var(--outline-var);
     transform:translateX(-103%);transition:transform .25s ease;padding:16px 10px}
   .toc.open{transform:none;box-shadow:var(--elev)}
-  #main{padding:8px 14px 120px}
+  .shell #main{padding:8px 14px 120px}
   .cards{grid-template-columns:1fr}
   .rows .row{grid-template-columns:1fr;gap:6px}
   .rows .rside{flex-direction:row;align-items:center;justify-content:flex-end}

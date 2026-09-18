@@ -1,0 +1,16 @@
+{% comment %}Render allauth forms with our layout instead of form.as_p:
+labels without Django's colon suffix, full-width inputs, inline checkboxes.
+Replaces the stock one-liner `{{ attrs.form.as_p }}` for every account page.{% endcomment %}
+{% if attrs.form %}{{ attrs.form.non_field_errors }}
+{% for field in attrs.form.hidden_fields %}{{ field }}{% endfor %}
+{% for field in attrs.form.visible_fields %}{% if field.widget_type == "checkbox" %}
+  <div class="fld-check">{{ field }}<label for="{{ field.id_for_label }}">{{ field.label }}</label></div>
+  {{ field.errors }}{% if field.help_text %}<div class="fld-help">{{ field.help_text }}</div>{% endif %}
+{% else %}
+  <div class="fld">
+    <label for="{{ field.id_for_label }}">{{ field.label }}</label>
+    {{ field }}
+    {{ field.errors }}
+    {% if field.help_text %}<div class="fld-help">{{ field.help_text }}</div>{% endif %}
+  </div>
+{% endif %}{% endfor %}{% endif %}
