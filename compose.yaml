@@ -58,6 +58,11 @@ x-app: &app
     CLIPSHELF_SMTP_USE_SSL: ${CLIPSHELF_SMTP_USE_SSL:-}
     # Defaults to clipshelf@<origin host>; set to override the envelope-from.
     CLIPSHELF_EMAIL_FROM: ${CLIPSHELF_EMAIL_FROM:-}
+    # Optional TypeSafe screening key; without it guardrails are skipped
+    # (fail-open) and interpretation behaves exactly as before. TYPESAFE_MODEL
+    # optionally pins the screening model.
+    TYPESAFE_API_KEY: ${TYPESAFE_API_KEY:-}
+    TYPESAFE_MODEL: ${TYPESAFE_MODEL:-}
   volumes:
     # REQUIRED: local dataset directory (e.g. a ZFS dataset mountpoint). Not
     # NFS/SMB: SQLite WAL needs real local filesystem semantics.

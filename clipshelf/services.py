@@ -16,7 +16,8 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
-from clipshelf import asset_files, publication
+from clipshelf import asset_files, judgment, publication
+from clipshelf.interpretation import GuardrailBlocked
 
 from clipshelf.models import (
     Asset,
@@ -383,6 +384,35 @@ def store_findings(job, findings):
     good findings (the worker marks blocked/error itself)."""
     validated = _validate_findings(job, findings)
     caller_job = job  # the locked row below is a separate instance
+
+    # Optional TypeSafe screening gate: fail-open, runs before the atomic
+    # block so a withhold never leaves partial writes.
+    if judgment.available():
+        source = job.source or {}
+        material = {"title": str(source.get("title") or "")[:500],
+                    "description": str(source.get("desc") or "")[:4000],
+                    "text": str(source.get("text") or "")[:12000]}
+        entries = list(dict.fromkeys(
+            [e["url"] for e in validated["repos"]] + [e["url"] for e in validated["links"]]))
+        entries = [u for u in entries if u.startswith(("http://", "https://"))][:judgment.ENTRIES_MAX]
+        try:
+            screen = judgment.screen_findings(
+                {"material": material, "findings": validated, "entries": entries})
+        except judgment.JudgmentError as exc:
+            screen = None
+            validated["warnings"].append(f"screening unavailable: {exc}"[:500])
+        if screen:
+            if screen["danger"] >= judgment.WITHHOLD_DANGER:
+                raise GuardrailBlocked(
+                    "findings withheld: screening flagged dangerous installs or links")
+            dropped = [u for u, p in screen["related"].items() if p < judgment.DROP_RELATED]
+            if dropped:
+                gone = set(dropped)
+                validated["repos"] = [e for e in validated["repos"] if e["url"] not in gone]
+                validated["links"] = [e for e in validated["links"] if e["url"] not in gone]
+                validated["warnings"].append(
+                    f"screening dropped {len(dropped)} unrelated entr"
+                    f"{'y' if len(dropped) == 1 else 'ies'}")
 
     with transaction.atomic():
         job = Job.objects.select_for_update().get(pk=job.pk)

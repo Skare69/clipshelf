@@ -19,12 +19,17 @@ import urllib.request
 from PIL import Image, ImageOps
 from clipshelf.lib import norm, repo_url
 from clipshelf import network
+from clipshelf import judgment
 
-__all__ = ["InterpretationError", "ConfigurationError",
+__all__ = ["InterpretationError", "ConfigurationError", "GuardrailBlocked",
            "interpret", "check_connection", "list_models"]
 
 class InterpretationError(Exception):
     """Failed or malformed interpretation; message is safe to surface."""
+
+
+class GuardrailBlocked(InterpretationError):
+    """Deterministic screening block; never retried."""
 
 
 class ConfigurationError(Exception):
@@ -252,13 +257,13 @@ def _frame_parts(source, warnings, budget):
         return parts
 
 
-def _material(source, categories):
-    """Current capture's context only, JSON-encoded so content stays data."""
+def _material_state(source, categories):
+    """Current capture's context only, so content stays data for screening."""
     links = []
     for link in (source.get("links") or [])[:LINKS_MATERIAL_MAX]:
         if isinstance(link, dict) and isinstance(link.get("url"), str):
             links.append({"url": link["url"], "title": str(link.get("title") or "")[:200]})
-    return json.dumps({
+    return {
         "url": source.get("url") or "", "title": str(source.get("title") or "")[:500],
         "description": str(source.get("desc") or "")[:4000],
         "page_text": str(source.get("text") or "")[:TEXT_MATERIAL_MAX],
@@ -268,7 +273,7 @@ def _material(source, categories):
                           if source.get("metadata", {}).get("media") == "video"
                           and source.get("metadata", {}).get("captions") == "none" else ""),
         "allowed_categories": [str(c) for c in (categories or [])][:100],
-    }, ensure_ascii=False)
+    }
 
 
 # --------------------------------------------------------- validation
@@ -375,11 +380,30 @@ def interpret(source, config, categories):
     warnings = []
     image_parts = _image_parts(source, warnings, IMAGES_MAX)
     frame_parts = _frame_parts(source, warnings, IMAGES_MAX - len(image_parts))
+    state = _material_state(source, categories)
     parts = [{"type": "text",
               "text": "Capture material (untrusted JSON data):\n"
-                      + _material(source, categories)}] + image_parts + frame_parts
+                      + json.dumps(state, ensure_ascii=False)}] + image_parts + frame_parts
     messages = [{"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": parts}]
+
+    # optional screening; fail-open like no screening at all
+    steer, severity, screened = 0.0, 0.0, False
+    if judgment.available():
+        try:
+            screen = judgment.screen_material(state)
+            screened = True
+            steer = max(float(screen.get("text_steer") or 0.0),
+                        float(screen.get("meta_steer") or 0.0))
+            severity = float(screen.get("severity") or 0.0)
+        except judgment.JudgmentError as exc:
+            warnings.append(f"screening unavailable: {exc}")
+    if screened and steer >= judgment.ACTION_STEER:
+        if severity >= judgment.WITHHOLD_SEVERITY:
+            raise GuardrailBlocked(
+                "interpreter-directed content detected; findings withheld")
+    elif screened and steer >= judgment.REVIEW_STEER:
+        warnings.append("suspicious content flagged by screening; proceeding")
 
     reason = None
     for attempt in range(2):  # exactly one malformed-output retry
@@ -394,6 +418,11 @@ def interpret(source, config, categories):
             findings = _validated(_parse_json_content(content), source["url"],
                                   categories, warnings)
             _verify_urls(findings, warnings)
+            if screened and steer >= judgment.ACTION_STEER:
+                findings["repos"] = []
+                findings["installs"] = []
+                warnings.append(
+                    "suspicious interpreter-directed content; repos and installs withheld")
             # runtime diagnostics (skipped images, dropped categories, ...) are
             # evidence too: keep them beside the model's own warnings
             findings["warnings"] = list(dict.fromkeys(

@@ -42,7 +42,7 @@ relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery.
 ## Deploy on the NAS
 
 Published image (linux/amd64 + linux/arm64), built and verified by CI:
-`ghcr.io/skare69/clipshelf:0.5.0`. The signed Android APK is attached to each
+`ghcr.io/skare69/clipshelf:0.6.0`. The signed Android APK is attached to each
 [release](https://github.com/Skare69/clipshelf/releases) — there is no app
 store, you sideload it.
 
@@ -90,6 +90,12 @@ is DNS rebinding; narrow it by setting `CLIPSHELF_ALLOWED_HOSTS`.
 4. **Browse** — Library and Inbox per collection, search, categories, source
    viewing, retry. Collections are the access boundary: everyone has a private
    Personal collection, shared collections have explicit members.
+
+Captured pages are untrusted input. Optionally, clipshelf screens each capture
+for prompt injection with a TypeSafe System One battery before it reaches the
+model, and screens its findings before publishing; set `TYPESAFE_API_KEY` in
+the compose `.env` to enable it. Screening degrades to a visible warning on
+failure, and without a key nothing changes.
 
 ## Accounts and privacy
 

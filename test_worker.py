@@ -360,6 +360,79 @@ class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
         self.assertFalse(models.Entry.objects.filter(key=url).exists())
 
 
+class GuardrailBlockedTests(WorkerMixin, TransactionTestCase):
+    """Deterministic screening blocks: job blocked, zero attempts, no retry."""
+
+    def test_interpret_guardrail_block(self):
+        def blocked(source, config, cats):
+            from clipshelf import interpretation
+            raise interpretation.GuardrailBlocked("page steers the interpreter")
+
+        job = self.make_job()
+        self.run_worker(interpret=blocked)
+        job = self.refresh(job)
+        self.assertEqual(job.state, "blocked")
+        self.assertEqual(job.interpretation, "blocked")
+        self.assertIn("page steers the interpreter", job.error)
+        self.assertEqual(job.attempts, 0)
+        self.assertEqual(worker._claim_batch(1), [])  # blocked is terminal
+
+    def test_dangerous_findings_blocked_at_the_gate(self):
+        job = self.make_job()
+        with mock.patch("clipshelf.services.judgment.available", return_value=True), \
+                mock.patch("clipshelf.services.judgment.screen_findings",
+                           return_value={"danger": 2.5, "related": {}}):
+            self.run_worker()
+        job = self.refresh(job)
+        self.assertEqual(job.state, "blocked")
+        self.assertEqual(job.interpretation, "blocked")
+        self.assertEqual(job.attempts, 0)
+        self.assertTrue(job.error)
+        self.assertEqual(worker._claim_batch(1), [])
+
+
+class MergeTaggingTests(WorkerMixin, TransactionTestCase):
+    """merge_findings tags: screened links, deterministic fallbacks."""
+
+    def merge(self, links):
+        worker.merge_findings(self.user, [{"links": links}])
+
+    def tags(self, url):
+        entry = models.Entry.objects.get(collection=self.personal, key=url)
+        return models.Contribution.objects.get(entry=entry, user=self.user).data["tags"]
+
+    def test_screened_tags_replace_heuristics(self):
+        links = [{"url": "https://example.com/tut-1", "title": "Nice Thing"},
+                 {"url": "https://example.com/x-2", "title": "Other Thing"}]
+        with mock.patch("clipshelf.judgment.available", return_value=True), \
+                mock.patch("clipshelf.judgment.tag_links",
+                           return_value=[{"keep": 0.9, "tag": "guide"},
+                                         {"keep": 0.2, "tag": "docs"}]) as tag_links:
+            self.merge(links)
+        self.assertEqual(self.tags("https://example.com/tut-1"), ["guide"])
+        self.assertEqual(self.tags("https://example.com/x-2"), ["page"])
+        self.assertEqual(tag_links.call_args.args[0], [
+            {"url": "https://example.com/tut-1", "title": "Nice Thing"},
+            {"url": "https://example.com/x-2", "title": "Other Thing"}])
+
+    def test_unavailable_falls_back_to_lib_tags(self):
+        with mock.patch("clipshelf.judgment.available", return_value=False):
+            self.merge([{"url": "https://example.com/pp-1",
+                         "title": "The prompt collection"}])
+        self.assertEqual(self.tags("https://example.com/pp-1"), ["prompt"])
+
+    def test_structural_github_tag_never_hits_the_api(self):
+        with mock.patch("clipshelf.judgment.available", return_value=True), \
+                mock.patch("clipshelf.judgment.tag_links",
+                           return_value=[{"keep": 0.9, "tag": "guide"}]) as tag_links:
+            self.merge([{"url": "https://github.com/owner/repo", "title": "Repo"},
+                        {"url": "https://example.com/tut-1", "title": "Nice Thing"}])
+        tag_links.assert_called_once()
+        self.assertEqual(tag_links.call_args.args[0],
+                         [{"url": "https://example.com/tut-1", "title": "Nice Thing"}])
+        self.assertEqual(self.tags("https://github.com/owner/repo"), ["github"])
+
+
 def _json(obj):
     import json
     return json.dumps(obj)

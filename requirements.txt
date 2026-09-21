@@ -9,3 +9,6 @@ Pillow>=12.3.0,<13
 gallery-dl>=1.32.12,<2
 yt-dlp[curl-cffi]>=2026.8.19
 argon2-cffi>=25.1.0,<26
+# typesafe-sdk = optional TypeSafe screening dependency (verified installable 2026-09-21);
+# missing install just disables screening.
+typesafe-sdk>=0.7.0,<1

@@ -34,6 +34,7 @@ from clipshelf import (
     acquisition,
     asset_files,
     interpretation,
+    judgment,
     lib,
     models,
     publication,
@@ -248,11 +249,20 @@ def _interpret_phase(job):
     try:
         findings = interpretation.interpret(
             _material(job), cfg.llm_config(), _categories(job.collection))
+    except interpretation.GuardrailBlocked as exc:
+        # deterministic block: no attempts, no retry
+        _set(job, interpretation="blocked", state="blocked", error=str(exc)[:2000])
+        return
     except (interpretation.ConfigurationError, interpretation.InterpretationError) as exc:
         _fail(job, exc)
         return
     # store_findings owns the transaction and final job state, including access loss.
-    services.store_findings(job, findings)
+    try:
+        services.store_findings(job, findings)
+    except interpretation.GuardrailBlocked as exc:
+        # screening flagged dangerous findings: deterministic block, no retry
+        _set(job, interpretation="blocked", state="blocked", error=str(exc)[:2000])
+        return
 
 
 def _categories(collection):
@@ -758,8 +768,32 @@ def merge_findings(user, findings, origin="extracted"):
     personal = services.personal_collection(user)
     stats = {"links": 0, "prompts": 0, "updated": 0}
     now = timezone.now()
+    # One screening pass for every non-structural link, outside the transaction.
+    # Structural tags (github, terminal hosts via lib.tag_for) stay deterministic
+    # and never hit the API; keyword/untagged links go to judgment.tag_links.
+    meta = {}
+    candidates = []
+    for fi, finding in enumerate(findings):
+        for li, link in enumerate(finding.get("links") or []):
+            url = lib.norm(str(link.get("url", "")))
+            title = " ".join(str(link.get("title", "")).split())
+            base = lib.tag_for(url, title)
+            meta[(fi, li)] = (url, title, base or "page")
+            if url and (base is None or base in lib.KEYWORDS):
+                candidates.append((fi, li, url, title))
+    tag_map = {}
+    if candidates and judgment.available():
+        try:
+            results = judgment.tag_links(
+                [{"url": u, "title": t} for _, _, u, t in candidates])
+        except judgment.JudgmentError:
+            results = None  # fail-open: keep today's lib.tag_for behavior
+        if results:
+            tag_map = {(fi, li): (r["tag"] if r["keep"] >= judgment.REVIEW_STEER
+                                  else "page")
+                       for (fi, li, _, _), r in zip(candidates, results)}
     with transaction.atomic():
-        for finding in findings:
+        for fi, finding in enumerate(findings):
             source = lib.norm(str(finding.get("source", "")))
             cats = finding.get("categories") or {}
             installs = finding.get("installs") or {}
@@ -775,13 +809,12 @@ def merge_findings(user, findings, origin="extracted"):
                                         tags=["github"], cat=cats.get(repo),
                                         install=installs.get(repo), now=now):
                     stats["links"] += 1
-            for link in finding.get("links") or []:
-                url = lib.norm(str(link.get("url", "")))
+            for li, link in enumerate(finding.get("links") or []):
+                url, title, tag = meta[(fi, li)]
                 entry = _merge_entry(personal, user, url)
-                title = " ".join(str(link.get("title", "")).split())
                 if entry and _merge_own(entry, user, origin, title=title,
                                         sources=[source] if source else [],
-                                        tags=[t for t in [lib.tag_for(url, title) or "page"] if t],
+                                        tags=[tag_map.get((fi, li)) or tag],
                                         now=now):
                     stats["links"] += 1
             for prompt in finding.get("prompts") or []:

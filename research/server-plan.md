@@ -268,6 +268,16 @@ running jobs that the server then refused with 409. Capture text and URL policy
 has one authority in intake; the HTTP layer keeps identity checks and maps an
 oversized capture to 413.
 
+**Rev. 8 (2026-09-21):** captured page text is untrusted input to the
+interpreter. Optional TypeSafe System One screening (env `TYPESAFE_API_KEY`,
+optional `TYPESAFE_MODEL` pin) runs one typed battery per interpretation job
+before the interpreter POST — text and metadata steer Nouls plus a severity
+Score — and one before publishing findings — a danger Score plus per-entry
+relatedness Nouls that drop entries below 0.05 with an honest warning. Policy
+thresholds live in `clipshelf/judgment.py` (0.70 action / 0.35 review / 1.5
+withhold). Screening is fail-open: an unset key or a screening failure proceeds
+with a visible warning, and behavior without a key is exactly today's.
+
 ### Shared HTTP model
 
 Use one configured OpenAI-compatible HTTP connection, not an adapter registry.

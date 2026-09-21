@@ -7,6 +7,8 @@ import io
 import socket
 import tempfile
 import os
+import unittest
+from unittest import mock
 
 import clipshelf.acquisition as acq
 import clipshelf.interpretation as interp
@@ -357,7 +359,7 @@ def test_interpretation_bounds():
     def leak_post(base, key, payload, timeout):
         raise Exception(f"connect failed for key {key} at host")
 
-    interp._post = leak_post
+        interp._post = leak_post
     try:
         report = interp.check_connection({"base_url": "http://h/x", "model": "m",
                                           "api_key": "sekret"})
@@ -365,6 +367,86 @@ def test_interpretation_bounds():
     finally:
         interp._post = real_post
     print("interpretation bounds ok")
+
+
+def test_screening_policy():
+    """Optional fail-open screening: block severe steering, withhold the rest.
+
+    Returns a FunctionTestCase so `clipshelf.py test test_sources.test_screening_policy`
+    and the module self-runner both execute exactly one pass."""
+    def check():
+        categories = ["github", "prompts"]
+        source = {"url": "https://example.com/page", "title": "T", "desc": "D",
+                  "text": "body", "links": [], "assets": [], "metadata": {}}
+        cfg = {"base_url": "http://127.0.0.1:11434/v1", "model": "m", "api_key": None}
+        good_raw = '{"summary": "s", "repos": ["owner/repo"], "prompts": [], ' \
+                   '"links": [], "categories": ["github"], "installs": ["pip install foo"], ' \
+                   '"warnings": []}'
+
+        def ok_post(base, key, payload, timeout):
+            return {"choices": [{"message": {"content": good_raw}}]}
+
+        calls = []
+
+        def spy_post(base, key, payload, timeout):
+            calls.append(payload)
+            return {"choices": [{"message": {"content": good_raw}}]}
+
+        def screen(steer, sev=0.0):
+            return lambda state: {"text_steer": steer, "meta_steer": 0.0,
+                                  "severity": sev}
+
+        # screening unavailable: plain findings, screen_material never consulted
+        with mock.patch.object(interp.judgment, "available", return_value=False), \
+             mock.patch.object(interp.judgment, "screen_material",
+                               side_effect=AssertionError("must not screen")), \
+             mock.patch.object(interp, "_post", ok_post):
+            findings = interp.interpret(source, cfg, categories)
+        assert findings["repos"] == ["https://github.com/owner/repo"]
+        assert findings["installs"] == ["pip install foo"]
+        assert not any("screening" in w for w in findings["warnings"])
+
+        # high steer + severe: deterministic block before any endpoint call
+        with mock.patch.object(interp.judgment, "available", return_value=True), \
+             mock.patch.object(interp.judgment, "screen_material",
+                               screen(0.98, sev=2.0)), \
+             mock.patch.object(interp, "_post", spy_post):
+            try:
+                interp.interpret(source, cfg, categories)
+                raise AssertionError("severe interpreter-directed content accepted")
+            except interp.GuardrailBlocked as exc:
+                assert isinstance(exc, interp.InterpretationError)
+        assert calls == []
+
+        # high steer, low severity: endpoint still called, results withheld
+        with mock.patch.object(interp.judgment, "available", return_value=True), \
+             mock.patch.object(interp.judgment, "screen_material",
+                               screen(0.90, sev=1.0)), \
+             mock.patch.object(interp, "_post", ok_post):
+            findings = interp.interpret(source, cfg, categories)
+        assert findings["repos"] == [] and findings["installs"] == []
+        assert any("repos and installs withheld" in w for w in findings["warnings"])
+
+        # mid steer: flagged, but findings pass through intact
+        with mock.patch.object(interp.judgment, "available", return_value=True), \
+             mock.patch.object(interp.judgment, "screen_material", screen(0.50)), \
+             mock.patch.object(interp, "_post", ok_post):
+            findings = interp.interpret(source, cfg, categories)
+        assert findings["repos"] == ["https://github.com/owner/repo"]
+        assert any("suspicious content flagged" in w for w in findings["warnings"])
+
+        # screening failure: fail-open with a visible warning
+        def boom(state):
+            raise interp.judgment.JudgmentError("no api key")
+
+        with mock.patch.object(interp.judgment, "available", return_value=True), \
+             mock.patch.object(interp.judgment, "screen_material", boom), \
+             mock.patch.object(interp, "_post", ok_post):
+            findings = interp.interpret(source, cfg, categories)
+        assert findings["repos"] == ["https://github.com/owner/repo"]
+        assert any("screening unavailable" in w for w in findings["warnings"])
+        print("screening policy ok")
+    return unittest.FunctionTestCase(check)
 
 
 def test_list_models():
@@ -449,6 +531,7 @@ def test():
     print("redirect/bounds ok")
     test_import_media_bounds()
     test_interpretation_bounds()
+    test_screening_policy().debug()
     test_list_models()
     print("ok")
 
