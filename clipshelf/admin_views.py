@@ -303,6 +303,19 @@ def _llm_dict(s) -> dict:
     }
 
 
+def _resolve_kwargs(body) -> dict:
+    """Present-only request fields for ServerSettings.resolve. Omission must
+    stay distinct from an explicit empty value, which clears the key."""
+    kwargs = {}
+    if "base_url" in body:
+        kwargs["base_url"] = str(body["base_url"] or "").strip()
+    if "model" in body:
+        kwargs["model"] = str(body["model"] or "").strip()
+    if "api_key" in body:
+        kwargs["api_key"] = str(body["api_key"] or "")
+    return kwargs
+
+
 @admin_endpoint("GET", "POST")
 def llm_config(request, user):
     s = get_settings()
@@ -310,21 +323,10 @@ def llm_config(request, user):
         return JsonResponse({"llm": _llm_dict(s)})
     body = _json_body(request)
     _require_reauth(request, body)
-    updates = {}
-    capability_change = False
     if "base_url" in body:
         base_url = str(body["base_url"] or "").strip()
         if base_url and not base_url.startswith(("http://", "https://")):
             raise ApiError(400, detail="base_url must be an http(s) URL.")
-        updates["llm_base_url"] = base_url
-        capability_change = True
-    if "model" in body:
-        updates["llm_model"] = str(body["model"] or "").strip()
-        capability_change = True
-    if "api_key" in body:
-        # Explicit empty clears the key; omission keeps it only for this endpoint.
-        updates["llm_api_key"] = str(body["api_key"] or "")
-        capability_change = True
     if "concurrency" in body:
         try:
             concurrency = int(body["concurrency"])
@@ -332,53 +334,35 @@ def llm_config(request, user):
             raise ApiError(400, detail="concurrency must be an integer.")
         if not 1 <= concurrency <= 8:
             raise ApiError(400, detail="concurrency must be between 1 and 8.")
-        updates["llm_concurrency"] = concurrency
-    if (updates.get("llm_base_url", s.llm_base_url).rstrip("/") != s.llm_base_url.rstrip("/")
-            and "llm_api_key" not in updates):
-        # A stored key belongs to the old endpoint; never carry it over.
-        updates["llm_api_key"] = ""
-        capability_change = True
-    if capability_change:
-        updates["llm_verified_at"] = None
-    for field, value in updates.items():
-        setattr(s, field, value)
-    s.save()
+        s.llm_concurrency = concurrency
+    base_url, model, api_key = s.resolve(**_resolve_kwargs(body))
+    s.llm_base_url, s.llm_model, s.llm_api_key = base_url, model, api_key or ""
+    s.save()  # verification reset and endpoint key rules live on the model
     return JsonResponse({"llm": _llm_dict(s)})
 
 
 @admin_endpoint("POST")
 def llm_check(request, user):
-    """Probe the values on screen; omission falls back to the saved ones."""
+    """Probe the values on screen; omission falls back to the saved ones.
+    Pure preview: typed values are never persisted."""
     body = _json_body(request)
     _require_reauth(request, body)
-    s = get_settings()
-    cfg = s.llm_config()
-    if "base_url" in body:
-        cfg["base_url"] = str(body["base_url"] or "").strip()
-        if cfg["base_url"].rstrip("/") != (s.llm_base_url or "").rstrip("/"):
-            cfg["api_key"] = None  # a stored key belongs to the old endpoint
-    if "model" in body:
-        cfg["model"] = str(body["model"] or "").strip()
-    if "api_key" in body:
-        # Explicit empty means no credentials; omission keeps the saved key.
-        cfg["api_key"] = str(body["api_key"] or "") or None
+    base_url, model, api_key = get_settings().resolve(**_resolve_kwargs(body))
     from clipshelf.interpretation import check_connection
-    return JsonResponse({"check": check_connection(cfg)})
+    return JsonResponse(
+        {"check": check_connection({"base_url": base_url, "model": model, "api_key": api_key})}
+    )
 
 
 @admin_endpoint("POST")
 def llm_models(request, user):
     """List what the endpoint offers, using the typed base URL/key so the admin
-    can pick a model before committing the settings."""
+    can pick a model before committing the settings. Pure preview."""
     body = _json_body(request)
     _require_reauth(request, body)
-    s = get_settings()
-    base_url = str(body.get("base_url") or s.llm_base_url or "").strip()
+    base_url, _model, api_key = get_settings().resolve(**_resolve_kwargs(body))
     if not base_url:
         raise ApiError(400, detail="Enter a base URL first.")
-    # Omission may reuse the saved key; explicit empty must send no credentials.
-    saved_key = s.llm_api_key if base_url.rstrip("/") == s.llm_base_url.rstrip("/") else None
-    api_key = body.get("api_key", saved_key)
     from clipshelf.interpretation import ConfigurationError, list_models
 
     try:

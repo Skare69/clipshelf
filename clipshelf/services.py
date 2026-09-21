@@ -10,15 +10,13 @@ contributions, and keep the last good findings when reprocessing fails.
 import hashlib
 import re
 import uuid
-from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 
-from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
-from clipshelf.lib import norm as lib_norm
+from clipshelf import asset_files, publication
 
 from clipshelf.models import (
     Asset,
@@ -116,7 +114,8 @@ def accept_capture(user, client_request_id, text, collection_id, instance_id=Non
         raise ValidationError({"text": "Text is required."}, code="invalid")
     encoded = text.encode("utf-8")
     if len(encoded) > MAX_TEXT_BYTES:
-        raise ValidationError({"text": f"Text exceeds {MAX_TEXT_BYTES} UTF-8 bytes."}, code="invalid")
+        raise ValidationError(
+            f"Text exceeds {MAX_TEXT_BYTES} UTF-8 bytes.", code="oversized")
 
     current = get_settings()
     if instance_id is not None and str(instance_id).strip().lower() != str(current.instance_id):
@@ -143,9 +142,8 @@ def accept_capture(user, client_request_id, text, collection_id, instance_id=Non
 
     collection, notice = destination_for(user, collection_id)
     requested = _requested_uuid(collection_id)
-    # ponytail: minimal local canonicalization (scheme/host/port/fragment);
-    # switch to clipshelf.lib.norm if deeper legacy-compatible rules are needed.
-    canonical_urls = list(dict.fromkeys(canonical_url(u) for u in urls))
+    # One identity owner: the same key publication writes findings under.
+    canonical_urls = list(dict.fromkeys(publication.link_key(u) for u in urls))
     try:
         with transaction.atomic():
             capture = Capture.objects.create(
@@ -295,7 +293,7 @@ def store_source(job, source):
         raise ValidationError({"acquisition": "Invalid acquisition status."}, code="invalid")
     warnings = _string_list(source.get("warnings"), 100, 500)
     links = _link_list(source.get("links"), 200)
-    prepared_assets = _prepare_assets(source.get("assets") or [])
+    prepared_assets = asset_files.prepare(source.get("assets") or [])
     caller_job = job  # the locked row below is a separate instance
 
     with transaction.atomic():
@@ -309,16 +307,18 @@ def store_source(job, source):
                 raise PermissionDenied("Collection access was lost for a committed contribution.")
             job.collection = personal_collection(user)
             warnings.append("Selected collection is unavailable; results saved to your Personal collection.")
-        canonical = canonical_url(url)
-        tombstoned = _tombstoned(job.collection_id, user.id, canonical)
+        canonical = publication.link_key(url)
+        # A removal of either identity holds: a redirect must not re-add it.
+        tombstoned = publication.tombstoned(
+            job.collection_id, user.id, canonical, publication.link_key(job.url))
         metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
 
-        job.final_url = _str(source.get("original_url")) or url
+        job.final_url = url  # the resolved URL this acquisition actually read
         job.acquisition = status
         job.error = ""
         job.source = {
             "url": url,
-            "original_url": job.final_url,
+            "original_url": _str(source.get("original_url")) or job.url,
             "title": _str(source.get("title"))[:500],
             "desc": _str(source.get("desc"))[:2000],
             "text": _str(source.get("text"))[:50000],
@@ -357,10 +357,13 @@ def store_source(job, source):
         if tombstoned:
             warnings.append("URL was removed from this collection; not re-adding it.")
         else:
-            _contribute_link(
-                job,
-                canonical,
-                {
+            publication.contribute_link(
+                collection=job.collection,
+                user=user,
+                capture=job.capture,
+                job=job,
+                key=canonical,
+                data={
                     "title": _str(source.get("title"))[:500],
                     "desc": _str(source.get("desc"))[:2000],
                     "text": _str(source.get("text"))[:50000],
@@ -395,32 +398,34 @@ def store_findings(job, findings):
             job.save()
             caller_job.refresh_from_db()
             return False
-        canonical = canonical_url(job.url)
+        # Same identity store_source published under: a redirected job keeps
+        # its source and its findings on one entry.
+        canonical = publication.link_key((job.source or {}).get("url") or job.url)
         warnings = list(job.warnings or [])
-        if _tombstoned(job.collection_id, user.id, canonical):
+        if publication.tombstoned(job.collection_id, user.id, canonical):
             warnings.append("URL was removed from this collection; findings were not attached.")
         else:
-            _contribute_link(
-                job,
-                canonical,
-                {
+            publication.contribute_link(
+                collection=job.collection,
+                user=user,
+                capture=job.capture,
+                job=job,
+                key=canonical,
+                data={
                     "findings": validated,
                     "interpreted_at": timezone.now().isoformat(),
                     "categories": validated["categories"],
                 },
             )
             for prompt in validated["prompts"]:
-                digest = hashlib.sha256(" ".join(prompt.split()).encode("utf-8")).hexdigest()
-                if _tombstoned(job.collection_id, user.id, digest):
-                    continue
-                entry, _ = Entry.objects.get_or_create(
-                    collection=job.collection, kind=Entry.Kind.PROMPT, key=digest
-                )
-                Contribution.objects.update_or_create(
-                    entry=entry,
+                publication.publish_prompt(
+                    collection=job.collection,
                     user=user,
+                    text=prompt,
+                    data={"text": prompt, "source_url": job.url},
                     origin="capture",
-                    defaults={"capture": job.capture, "job": job, "data": {"text": prompt, "source_url": job.url}},
+                    capture=job.capture,
+                    job=job,
                 )
         job.findings = validated
         job.interpretation = Job.InterpretationStatus.COMPLETE
@@ -430,37 +435,6 @@ def store_findings(job, findings):
         job.save()
     caller_job.refresh_from_db()
     return True
-
-
-# ---------------------------------------------------------------------------
-# URL helpers
-# ---------------------------------------------------------------------------
-
-def canonical_url(url):
-    """Canonical entry key: the same rules the capture parser applies.
-
-    lib.norm drops fragments, tracking params and the trailing slash, so a
-    findings link and the captured URL collapse onto one entry. The fallback
-    below only runs for strings lib.norm rejects.
-    """
-    canonical = lib_norm(url)
-    if canonical:
-        return canonical
-    try:
-        parts = urlsplit(url.strip())
-        scheme = parts.scheme.lower()
-        host = (parts.hostname or "").lower()
-        if not host:
-            return url.strip()
-        netloc = host
-        if ":" in host and not host.startswith("["):
-            netloc = f"[{host}]"  # bare IPv6 literal
-        default_port = {"http": 80, "https": 443}.get(scheme)
-        if parts.port and parts.port != default_port:
-            netloc = f"{netloc}:{parts.port}"
-        return urlunsplit((scheme, netloc, parts.path or "/", parts.query, ""))
-    except ValueError:
-        return url.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -545,7 +519,7 @@ def _validate_findings(job, findings):
     if not isinstance(findings, dict):
         raise ValidationError({"findings": "Findings must be an object."}, code="invalid")
     source_url = _str(findings.get("source"))
-    if source_url not in {job.url, job.final_url, canonical_url(job.url)}:
+    if source_url not in {job.url, job.final_url, publication.link_key(job.url)}:
         raise ValidationError({"source": "Findings do not match this job's source."}, code="invalid")
     return {
         "source": source_url,
@@ -557,86 +531,3 @@ def _validate_findings(job, findings):
         "installs": _string_list(findings.get("installs"), 50, 2000),
         "warnings": _string_list(findings.get("warnings"), 100, 500),
     }
-
-
-def _prepare_assets(assets):
-    """Validate worker-published files BEFORE the short write transaction:
-    resolve each path strictly under DATA_DIR (absolute or relative, no
-    traversal), require the file to exist, and hash/measure it there."""
-    if not isinstance(assets, list):
-        raise ValidationError({"assets": "Expected a list."}, code="invalid")
-    data_dir = Path(settings.DATA_DIR).resolve()
-    prepared = []
-    for index, asset in enumerate(assets[:500]):
-        if not isinstance(asset, dict):
-            raise ValidationError({"assets": "Expected asset objects."}, code="invalid")
-        raw = _str(asset.get("path"))
-        if not raw:
-            raise ValidationError({"assets": "Asset path is required."}, code="invalid")
-        candidate = Path(raw)
-        if candidate.is_absolute():
-            resolved = candidate.resolve()
-        else:
-            resolved = (data_dir / candidate).resolve()
-        try:
-            relative = resolved.relative_to(data_dir)
-        except ValueError:
-            raise ValidationError({"assets": "Asset path escapes the data directory."}, code="invalid")
-        if not resolved.is_file():
-            raise ValidationError(
-                {"assets": "Asset file must be published before storing."}, code="invalid"
-            )
-        kind = asset.get("kind")
-        if kind not in Asset.Kind.values:
-            raise ValidationError({"assets": "Invalid asset kind."}, code="invalid")
-        try:
-            position = max(0, int(asset.get("position") or index))
-        except (TypeError, ValueError):
-            raise ValidationError({"assets": "Invalid asset position."}, code="invalid")
-        prepared.append(
-            {
-                "path": relative.as_posix(),
-                "kind": kind,
-                "content_type": _str(asset.get("content_type"))[:255],
-                "position": position,
-                "size": resolved.stat().st_size,
-                "sha256": _file_sha256(resolved),
-            }
-        )
-    return prepared
-
-
-def _file_sha256(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _contribute_link(job, canonical, data):
-    """Create or merge the caller's capture contribution. Merge (not replace)
-    so a good earlier `findings` blob survives a later failed reprocess."""
-    entry, _ = Entry.objects.get_or_create(
-        collection=job.collection, kind=Entry.Kind.LINK, key=canonical
-    )
-    existing = Contribution.objects.filter(
-        entry=entry, user=job.capture.user, origin="capture"
-    ).first()
-    if existing is None:
-        Contribution.objects.create(
-            entry=entry, user=job.capture.user, capture=job.capture, job=job, data=data
-        )
-        return
-    merged = dict(existing.data or {})
-    merged.update(data)
-    existing.data = merged
-    existing.capture = job.capture
-    existing.job = job
-    existing.save()
-
-
-def _tombstoned(collection_id, user_id, key):
-    return History.objects.filter(
-        collection_id=collection_id, user_id=user_id, kind=History.Kind.REMOVED, url=key
-    ).exists()

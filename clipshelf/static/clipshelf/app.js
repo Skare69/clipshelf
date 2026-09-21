@@ -142,11 +142,11 @@ const S = {
 };
 const catsFresh = () => { S.cats = new Map(); S.tags = new Set(); };
 const note = e => Array.isArray(e.cat) ? (e.cat[0] || "") : (e.cat || "");
-const JOB_ACTIVE = new Set(["queued", "running", "retry"]);
-const jobBad = j => j.state === "blocked" ||
-  ["blocked", "error"].includes(j.acquisition) || ["blocked", "error"].includes(j.interpretation);
-const captureActive = c => (c.jobs || []).some(j => JOB_ACTIVE.has(j.state));
-const captureBad = c => (c.jobs || []).some(jobBad);
+/* Activity/error/retry decisions are server-projected booleans
+   (Job.active/needs_attention/can_retry in every job payload); only the
+   badge colors and labels below are presentation. */
+const captureActive = c => (c.jobs || []).some(j => j.active);
+const captureBad = c => (c.jobs || []).some(j => j.needs_attention);
 
 /* ---------- chrome: banner, dialogs, nav ---------- */
 const out = $("#out"), bannerEl = $("#banner");
@@ -574,7 +574,7 @@ async function refreshInboxCount() {
   } catch {}
 }
 const jobChips = j => [
-  el("span", { class: "badge " + (j.state === "done" ? "ok" : JOB_ACTIVE.has(j.state) ? "run" : jobBad(j) ? "err" : ""), text: "job: " + j.state }),
+  el("span", { class: "badge " + (j.state === "done" ? "ok" : j.active ? "run" : j.needs_attention ? "err" : ""), text: "job: " + j.state }),
   j.acquisition ? el("span", { class: "badge " + ({ complete: "ok", pending: "", partial: "warn", blocked: "err", error: "err" }[j.acquisition] ?? ""), text: "acquisition: " + j.acquisition }) : null,
   j.interpretation ? el("span", { class: "badge " + ({ complete: "ok", pending: "", blocked: "err", error: "err" }[j.interpretation] ?? ""), text: "interpretation: " + j.interpretation }) : null,
   (j.attempts > 1) ? el("span", { class: "badge", text: `${j.attempts} attempts` }) : null
@@ -587,8 +587,9 @@ function jobRow(j, onDone) {
     (j.warnings || []).length ? el("div", { class: "jwarn",
       text: j.warnings.map(w => "⚠ " + w).join("\n"), style: "white-space:pre-wrap" }) : null,
     j.error ? el("div", { class: "jerr", text: j.error }) : null);
-  if (JOB_ACTIVE.has(j.state) || j.state === "blocked" ||
-      ["error", "blocked"].includes(j.acquisition) || ["error", "blocked"].includes(j.interpretation)) {
+  // can_retry is the action the server will accept right now; completed jobs
+  // stay reprocessable, so the offer appears there too.
+  if (j.can_retry) {
     const b = el("button", { class: "btn small", type: "button" }, icon(ICONS.retry), "retry");
     b.addEventListener("click", async () => {
       b.disabled = true;

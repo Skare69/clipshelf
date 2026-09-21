@@ -300,6 +300,66 @@ class IngestCommandTests(WorkerMixin, TestCase):
         self.assertEqual(models.Capture.objects.filter(user=self.user).count(), 1)
 
 
+class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
+    """One publication owner: every route agrees on identity, removals hold."""
+
+    def test_redirect_keeps_source_and_findings_on_one_entry(self):
+        job = self.make_job(url="https://example.com/short")
+        resolved = "https://example.com/full-article"
+
+        def redirecting(url, directory, status="complete"):
+            source = fake_acquire(resolved, directory, status)
+            source["original_url"] = url  # the captured identity, preserved
+            return source
+
+        self.run_worker(acquire=redirecting)
+        self.refresh(job)
+        self.assertEqual(job.final_url, resolved)
+        self.assertEqual(job.source["original_url"], "https://example.com/short")
+        entries = list(models.Entry.objects.filter(collection=self.personal, kind="link"))
+        self.assertEqual([e.key for e in entries], [resolved])
+        data = models.Contribution.objects.get(entry=entries[0]).data
+        self.assertEqual(data["title"], "t")
+        self.assertEqual(data["findings"]["summary"], "good findings")
+
+    def test_prompt_identity_reuses_legacy_entries_and_mints_sha256(self):
+        from clipshelf import publication
+        shipped = "Write a tidy release note."
+        legacy = models.Entry.objects.create(
+            collection=self.personal, kind="prompt", key=publication.prompt_key(shipped))
+        fresh = "Summarize the changelog for operators."
+        self.make_job()
+        self.run_worker(interpret=lambda source, config, cats: {
+            **FINDINGS, "source": source.get("url"), "prompts": [shipped, fresh]})
+        keys = set(models.Entry.objects.filter(
+            collection=self.personal, kind="prompt").values_list("key", flat=True))
+        self.assertEqual(keys, {legacy.key, publication.prompt_digest(fresh)})
+        self.assertEqual(
+            models.Contribution.objects.get(entry=legacy).data["text"], shipped)
+
+    def test_removed_prompt_never_returns_through_a_merge(self):
+        from clipshelf import publication
+        text = "A prompt the owner deleted."
+        models.History.objects.create(
+            collection=self.personal, user=self.user,
+            kind=models.History.Kind.REMOVED, url=publication.prompt_key(text))
+        worker.merge_findings(
+            self.user, [{"source": "https://example.com/a", "prompts": [{"text": text}]}])
+        self.assertFalse(models.Entry.objects.filter(kind="prompt").exists())
+
+    def test_removed_link_never_returns_through_an_import(self):
+        url = "https://example.com/gone"
+        models.History.objects.create(
+            collection=self.personal, user=self.user,
+            kind=models.History.Kind.REMOVED, url=url)
+        with override_settings(DATA_DIR=str(self.tmp)):
+            result = worker.import_items(
+                user=self.user, collection_id=self.personal.id,
+                items=[{"url": url, "title": "legacy"}])
+        self.assertTrue(result["created"])
+        self.assertFalse(models.Entry.objects.filter(key=url).exists())
+
+
 def _json(obj):
     import json
     return json.dumps(obj)

@@ -29,7 +29,7 @@ from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.static import serve as _static_serve
 
-from clipshelf import accounts, services
+from clipshelf import accounts, asset_files, services
 from clipshelf.models import (
     Asset,
     Capture,
@@ -42,8 +42,6 @@ from clipshelf.models import (
     User,
 )
 
-MAX_TEXT_BYTES = 32768
-MAX_URLS = 50
 MAX_BODY_BYTES = 64 * 1024
 DEFAULT_PAGE = 50
 MAX_PAGE = 500
@@ -211,6 +209,12 @@ def _job_json(job):
         "warnings": list(dict.fromkeys(job.warnings or [])),
         "error": job.error,
         "attempts": job.attempts,
+        # Authoritative policy booleans (models.Job): the browser renders
+        # activity/error/retry decisions from these instead of re-deriving
+        # state rules; colors and labels stay presentation.
+        "active": job.active,
+        "needs_attention": job.needs_attention,
+        "can_retry": job.can_retry,
     }
 
 
@@ -513,10 +517,13 @@ def api_asset(request, asset_id):
     ).exists():
         raise Http404("no such asset")
     root = _data_root()
-    full = os.path.realpath(os.path.join(root, str(asset.path).replace("\\", "/")))
-    if full != root and not full.startswith(root + os.sep):
+    try:
+        full = asset_files.resolve_path(asset.path, root)
+    except ValidationError:
+        # Invalid, escaped or non-relative-safe stored path: indistinguishable
+        # from missing, never a 500 or a leak.
         raise Http404("no such asset")
-    if not os.path.isfile(full):
+    if not full.is_file():
         raise Http404("no such asset")
     content_type = (asset.content_type or "application/octet-stream").split(";")[0].strip().lower()
     if content_type in _INERT_TYPES:
@@ -543,17 +550,6 @@ def _check_identity(body, user):
         raise ApiError(409, "conflict", "client identity does not match account")
 
 
-def _validate_capture_text(text):
-    if not isinstance(text, str) or not text.strip():
-        raise ApiError(400, "invalid", "text required")
-    if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
-        raise ApiError(413, "oversized", "shared text exceeds 32768 UTF-8 bytes")
-    urls = re.findall(r"https?://\S+", text)
-    if not 1 <= len(urls) <= MAX_URLS:
-        raise ApiError(400, "invalid", "text must contain 1-50 http(s) URLs")
-    return urls
-
-
 @api
 @require_http_methods(["GET", "POST"])
 def api_captures(request):
@@ -567,19 +563,23 @@ def api_captures(request):
         return _json({"captures": [_capture_json(c) for c in captures]})
 
     body = _json_body(request)
-    _validate_capture_text(body.get("text"))
     request_id = _uuid_or_400(body.get("client_request_id"), "client_request_id")
     _check_identity(body, user)
     collection_id = body.get("collection_id") or None
     try:
+        # services.accept_capture is the sole text/URL policy authority.
         capture, created = services.accept_capture(
             user,
             str(request_id),
-            body["text"],
+            body.get("text"),
             collection_id,
             instance_id=str(body.get("instance_id")),
             user_id=str(body.get("user_id") or user.id),
         )
+    except ValidationError as exc:
+        if getattr(exc, "code", None) == "oversized":
+            raise ApiError(413, "oversized", _vmessage(exc))
+        raise
     except PermissionDenied:
         raise ApiError(403, "forbidden", "destination not available")
     return _json({"receipt": services.receipt(capture)}, status=201 if created else 200)
@@ -610,13 +610,18 @@ def api_job_retry(request, job_id):
         raise Http404("no such job")
     if not services.accessible_collections(user).filter(id=job.collection_id).exists():
         raise Http404("no such job")
-    if job.state in ("queued", "running"):
-        raise ApiError(409, "conflict", "job is already queued or running")
-    # Requeue only: retained source/findings stay until the worker replaces them.
-    job.state = "queued"
-    job.retry_at = None
-    job.save(update_fields=["state", "retry_at", "updated_at"])
-    return _json({"job": _job_json(job)})
+    # Atomic conditional requeue: a job that became queued/running between the
+    # eligibility projection and this write is refused, never double-queued.
+    with transaction.atomic():
+        current = Job.objects.select_for_update().get(pk=job.pk)
+        if not current.can_retry:
+            raise ApiError(409, "conflict", "job is already queued or running")
+        # Requeue only: retained source/findings stay until the worker replaces
+        # them; attempts/backoff history is untouched.
+        current.state = "queued"
+        current.retry_at = None
+        current.save(update_fields=["state", "retry_at", "updated_at"])
+    return _json({"job": _job_json(current)})
 
 
 # --- browser tiktok.json import ------------------------------------------------

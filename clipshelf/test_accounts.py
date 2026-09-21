@@ -15,7 +15,7 @@ from urllib.error import URLError
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
-from django.test import Client, TestCase, override_settings
+from django.test import Client, SimpleTestCase, TestCase, override_settings
 from django.urls import include, path, reverse
 from django.utils import timezone
 
@@ -30,7 +30,7 @@ from clipshelf.accounts import (
     invitation_token_hash,
     json_error,
 )
-from clipshelf.models import Collection, Invitation, Membership
+from clipshelf.models import Collection, Invitation, Job, Membership, ServerSettings
 from clipshelf.services import accessible_collections
 from django.core import mail
 
@@ -436,6 +436,10 @@ class LlmModelPickerTests(AccountTestCase):
     def test_keys_stay_with_their_endpoint_and_explicit_clear_wins(self):
         saved, other = "http://saved/v1", "http://other/v1"
         self.admin_post("/admin/llm", {"base_url": saved, "api_key": "stored"}, reauth=True)
+        # A trailing slash is the same endpoint: the saved key still applies.
+        response = self.admin_post("/admin/llm/models", {"base_url": saved + "/"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.requests[-1][1], "Bearer stored")
         for body, expected in (
             ({}, (saved + "/models", "Bearer stored")),
             ({"base_url": other}, (other + "/models", None)),
@@ -460,6 +464,56 @@ class LlmModelPickerTests(AccountTestCase):
         self.assertEqual(self.requests[-1], (other + "/models", "Bearer replacement"))
         response = self.admin_post("/admin/llm", {"api_key": ""})
         self.assertFalse(response.json()["llm"]["has_api_key"])
+        self.admin_post("/admin/llm/models", {})
+        self.assertEqual(self.requests[-1], (other + "/models", None))
+
+    def test_previews_never_persist_and_never_invalidate_verification(self):
+        self.admin_post("/admin/llm", {"base_url": "http://saved/v1", "model": "m",
+                                       "api_key": "stored"}, reauth=True)
+        s = ServerSettings.objects.get(pk=1)
+        s.llm_verified_at = timezone.now()
+        s.save()
+        self.admin_post("/admin/llm/check",
+                        {"base_url": "http://typed/v1", "model": "x", "api_key": "typed"})
+        self.admin_post("/admin/llm/models", {"base_url": "http://typed/v1", "api_key": "typed"})
+        s.refresh_from_db()
+        self.assertEqual(s.llm_base_url, "http://saved/v1")
+        self.assertEqual(s.llm_model, "m")
+        self.assertEqual(s.llm_api_key, "stored")
+        self.assertIsNotNone(s.llm_verified_at)
+        self.admin_post("/admin/llm/models", {})
+        self.assertEqual(self.requests[-1], ("http://saved/v1/models", "Bearer stored"))
+
+    def test_verification_resets_only_on_actual_capability_changes(self):
+        self.admin_post("/admin/llm", {"base_url": "http://saved/v1", "model": "m",
+                                       "api_key": "stored"}, reauth=True)
+        s = ServerSettings.objects.get(pk=1)
+        s.llm_verified_at = timezone.now()
+        s.save()
+        # Re-posting identical values (trailing slash aside) keeps verification.
+        self.admin_post("/admin/llm", {"base_url": "http://saved/v1/", "model": "m",
+                                       "api_key": "stored"}, reauth=True)
+        s.refresh_from_db()
+        self.assertIsNotNone(s.llm_verified_at)
+        # Concurrency-only changes never invalidate.
+        self.admin_post("/admin/llm", {"concurrency": 6}, reauth=True)
+        s.refresh_from_db()
+        self.assertEqual(s.llm_concurrency, 6)
+        self.assertIsNotNone(s.llm_verified_at)
+        # A model change does.
+        self.admin_post("/admin/llm", {"model": "new"}, reauth=True)
+        s.refresh_from_db()
+        self.assertIsNone(s.llm_verified_at)
+
+    def test_direct_model_save_never_carries_a_key_to_a_new_host(self):
+        self.admin_post("/admin/llm", {"base_url": "http://saved/v1", "api_key": "stored"},
+                        reauth=True)
+        s = ServerSettings.objects.get(pk=1)
+        s.llm_base_url = "http://moved/v1"
+        s.save(update_fields=["llm_base_url"])
+        s.refresh_from_db()
+        self.assertEqual(s.llm_api_key, "")
+        self.assertIsNone(s.llm_verified_at)
 
     def test_check_probes_the_typed_values_not_stale_saved_ones(self):
         saved = "http://saved/v1"
@@ -498,3 +552,47 @@ class LlmModelPickerTests(AccountTestCase):
         self.client.force_login(make_user("member@clipshelf.test"))
         self.assertEqual(self.admin_post("/admin/llm/models", body, reauth=True).status_code, 403)
         self.assertEqual(self.requests, [])
+
+
+class JobPolicyTests(SimpleTestCase):
+    """Read-only Job predicates (contract A) consumed by the HTTP layer."""
+
+    @staticmethod
+    def _job(**overrides):
+        fields = {
+            "state": Job.State.QUEUED,
+            "acquisition": Job.AcquisitionStatus.PENDING,
+            "interpretation": Job.InterpretationStatus.PENDING,
+        }
+        fields.update(overrides)
+        return Job(**fields)
+
+    def test_active_jobs_are_never_retryable_or_attention_seeking(self):
+        for state in (Job.State.QUEUED, Job.State.RUNNING, Job.State.RETRY):
+            job = self._job(state=state)
+            self.assertTrue(job.active)
+            self.assertFalse(job.can_retry)
+            self.assertFalse(job.needs_attention)
+
+    def test_finished_jobs_stay_reprocessable(self):
+        for state in (Job.State.BLOCKED, Job.State.DONE):
+            job = self._job(state=state)
+            self.assertFalse(job.active)
+            self.assertTrue(job.can_retry)
+
+    def test_attention_covers_blocked_state_and_stage_failures(self):
+        self.assertTrue(self._job(state=Job.State.BLOCKED).needs_attention)
+        for field, status in (
+            ("acquisition", Job.AcquisitionStatus.BLOCKED),
+            ("acquisition", Job.AcquisitionStatus.ERROR),
+            ("interpretation", Job.InterpretationStatus.BLOCKED),
+            ("interpretation", Job.InterpretationStatus.ERROR),
+        ):
+            self.assertTrue(self._job(**{field: status}).needs_attention)
+        self.assertFalse(
+            self._job(
+                state=Job.State.DONE,
+                acquisition=Job.AcquisitionStatus.COMPLETE,
+                interpretation=Job.InterpretationStatus.COMPLETE,
+            ).needs_attention
+        )

@@ -17,7 +17,6 @@ the last good findings intact.
 import hashlib
 import json
 import logging
-import os
 import shutil
 import time
 import uuid
@@ -31,7 +30,15 @@ from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
-from clipshelf import acquisition, interpretation, lib, models, services
+from clipshelf import (
+    acquisition,
+    asset_files,
+    interpretation,
+    lib,
+    models,
+    publication,
+    services,
+)
 from clipshelf.management.locks import coordinator_lock, data_lock
 
 log = logging.getLogger(__name__)
@@ -69,7 +76,13 @@ def _material(job):
     assets = []
     for asset in source.get("assets") or []:
         path = asset.get("path")
-        assets.append({**asset, "path": str(_data(path))} if isinstance(path, str) else asset)
+        if not isinstance(path, str):
+            assets.append(asset)
+            continue
+        try:
+            assets.append({**asset, "path": str(asset_files.resolve_path(path))})
+        except ValidationError:
+            continue  # unresolvable stored path: interpret without that file
     if assets:
         source["assets"] = assets
     return source
@@ -213,35 +226,14 @@ def _acquire_phase(job):
     except acquisition.AcquisitionError as exc:
         _fail(job, exc)
         return False
-    _publish(job, source)
+    asset_files.publish(source, staging, move=True)
     status = source.get("acquisition") or "error"
-    with transaction.atomic():
-        services.store_source(job, source)
-        job.final_url = source.get("url") or job.final_url or job.url
-        job.acquisition = status
-        job.warnings = _warn(job, *source.get("warnings", []))
-        job.save()
+    # store_source owns every source fact: final_url, acquisition and warnings.
+    services.store_source(job, source)
     if status in ("blocked", "error"):
         _set(job, state="blocked")  # honest: saved, needs manual retry/import
         return False
     return True
-
-
-def _publish(job, source):
-    """Publish one acquisition into a fresh directory, never over retained bytes."""
-    root = _data("assets", str(job.id), uuid.uuid4().hex)
-    root.mkdir(parents=True, exist_ok=True)
-    assets = source.get("assets") or []
-    for i, asset in enumerate(assets):
-        src = Path(asset["path"]).resolve()
-        if not src.is_relative_to(_data("staging", f"job-{job.id}").resolve()):
-            raise ValidationError("acquired asset is outside its staging directory")
-        dest = root / f"{i}-{src.name}"
-        os.replace(src, dest)  # atomic: file appears complete at final path
-        assets[i] = {**asset, "path": str(dest)}
-    if assets:
-        source["assets"] = assets
-    return len(assets)
 
 
 def _interpret_phase(job):
@@ -483,10 +475,6 @@ def _legacy_findings(item, url):
             "warnings": ["migrated from legacy library; findings merged into entry fields"]}
 
 
-def _prompt_key(text):
-    return hashlib.sha1(" ".join(str(text).split()).lower().encode()).hexdigest()[:16]
-
-
 LEGACY_FIELDS = ("title", "desc", "sources", "tags", "found", "interpreted",
                  "pending", "cat", "install", "archived", "stars")
 
@@ -614,7 +602,7 @@ def _manifest(items, prompts, seen, removed_keys, files_record, origin):
         }
     prompt_manifest = {}
     for p in prompts:
-        key = _prompt_key(p.get("text", ""))
+        key = publication.prompt_key(p.get("text", ""))
         prompt_manifest[key] = {
             "fields_sha256": _sha256_bytes(_canonical(p).encode()),
             "title": p.get("title", ""), "cat": p.get("cat", ""),
@@ -669,7 +657,7 @@ def _prompt_plans(prompts):
         text = (p.get("text") or "").strip()
         if not text:
             continue
-        plans.append({"key": _prompt_key(text), "data": {
+        plans.append({"key": publication.prompt_key(text), "data": {
             "title": p.get("title", ""), "text": text,
             "sources": list(p.get("sources") or []), "cat": p.get("cat", ""),
             "found": p.get("found", ""), "interpreted": p.get("interpreted", ""),
@@ -683,7 +671,7 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
     """Publish all files, then create every row in one transaction."""
     # Publish job files first: complete bytes at final paths before any reference.
     for plan in plans:
-        plan["published"] = _publish_paths(plan["source"], staging)
+        plan["published"] = asset_files.publish(plan["source"], staging, move=False)
 
     crid = client_request_id or str(uuid.uuid5(
         uuid.NAMESPACE_URL, f"clipshelf-import:{user.id}:{digest}"))
@@ -704,13 +692,18 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
             raise ValidationError(
                 "client_request_id was already used for a different import payload")
         for plan in plans:
+            key = publication.link_key(plan["url"])
+            # ponytail: a removed entry never comes back through an import; the
+            # already-published bytes stay as unreferenced files.
+            if publication.tombstoned(collection.id, user.id, key, plan["url"]):
+                continue
             entry, _ = models.Entry.objects.get_or_create(
-                collection=collection, kind="link", key=plan["url"])
+                collection=collection, kind="link", key=key)
             counts["entries"] += 1
             job = None
             if plan["published"] or plan["state"] != "done":
                 job = models.Job.objects.create(
-                    capture=capture, collection=collection, url=plan["url"],
+                    capture=capture, collection=collection, url=key,
                     final_url=plan["source"].get("url") or plan["url"],
                     state=plan["state"], acquisition=plan["status"],
                     interpretation=plan["interpretation"],
@@ -726,8 +719,9 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
                 entry=entry, user=user, origin=origin,
                 defaults={"capture": capture, "job": job, "data": data})
         for plan in prompt_plans:
-            entry, _ = models.Entry.objects.get_or_create(
-                collection=collection, kind="prompt", key=plan["key"])
+            entry = publication.prompt_entry(collection, user, plan["data"]["text"])
+            if entry is None:
+                continue  # removed in this collection: an import never resurrects it
             models.Contribution.objects.get_or_create(
                 entry=entry, user=user, origin=origin,
                 defaults={"capture": capture, "data": plan["data"]})
@@ -742,25 +736,6 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
             # Commit the checkpoint with its rows: a restart must not import twice.
             _update_manifest(record, {"status": "done", "result": result})
     return result
-
-
-def _publish_paths(source, staging):
-    """Publish only staged import bytes, isolated from every previous import."""
-    if not source.get("assets"):
-        return []
-    root = _data("assets", uuid.uuid4().hex)
-    root.mkdir(parents=True, exist_ok=True)
-    published = []
-    for i, asset in enumerate(source["assets"]):
-        src = Path(asset["path"]).resolve()
-        if not src.is_relative_to(staging.resolve()):
-            raise ValidationError("imported asset is outside its staging directory")
-        dest = root / f"{i}-{src.name}"
-        # Shared cache files can feed several entries; staging is removed by the caller.
-        shutil.copy2(src, dest)
-        published.append({**asset, "path": str(dest)})
-    source["assets"] = published
-    return published
 
 
 def _legacy_contribution_data(item):
@@ -789,43 +764,49 @@ def merge_findings(user, findings, origin="extracted"):
             cats = finding.get("categories") or {}
             installs = finding.get("installs") or {}
             if source:
-                entry, _ = models.Entry.objects.get_or_create(
-                    collection=personal, kind="link", key=source)
-                if _merge_own(entry, user, origin, summary=finding.get("summary"),
-                              sources=[source], now=now):
+                entry = _merge_entry(personal, user, source)
+                if entry and _merge_own(entry, user, origin, summary=finding.get("summary"),
+                                        sources=[source], now=now):
                     stats["updated"] += 1
             for repo in finding.get("repos") or []:
-                url = lib.repo_url(repo)
-                if not url:
-                    continue
-                entry, _ = models.Entry.objects.get_or_create(
-                    collection=personal, kind="link", key=url)
-                if _merge_own(entry, user, origin, sources=[source] if source else [],
-                              tags=["github"], cat=cats.get(repo), install=installs.get(repo),
-                              now=now):
+                entry = _merge_entry(personal, user, lib.repo_url(repo))
+                if entry and _merge_own(entry, user, origin,
+                                        sources=[source] if source else [],
+                                        tags=["github"], cat=cats.get(repo),
+                                        install=installs.get(repo), now=now):
                     stats["links"] += 1
             for link in finding.get("links") or []:
                 url = lib.norm(str(link.get("url", "")))
-                if not url:
-                    continue
-                entry, _ = models.Entry.objects.get_or_create(
-                    collection=personal, kind="link", key=url)
+                entry = _merge_entry(personal, user, url)
                 title = " ".join(str(link.get("title", "")).split())
-                if _merge_own(entry, user, origin, title=title, sources=[source] if source else [],
-                              tags=[t for t in [lib.tag_for(url, title) or "page"] if t],
-                              now=now):
+                if entry and _merge_own(entry, user, origin, title=title,
+                                        sources=[source] if source else [],
+                                        tags=[t for t in [lib.tag_for(url, title) or "page"] if t],
+                                        now=now):
                     stats["links"] += 1
             for prompt in finding.get("prompts") or []:
                 text = (prompt.get("text") or "").strip()
                 if not text:
                     continue
-                entry, _ = models.Entry.objects.get_or_create(
-                    collection=personal, kind="prompt", key=_prompt_key(text))
-                if _merge_own(entry, user, origin, prompt_text=text,
-                              title=prompt.get("title", ""), cat=prompt.get("cat", ""),
-                              sources=[source] if source else [], now=now):
+                entry = publication.prompt_entry(personal, user, text)
+                if entry and _merge_own(entry, user, origin, prompt_text=text,
+                                        title=prompt.get("title", ""), cat=prompt.get("cat", ""),
+                                        sources=[source] if source else [], now=now):
                     stats["prompts"] += 1
     return stats
+
+
+def _merge_entry(personal, user, url):
+    """Personal-collection link entry for an extracted URL, or None when the
+    URL is empty or this user removed it: a merge never resurrects it."""
+    if not url:
+        return None
+    key = publication.link_key(url)
+    if publication.tombstoned(personal.id, user.id, key, url):
+        return None
+    entry, _ = models.Entry.objects.get_or_create(
+        collection=personal, kind=models.Entry.Kind.LINK, key=key)
+    return entry
 
 
 def _merge_own(entry, user, origin, now, title="", summary=None, prompt_text=None,

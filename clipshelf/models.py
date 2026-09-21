@@ -14,6 +14,10 @@ from django.db.models import Q
 from django.utils.crypto import salted_hmac
 from django.utils.translation import gettext_lazy as _
 
+# Omitted-value sentinel for ServerSettings.resolve; distinct from an explicit
+# empty string, which clears the key.
+_UNSET = object()
+
 
 class User(AbstractUser):
     """Application user. Email is the login identity; username stays for the
@@ -187,6 +191,27 @@ class Job(models.Model):
         ]
         indexes = [models.Index(fields=["state", "retry_at"], name="clipshelf_job_state_retry_idx")]
 
+    @property
+    def active(self) -> bool:
+        """Queued/running/retry: owned by the scheduler, never retryable."""
+        return self.state in {self.State.QUEUED, self.State.RUNNING, self.State.RETRY}
+
+    @property
+    def needs_attention(self) -> bool:
+        """Blocked as a whole, or any stage the operator must look at."""
+        return (
+            self.state == self.State.BLOCKED
+            or self.acquisition
+            in {self.AcquisitionStatus.BLOCKED, self.AcquisitionStatus.ERROR}
+            or self.interpretation
+            in {self.InterpretationStatus.BLOCKED, self.InterpretationStatus.ERROR}
+        )
+
+    @property
+    def can_retry(self) -> bool:
+        """False while queued/running; every other valid state may reprocess."""
+        return not self.active
+
     def __str__(self):
         return f"{self.url} [{self.state}]"
 
@@ -308,11 +333,60 @@ class ServerSettings(models.Model):
     llm_verified_at = models.DateTimeField(null=True, blank=True)
 
     def save(self, *args, **kwargs):
+        """Verification invalidation and endpoint key isolation live here, so
+        every writer (admin API or direct model save) gets the same policy."""
         if not self._state.adding:
-            current = ServerSettings.objects.filter(pk=self.pk).values_list("llm_api_key", flat=True).first()
-            if current != self.llm_api_key:
-                self.llm_verified_at = None  # key changed: capability check must rerun
+            update_fields = kwargs.get("update_fields")
+            tracked = ("llm_base_url", "llm_model", "llm_api_key")
+            fields = (
+                tracked
+                if update_fields is None
+                else tuple(f for f in tracked if f in update_fields)
+            )
+            if fields:
+                saved = dict(zip(
+                    tracked,
+                    ServerSettings.objects.filter(pk=self.pk)
+                    .values_list(*tracked)
+                    .first(),
+                ))
+                moved = "llm_base_url" in fields and not self.same_endpoint(
+                    saved["llm_base_url"], self.llm_base_url
+                )
+                changed = moved or any(
+                    saved[f] != getattr(self, f) for f in fields if f != "llm_base_url"
+                )
+                if changed:
+                    self.llm_verified_at = None  # actual change: capability check must rerun
+                stale_key = moved and self.llm_api_key == saved.get("llm_api_key")
+                if stale_key:
+                    self.llm_api_key = ""  # a stored key belongs to its old endpoint
+                if changed and update_fields is not None:
+                    touched = set(update_fields)
+                    touched.add("llm_verified_at")
+                    if stale_key:
+                        touched.add("llm_api_key")
+                    kwargs["update_fields"] = touched
         super().save(*args, **kwargs)
+
+    @staticmethod
+    def same_endpoint(a: str, b: str) -> bool:
+        """Trailing slashes never make a different endpoint."""
+        return (a or "").rstrip("/") == (b or "").rstrip("/")
+
+    def resolve(self, *, base_url=None, model=None, api_key=_UNSET):
+        """Effective (base_url, model, api_key) shared by save/check/list.
+
+        Omitted values fall back to the saved ones; a stored key is reused only
+        for the same endpoint (trailing-slash normalized); an explicit empty
+        key clears it. The returned api_key is None when no credentials apply.
+        Pure read: preview endpoints consume it without persisting anything.
+        """
+        base_url = (base_url if base_url is not None else self.llm_base_url or "").strip()
+        model = (model if model is not None else self.llm_model or "").strip()
+        if api_key is _UNSET:
+            api_key = self.llm_api_key if self.same_endpoint(base_url, self.llm_base_url) else ""
+        return base_url, model, (api_key or "") or None
 
     def llm_config(self):
         """Trusted server-side config for worker/interpretation calls only.

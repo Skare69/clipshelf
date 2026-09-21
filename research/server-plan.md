@@ -248,6 +248,26 @@ the same transaction as its rows, so a restart re-imports nothing. The CLI
 migration names the owner's Personal collection explicitly rather than following
 the capture-time default, which may be shared.
 
+**Rev. 7 (2026-09-21):** one module owns entry identity for every producer —
+live interpretation, legacy import and extracted merge. Links key on the
+canonical URL of the acquired (redirect-resolved) source, so a job's source and
+its findings land on one entry instead of two. Prompts key on SHA-256 of the
+whitespace-normalized text; the shipped SHA-1 scheme is recognized wherever
+entries or tombstones already use it, and nothing is re-keyed, because hash-only
+tombstones cannot be recomputed from text that is gone. A removal now holds on
+every route: an import or an extracted merge never resurrects a removed entry.
+`store_source` alone writes source facts (`final_url` is the resolved URL,
+`original_url` keeps the captured one, plus acquisition status and warnings); the
+worker schedules and retries but no longer rewrites what it just published.
+Retained-file custody lives in one place: containment relative to the right
+root, a fresh publication directory, move for acquisition and copy for imports,
+relative paths stored and resolved only for reading. The Job model answers
+`active`, `needs_attention` and `can_retry`, and the browser renders those
+answers instead of re-deriving them — previously it offered Retry on queued and
+running jobs that the server then refused with 409. Capture text and URL policy
+has one authority in intake; the HTTP layer keeps identity checks and maps an
+oversized capture to 413.
+
 ### Shared HTTP model
 
 Use one configured OpenAI-compatible HTTP connection, not an adapter registry.

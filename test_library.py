@@ -422,6 +422,13 @@ class CaptureTests(ApiTestCase):
 
     def test_identity_validation(self):
         alice = self._login(self.alice)
+        # Missing instance_id is invalid; wrong instance/user identity conflicts.
+        self.assertEqual(
+            self._post_capture(
+                alice, self._capture_body(self.alice, instance_id=None)
+            ).status_code,
+            400,
+        )
         response = self._post_capture(
             alice,
             self._capture_body(self.alice, self.alice_personal, instance_id=str(uuid.uuid4())),
@@ -432,6 +439,10 @@ class CaptureTests(ApiTestCase):
             self._capture_body(self.alice, self.alice_personal, user_id=str(self.bob.id)),
         )
         self.assertEqual(response.status_code, 409)
+        # user_id is optional and defaults to the authenticated account.
+        body = self._capture_body(self.alice, self.alice_personal)
+        body.pop("user_id")
+        self.assertEqual(self._post_capture(alice, body).status_code, 201)
 
     def test_text_limits(self):
         alice = self._login(self.alice)
@@ -445,10 +456,59 @@ class CaptureTests(ApiTestCase):
             400,
         )
         big = "https://example.com/x " + "y" * 33000
+        oversized = self._post_capture(alice, self._capture_body(self.alice, text=big))
+        self.assertEqual(oversized.status_code, 413)
+        self.assertEqual(oversized.json()["code"], "oversized")
+        # The ceiling is UTF-8 bytes, not characters: multibyte text can pass
+        # every other check and still exceed it.
+        multibyte = "https://example.com/x " + "é" * 18000
+        self.assertGreater(len(multibyte.encode("utf-8")), 32768)
         self.assertEqual(
-            self._post_capture(alice, self._capture_body(self.alice, text=big)).status_code,
+            self._post_capture(alice, self._capture_body(self.alice, text=multibyte)).status_code,
             413,
         )
+
+    def test_missing_text_is_400(self):
+        alice = self._login(self.alice)
+        body = self._capture_body(self.alice)
+        body.pop("text")
+        response = self._post_capture(alice, body)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(Capture.objects.filter(user=self.alice).count(), 0)
+
+    def test_request_body_ceiling_is_413(self):
+        alice = self._login(self.alice)
+        response = alice.post(
+            "/api/captures",
+            data=json.dumps({"text": "https://example.com/x " + "y" * 70000}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 413)
+
+    def test_punctuation_canonicalization_and_idempotency(self):
+        alice = self._login(self.alice)
+        # Trailing punctuation and duplicates collapse to one canonical job.
+        response = self._post_capture(
+            alice,
+            self._capture_body(
+                self.alice,
+                text="see https://example.com/widget. also https://example.com/widget/",
+            ),
+        )
+        self.assertEqual(response.status_code, 201)
+        detail = alice.get(f"/api/captures/{response.json()['receipt']['id']}").json()
+        self.assertEqual(
+            [j["url"] for j in detail["jobs"]], ["https://example.com/widget"]
+        )
+        # Same request id + differently punctuated text is different content,
+        # so replay must conflict instead of returning the old capture.
+        body = self._capture_body(self.alice, text="see https://example.com/widget.")
+        first = self._post_capture(alice, body)
+        self.assertEqual(first.status_code, 201)
+        conflict = self._post_capture(
+            alice, dict(body, text="see https://example.com/widget,")
+        )
+        self.assertEqual(conflict.status_code, 409)
 
     def test_unavailable_destination_falls_back_with_notice(self):
         shared = Collection.objects.create(
@@ -514,6 +574,66 @@ class CaptureTests(ApiTestCase):
         job_row.refresh_from_db()
         self.assertEqual(job_row.state, "queued")
         self.assertEqual(job_row.error, "upstream blocked")
+
+    def test_job_projection_and_retry_across_states(self):
+        alice = self._login(self.alice)
+        response = self._post_capture(
+            alice, self._capture_body(self.alice, self.alice_personal)
+        )
+        capture_id = response.json()["receipt"]["id"]
+        job_id = Job.objects.get(capture_id=capture_id).id
+
+        def projected(state, **fields):
+            Job.objects.filter(id=job_id).update(**{"error": "", "retry_at": None, **fields})
+            Job.objects.filter(id=job_id).update(state=state)
+            detail = alice.get(f"/api/captures/{capture_id}").json()["jobs"][0]
+            self.assertEqual(detail["id"], str(job_id))
+            return detail
+
+        # In-flight: active, no attention, no retry offered or accepted.
+        for state in ("queued", "running", "retry"):
+            Job.objects.filter(id=job_id).update(state=state)
+            detail = alice.get(f"/api/captures/{capture_id}").json()["jobs"][0]
+            self.assertEqual(detail["state"], state)
+            # state "retry" is a scheduled backoff wait, still active.
+            if state != "retry":
+                self.assertTrue(detail["active"])
+                self.assertFalse(detail["can_retry"])
+                self.assertEqual(
+                    alice.post(f"/api/jobs/{job_id}/retry").status_code, 409
+                )
+        # Scheduled-backoff job: active and the server accepts an immediate requeue.
+        self.assertTrue(projected("retry")["active"])
+
+        # Blocked: attention projected, retry accepted, history kept.
+        detail = projected("blocked", error="upstream blocked", acquisition="blocked")
+        self.assertFalse(detail["active"])
+        self.assertTrue(detail["needs_attention"])
+        self.assertTrue(detail["can_retry"])
+        self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 200)
+        row = Job.objects.get(id=job_id)
+        self.assertEqual(row.state, "queued")
+        self.assertEqual(row.error, "upstream blocked")
+
+        # Done jobs stay reprocessable; the fresh projection offers it again.
+        detail = projected("done", acquisition="complete", interpretation="complete")
+        self.assertFalse(detail["active"])
+        self.assertFalse(detail["needs_attention"])
+        self.assertTrue(detail["can_retry"])
+        self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 200)
+        self.assertEqual(Job.objects.get(id=job_id).state, "queued")
+        # The requeued job now refuses a second concurrent retry.
+        self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 409)
+
+        # Interpretation-only failure still flags attention on an otherwise
+        # finished job, and the projection drives capture aggregation.
+        detail = projected("done", interpretation="error")
+        self.assertTrue(detail["needs_attention"])
+        listing = alice.get(
+            "/api/captures", {"collection_id": str(self.alice_personal.id)}
+        ).json()["captures"]
+        target = next(c for c in listing if c["id"] == str(capture_id))
+        self.assertTrue(any(j["needs_attention"] for j in target["jobs"]))
 
 
 class EntryApiTests(ApiTestCase):
