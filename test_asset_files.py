@@ -68,7 +68,9 @@ class ResolvePathTests(CustodyMixin, SimpleTestCase):
                 asset_files.resolve_path(bad)
 
     def test_symlink_escape_is_rejected(self):
-        outside = self.tmp / "outside.txt"
+        outside_dir = Path(tempfile.mkdtemp(prefix="clipshelf-outside-"))
+        self.addCleanup(shutil.rmtree, outside_dir, ignore_errors=True)
+        outside = outside_dir / "outside.txt"
         outside.write_text("secret")
         link = self.tmp / "link.txt"
         try:
