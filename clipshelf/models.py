@@ -331,6 +331,7 @@ class ServerSettings(models.Model):
         default=2, validators=[MinValueValidator(1), MaxValueValidator(8)]
     )
     llm_verified_at = models.DateTimeField(null=True, blank=True)
+    typesafe_api_key = models.CharField(max_length=2048, blank=True, default="")
 
     def save(self, *args, **kwargs):
         """Verification invalidation and endpoint key isolation live here, so

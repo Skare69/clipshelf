@@ -372,7 +372,7 @@ def _verify_urls(findings, warnings):
 
 # ------------------------------------------------------------------ API
 
-def interpret(source, config, categories):
+def interpret(source, config, categories, screening_key=None):
     """Interpret one acquired source into the single findings dict."""
     base, model, key = _config(config)
     if not isinstance(source, dict) or not source.get("url"):
@@ -389,9 +389,9 @@ def interpret(source, config, categories):
 
     # optional screening; fail-open like no screening at all
     steer, severity, screened = 0.0, 0.0, False
-    if judgment.available():
+    if judgment.available(screening_key):
         try:
-            screen = judgment.screen_material(state)
+            screen = judgment.screen_material(state, api_key=screening_key)
             screened = True
             steer = max(float(screen.get("text_steer") or 0.0),
                         float(screen.get("meta_steer") or 0.0))

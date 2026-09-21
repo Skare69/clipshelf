@@ -8,6 +8,7 @@ transactions, recheck the current account/destination, never move committed
 contributions, and keep the last good findings when reprocessing fails.
 """
 import hashlib
+import os
 import re
 import uuid
 from urllib.parse import urlsplit
@@ -45,6 +46,14 @@ def get_settings():
     """Singleton ServerSettings row (pk=1); instance_id survives restore."""
     row, _ = ServerSettings.objects.get_or_create(pk=1)
     return row
+
+
+def screening_key() -> str | None:
+    """Explicit screening key: admin-set row value first, then env fallback."""
+    key = get_settings().typesafe_api_key
+    if key.strip():
+        return key.strip()
+    return os.environ.get("TYPESAFE_API_KEY", "").strip() or None
 
 
 def personal_collection(user):
@@ -387,7 +396,8 @@ def store_findings(job, findings):
 
     # Optional TypeSafe screening gate: fail-open, runs before the atomic
     # block so a withhold never leaves partial writes.
-    if judgment.available():
+    key = screening_key()
+    if judgment.available(key):
         source = job.source or {}
         material = {"title": str(source.get("title") or "")[:500],
                     "description": str(source.get("desc") or "")[:4000],
@@ -397,7 +407,8 @@ def store_findings(job, findings):
         entries = [u for u in entries if u.startswith(("http://", "https://"))][:judgment.ENTRIES_MAX]
         try:
             screen = judgment.screen_findings(
-                {"material": material, "findings": validated, "entries": entries})
+                {"material": material, "findings": validated, "entries": entries},
+                api_key=key)
         except judgment.JudgmentError as exc:
             screen = None
             validated["warnings"].append(f"screening unavailable: {exc}"[:500])

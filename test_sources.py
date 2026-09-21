@@ -393,8 +393,8 @@ def test_screening_policy():
             return {"choices": [{"message": {"content": good_raw}}]}
 
         def screen(steer, sev=0.0):
-            return lambda state: {"text_steer": steer, "meta_steer": 0.0,
-                                  "severity": sev}
+            return lambda state, api_key=None: {"text_steer": steer,
+                                                "meta_steer": 0.0, "severity": sev}
 
         # screening unavailable: plain findings, screen_material never consulted
         with mock.patch.object(interp.judgment, "available", return_value=False), \
@@ -436,7 +436,7 @@ def test_screening_policy():
         assert any("suspicious content flagged" in w for w in findings["warnings"])
 
         # screening failure: fail-open with a visible warning
-        def boom(state):
+        def boom(state, api_key=None):
             raise interp.judgment.JudgmentError("no api key")
 
         with mock.patch.object(interp.judgment, "available", return_value=True), \

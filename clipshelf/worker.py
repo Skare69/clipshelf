@@ -248,7 +248,8 @@ def _interpret_phase(job):
         return
     try:
         findings = interpretation.interpret(
-            _material(job), cfg.llm_config(), _categories(job.collection))
+            _material(job), cfg.llm_config(), _categories(job.collection),
+            screening_key=services.screening_key())
     except interpretation.GuardrailBlocked as exc:
         # deterministic block: no attempts, no retry
         _set(job, interpretation="blocked", state="blocked", error=str(exc)[:2000])

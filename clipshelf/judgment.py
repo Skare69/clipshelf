@@ -30,17 +30,18 @@ class JudgmentError(Exception):
     """Safe-to-surface screening failure (never contains the API key)."""
 
 
-def available() -> bool:
-    return _SDK and bool(os.environ.get("TYPESAFE_API_KEY", "").strip())
+def available(api_key=None) -> bool:
+    return _SDK and bool((api_key or "").strip()
+                         or os.environ.get("TYPESAFE_API_KEY", "").strip())
 
 
 def _cut(value):
     return value[:MAX_STATE_STR] if isinstance(value, str) else value
 
 
-def _client():
+def _client(api_key=None):
     return TypeSafeClient(
-        api_key=os.environ.get("TYPESAFE_API_KEY", "").strip(),
+        api_key=(api_key or "").strip() or os.environ.get("TYPESAFE_API_KEY", "").strip(),
         model=os.environ.get("TYPESAFE_MODEL") or None,
         timeout=TIMEOUT,
     )
@@ -55,10 +56,10 @@ def _float(answer, name):
     return value
 
 
-def _ask(state, questions):
-    if not available():
+def _ask(state, questions, api_key=None):
+    if not available(api_key):
         raise JudgmentError("screening unavailable: no API key or SDK missing")
-    with _client() as client:
+    with _client(api_key) as client:
         try:
             response = client.system_one(state=state, questions=questions, timeout=TIMEOUT)
         except Exception as exc:
@@ -120,13 +121,26 @@ _TAG = {
     "page": "None of the above fit; it is a general page.",
 }
 
+_PING = Noul(
+    instructions="One question about the provided text.",
+    criteria=NoulCriteria(true="The text describes an AI image tool.",
+                          false="The text does not describe an AI image tool."))
 
-def screen_material(state: dict) -> dict:
+
+def ping(api_key=None) -> float:
+    """Smallest real round trip, for the admin's key check."""
+    answers = _ask({"text": "ComfyUI is a node-based Stable Diffusion workflow tool."},
+                   {"ai_tool": _PING}, api_key=api_key)
+    return _float(answers.get("ai_tool"), "ai_tool")
+
+
+def screen_material(state: dict, api_key=None) -> dict:
     answers = _ask(
         {k: _cut(state.get(k)) for k in
          ("url", "title", "description", "page_text", "links", "captions_note",
           "allowed_categories")},
-        {"text_steer": _TEXT_STEER, "meta_steer": _META_STEER, "severity": _SEVERITY})
+        {"text_steer": _TEXT_STEER, "meta_steer": _META_STEER, "severity": _SEVERITY},
+        api_key=api_key)
     return {
         "text_steer": _float(answers.get("text_steer"), "text_steer"),
         "meta_steer": _float(answers.get("meta_steer"), "meta_steer"),
@@ -134,7 +148,7 @@ def screen_material(state: dict) -> dict:
     }
 
 
-def screen_findings(state: dict) -> dict:
+def screen_findings(state: dict, api_key=None) -> dict:
     entries = state["entries"]
     if len(entries) > ENTRIES_MAX:
         raise JudgmentError(f"screening: too many entries ({len(entries)} > {ENTRIES_MAX})")
@@ -150,13 +164,14 @@ def screen_findings(state: dict) -> dict:
     answers = _ask(
         {"material": {k: _cut(v) for k, v in state["material"].items()},
          "findings": state["findings"], "entries": entries},
-        questions)
+        questions,
+        api_key=api_key)
     return {"danger": _float(answers.get("danger"), "danger"),
             "related": {url: _float(answers.get(f"rel_{i}"), f"rel_{i}")
                         for i, url in enumerate(entries)}}
 
 
-def tag_links(links: list) -> list:
+def tag_links(links: list, api_key=None) -> list:
     if len(links) > LINKS_MAX:
         raise JudgmentError(f"screening: too many links ({len(links)} > {LINKS_MAX})")
     questions = {}
@@ -171,7 +186,7 @@ def tag_links(links: list) -> list:
             instructions="Which category best fits this link?",
             criteria=_TAG)
     answers = _ask({"links": [{k: _cut(v) for k, v in link.items()} for link in links]},
-                   questions)
+                   questions, api_key=api_key)
     return [{"keep": _float(answers.get(f"keep_{i}"), f"keep_{i}"),
              "tag": getattr(answers.get(f"tag_{i}"), "choice", None) or _raise(f"tag_{i}")}
             for i, link in enumerate(links)]

@@ -50,7 +50,7 @@ class WorkerMixin:
         return models.Job.objects.create(capture=capture, url=url, **defaults)
 
     def run_worker(self, interpret=None, acquire=fake_acquire):
-        side = interpret or (lambda source, config, cats: {**FINDINGS, "source": source.get("url")})
+        side = interpret or (lambda source, config, cats, **kw: {**FINDINGS, "source": source.get("url")})
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("clipshelf.acquisition.acquire", side_effect=acquire), \
                 mock.patch("clipshelf.interpretation.interpret", side_effect=side):
@@ -128,7 +128,7 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         job.interpretation = "pending"
         job.save()
 
-        def boom(source, config, cats):
+        def boom(source, config, cats, **kw):
             from clipshelf import interpretation
             raise interpretation.InterpretationError("malformed output")
 
@@ -150,7 +150,7 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         job.state, job.interpretation = "queued", "pending"
         job.save()
 
-        def revoked(source, config, cats):
+        def revoked(source, config, cats, **kw):
             models.Membership.objects.filter(user=self.user, collection=shared).delete()
             return {**FINDINGS, "source": source["url"]}
 
@@ -329,7 +329,7 @@ class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
             collection=self.personal, kind="prompt", key=publication.prompt_key(shipped))
         fresh = "Summarize the changelog for operators."
         self.make_job()
-        self.run_worker(interpret=lambda source, config, cats: {
+        self.run_worker(interpret=lambda source, config, cats, **kw: {
             **FINDINGS, "source": source.get("url"), "prompts": [shipped, fresh]})
         keys = set(models.Entry.objects.filter(
             collection=self.personal, kind="prompt").values_list("key", flat=True))
@@ -364,7 +364,7 @@ class GuardrailBlockedTests(WorkerMixin, TransactionTestCase):
     """Deterministic screening blocks: job blocked, zero attempts, no retry."""
 
     def test_interpret_guardrail_block(self):
-        def blocked(source, config, cats):
+        def blocked(source, config, cats, **kw):
             from clipshelf import interpretation
             raise interpretation.GuardrailBlocked("page steers the interpreter")
 

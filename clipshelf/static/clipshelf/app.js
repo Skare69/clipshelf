@@ -573,20 +573,25 @@ async function refreshInboxCount() {
     $("#nInbox").textContent = S.inboxActive || "";
   } catch {}
 }
+const guardrailBlocked = j => !!(j.error && (j.error.startsWith("interpreter-directed content detected") || j.error.startsWith("findings withheld:")));
+const screeningWarns = j => (j.warnings || []).filter(w => w.startsWith("screening"));
 const jobChips = j => [
   el("span", { class: "badge " + (j.state === "done" ? "ok" : j.active ? "run" : j.needs_attention ? "err" : ""), text: "job: " + j.state }),
   j.acquisition ? el("span", { class: "badge " + ({ complete: "ok", pending: "", partial: "warn", blocked: "err", error: "err" }[j.acquisition] ?? ""), text: "acquisition: " + j.acquisition }) : null,
   j.interpretation ? el("span", { class: "badge " + ({ complete: "ok", pending: "", blocked: "err", error: "err" }[j.interpretation] ?? ""), text: "interpretation: " + j.interpretation }) : null,
+  guardrailBlocked(j) ? el("span", { class: "badge err", title: j.error, text: "guardrail" }) : null,
   (j.attempts > 1) ? el("span", { class: "badge", text: `${j.attempts} attempts` }) : null
 ];
 function jobRow(j, onDone) {
+  const sw = screeningWarns(j);
   const row = el("div", { class: "job" },
     el("div", { class: "jhead" },
       el("span", { class: "jurl", text: hostOf(j.final_url || j.url) }),
-      ...jobChips(j)),
+      ...jobChips(j),
+      sw.length ? el("span", { class: "badge", title: sw.join("\n"), text: "screened" }) : null),
     (j.warnings || []).length ? el("div", { class: "jwarn",
       text: j.warnings.map(w => "⚠ " + w).join("\n"), style: "white-space:pre-wrap" }) : null,
-    j.error ? el("div", { class: "jerr", text: j.error }) : null);
+    j.error ? el("div", { class: "jerr" + (guardrailBlocked(j) ? " guardrail" : ""), text: j.error }) : null);
   // can_retry is the action the server will accept right now; completed jobs
   // stay reprocessable, so the offer appears there too.
   if (j.can_retry) {
@@ -864,9 +869,9 @@ async function renderAdmin() {
   frag.append(wrap);
   out.replaceChildren(frag);
   renderToc();
-  const [users, invs, cols, llm] = await Promise.allSettled([
+  const [users, invs, cols, llm, scr] = await Promise.allSettled([
     api("/api/admin/users"), api("/api/admin/invitations"),
-    api("/api/admin/collections"), api("/api/admin/llm")
+    api("/api/admin/collections"), api("/api/admin/llm"), api("/api/admin/screening")
   ]);
   const errNode = e => el("p", { class: "err", text: e.message });
   wrap.replaceChildren();
@@ -877,7 +882,9 @@ async function renderAdmin() {
   wrap.append(adminCollections(cols.status === "fulfilled" ? cols.value.collections : null,
     cols.status === "rejected" ? cols.reason : null));
   wrap.append(adminLlm(llm.status === "fulfilled" ? llm.value.llm : null,
-    llm.status === "rejected" ? llm.reason : null));
+    llm.status === "rejected" ? llm.reason : null,
+    scr.status === "fulfilled" ? scr.value.screening : null,
+    scr.status === "rejected" ? scr.reason : null));
 }
 function adminUsers(users, err) {
   const p = el("section", { class: "panel" }, el("h3", { text: "Accounts" }));
@@ -1019,7 +1026,7 @@ const LLM_PROVIDERS = [
   { id: "lmstudio", label: "LM Studio (local)", url: "http://localhost:1234/v1", local: true },
   { id: "vllm", label: "vLLM (local)", url: "http://localhost:8000/v1", local: true },
 ];
-function adminLlm(llm, err) {
+function adminLlm(llm, err, scr, scrErr) {
   const p = el("section", { class: "panel" }, el("h3", { text: "Shared interpretation endpoint" }));
   if (err) return p.append(errNode(err)), p;
   const base = el("input", { type: "url", id: "llmBase", value: llm.base_url || "", placeholder: "https://llm.example.internal/v1" });
@@ -1127,6 +1134,38 @@ function adminLlm(llm, err) {
   });
   p.append(form,
     el("p", { class: "hint", text: "One admin-managed endpoint serves every capture, including Personal collections. The key stays server-side." }));
+  if (scrErr) return p.append(errNode(scrErr)), p;
+  const sKey = el("input", { type: "password", id: "scrKey", autocomplete: "new-password",
+    placeholder: scr?.has_api_key ? "saved key present"
+      : scr?.env_fallback ? "using TYPESAFE_API_KEY from the environment" : "API key" });
+  const sClear = el("input", { type: "checkbox", id: "scrClearKey" });
+  const sBody = () => sClear.checked ? { api_key: "" } : sKey.value ? { api_key: sKey.value } : {};
+  const sNote = el("p", { class: "hint", hidden: true });
+  const sShowNote = (ok, text) => { sNote.className = ok ? "hint" : "err"; sNote.textContent = text; sNote.hidden = false; };
+  const sForm = el("form", {},
+    el("div", { class: "field" }, el("label", { for: "scrKey", text: "API key" }), sKey,
+      el("p", { class: "help", text: "Optional guard rail against prompt injection in captured pages. Without a key, interpretation runs unguarded." })),
+    el("div", { class: "field" },
+      el("label", { for: "scrClearKey" }, sClear, " Clear the saved key")),
+    el("div", { class: "acts" },
+      el("button", { class: "btn primary", type: "submit", text: "Save" }),
+      el("button", { class: "btn tonal", type: "button", text: "Test" })),
+    sNote);
+  sForm.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    try { await sensitive("/api/admin/screening", sBody()); sKey.value = ""; sClear.checked = false;
+      toast("Screening settings saved."); renderAdmin(); }
+    catch (e) { if (e.status !== 401 && !e.cancelled) sShowNote(false, e.message); }
+  });
+  sForm.querySelector(".tonal").addEventListener("click", async () => {
+    sNote.hidden = true;
+    try {
+      const j = await sensitive("/api/admin/screening/check", sBody());
+      const ok = j.check?.ok ?? j.ok;
+      sShowNote(ok, (ok ? "Screening check passed: " : "Screening check failed: ") + (j.check?.message || j.message || ""));
+    } catch (e) { if (e.status !== 401 && !e.cancelled) sShowNote(false, e.message); }
+  });
+  p.append(el("fieldset", {}, el("legend", { text: "Screening (TypeSafe)" }), sForm));
   return p;
 }
 

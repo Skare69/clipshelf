@@ -269,14 +269,20 @@ has one authority in intake; the HTTP layer keeps identity checks and maps an
 oversized capture to 413.
 
 **Rev. 8 (2026-09-21):** captured page text is untrusted input to the
-interpreter. Optional TypeSafe System One screening (env `TYPESAFE_API_KEY`,
-optional `TYPESAFE_MODEL` pin) runs one typed battery per interpretation job
-before the interpreter POST — text and metadata steer Nouls plus a severity
-Score — and one before publishing findings — a danger Score plus per-entry
-relatedness Nouls that drop entries below 0.05 with an honest warning. Policy
-thresholds live in `clipshelf/judgment.py` (0.70 action / 0.35 review / 1.5
-withhold). Screening is fail-open: an unset key or a screening failure proceeds
-with a visible warning, and behavior without a key is exactly today's.
+interpreter. Optional TypeSafe System One screening runs one typed battery per
+interpretation job before the interpreter POST — text and metadata steer Nouls
+plus a severity Score — and one before publishing findings — a danger Score
+plus per-entry relatedness Nouls that drop entries below 0.05 with an honest
+warning. Policy thresholds live in `clipshelf/judgment.py` (0.70 action / 0.35
+review / 1.5 withhold). Screening is fail-open: an unset key or a screening
+failure proceeds with a visible warning, and behavior without a key is exactly
+today's. The key is app-admin-managed like the interpretation endpoint's — a
+write-only `ServerSettings` field the admin sets and checks from the browser,
+with env `TYPESAFE_API_KEY` as fallback (and optional `TYPESAFE_MODEL` pin), so
+turning the guard rail on never requires editing compose and restarting. Django
+resolves the key and passes it in; `judgment.py` stays framework-free. Verdicts
+are visible where the job is: a `guardrail` badge and a marked error for a
+blocked job, a `screened` badge carrying the screening warnings otherwise.
 
 ### Shared HTTP model
 

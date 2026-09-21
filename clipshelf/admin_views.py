@@ -6,6 +6,7 @@ invitations, shared-collection succession, LLM connection settings).
 """
 
 import json
+import os
 import secrets
 from functools import wraps
 
@@ -33,8 +34,9 @@ from clipshelf.accounts import (
     invitation_token_hash,
     json_error,
 )
+from clipshelf import judgment
 from clipshelf.models import Collection, Invitation, Membership
-from clipshelf.services import get_settings
+from clipshelf.services import get_settings, screening_key
 
 _USER = get_user_model()
 
@@ -372,6 +374,47 @@ def llm_models(request, user):
     return JsonResponse({"models": models})
 
 
+def _screening_dict() -> dict:
+    return {
+        "has_api_key": bool(get_settings().typesafe_api_key),
+        "env_fallback": bool(os.environ.get("TYPESAFE_API_KEY", "").strip()),
+    }
+
+
+@admin_endpoint("GET", "POST")
+def screening(request, user):
+    """TypeSafe screening key. Write-only like llm_api_key: never echoed."""
+    s = get_settings()
+    if request.method == "GET":
+        return JsonResponse({"screening": _screening_dict()})
+    body = _json_body(request)
+    _require_reauth(request, body)
+    if "api_key" not in body:
+        raise ApiError(400, detail="api_key is required")
+    s.typesafe_api_key = str(body["api_key"])
+    s.save(update_fields=["typesafe_api_key"])
+    return JsonResponse({"screening": _screening_dict()})
+
+
+@admin_endpoint("POST")
+def screening_check(request, user):
+    """One tiny real noul round-trip with the stored (or env) key."""
+    body = _json_body(request)
+    _require_reauth(request, body)
+    key = screening_key()
+    if not judgment.available(key):
+        return JsonResponse(
+            {"ok": False, "message": "screening unavailable: no API key set"})
+    try:
+        p = judgment.ping(key)
+    except judgment.JudgmentError as exc:
+        message = str(exc)
+        if key:
+            message = message.replace(key, "***")
+        return JsonResponse({"ok": False, "message": message[:300]})
+    return JsonResponse({"ok": True, "message": f"screening ok (p={p:.2f})"})
+
+
 admin_urlpatterns = [
     path("admin/users", user_list, name="clipshelf_admin_users"),
     path(
@@ -391,4 +434,7 @@ admin_urlpatterns = [
     path("admin/llm", llm_config, name="clipshelf_admin_llm"),
     path("admin/llm/check", llm_check, name="clipshelf_admin_llm_check"),
     path("admin/llm/models", llm_models, name="clipshelf_admin_llm_models"),
+    path("admin/screening", screening, name="clipshelf_admin_screening"),
+    path("admin/screening/check", screening_check,
+         name="clipshelf_admin_screening_check"),
 ]
