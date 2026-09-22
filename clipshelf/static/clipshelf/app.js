@@ -1021,6 +1021,7 @@ const LLM_PROVIDERS = [
   { id: "mistral", label: "Mistral", url: "https://api.mistral.ai/v1" },
   { id: "xai", label: "xAI", url: "https://api.x.ai/v1" },
   { id: "zai", label: "Z.AI (GLM)", url: "https://api.z.ai/api/paas/v4" },
+  { id: "zai-coding", label: "Z.AI Coding Plan (GLM)", url: "https://api.z.ai/api/coding/paas/v4" },
   { id: "ollama", label: "Ollama (local)", url: "http://localhost:11434/v1", local: true },
   { id: "llamacpp", label: "llama.cpp (local)", url: "http://localhost:8080/v1", local: true },
   { id: "lmstudio", label: "LM Studio (local)", url: "http://localhost:1234/v1", local: true },
