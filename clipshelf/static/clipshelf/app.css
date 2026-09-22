@@ -119,6 +119,11 @@ h3{font-size:14px;font-weight:600;margin:4px 0 10px}
 .badge{display:inline-block;font-size:11px;font-weight:600;border-radius:6px;padding:2px 8px;
   background:var(--surface-highest);color:var(--on-surface)}
 .badge.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.btn.ok{background:color-mix(in srgb,var(--ok) 18%,transparent);color:var(--ok)}
+.spin{display:inline-block;width:.9em;height:.9em;border:2px solid currentColor;
+  border-right-color:transparent;border-radius:50%;animation:spin .7s linear infinite;
+  vertical-align:-.1em}
+@keyframes spin{to{transform:rotate(360deg)}}
 .badge.err{background:var(--error-container);color:var(--on-error-container)}
 .badge.warn{background:var(--warn-container);color:var(--on-warn-container)}
 .badge.run{background:var(--primary-container);color:var(--on-primary-container)}

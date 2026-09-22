@@ -1077,6 +1077,15 @@ function adminLlm(llm, err, scr, scrErr) {
     note.textContent = text;
     note.hidden = false;
   };
+  const check = el("button", { class: "btn tonal", type: "button", text: "Check connection" });
+  const setCheck = s => {
+    check.disabled = s === "busy";
+    check.className = "btn tonal" + (s === "ok" ? " ok" : "");
+    if (s === "busy") check.replaceChildren(el("span", { class: "spin" }), " Checking…");
+    else if (s === "ok") { check.replaceChildren("✓"); check.setAttribute("aria-label", "Connection verified"); }
+    else { check.replaceChildren("Check connection"); check.removeAttribute("aria-label"); }
+  };
+  setCheck(llm.verified_at ? "ok" : "idle");
   const form = el("form", {},
     el("div", { class: "field" }, el("label", { for: "llmProvider", text: "Provider" }), provider,
       el("p", { class: "help", text: "Presets fill the base URL. Any OpenAI-compatible endpoint works; vision is required." })),
@@ -1089,11 +1098,12 @@ function adminLlm(llm, err, scr, scrErr) {
       el("p", { class: "help", text: "Write-only: never returned by the server. Leave blank to keep a key for this endpoint; changing the URL clears it." })),
     el("div", { class: "field" },
       el("label", { for: "llmClearKey" }, clear, " Clear the saved key")),
-    llm.verified_at ? el("p", { class: "hint", text: "Capability check passed " + fmtWhen(llm.verified_at) + ". Any settings change clears it." }) : el("p", { class: "hint", text: "Not verified yet — run the capability check after saving." }),
     el("div", { class: "acts" },
       el("button", { class: "btn primary", type: "submit", text: "Save settings" }),
-      el("button", { class: "btn tonal", type: "button", text: "Check connection" })),
+      check),
     note);
+  form.addEventListener("input", () => setCheck("idle"));
+  form.addEventListener("change", () => setCheck("idle"));
   load.addEventListener("click", async () => {
     load.disabled = true; load.textContent = "Loading…";
     try {
@@ -1125,13 +1135,19 @@ function adminLlm(llm, err, scr, scrErr) {
     const b = { base_url: base.value.trim(), model: modelValue() };
     if (clear.checked) b.api_key = "";
     else if (key.value) b.api_key = key.value;
+    const before = [base.value.trim(), modelValue(), key.value, conc.value, clear.checked].join("\n");
     note.hidden = true;
+    setCheck("busy");
     try {
       const j = await sensitive("/api/admin/llm/check", b);
-      const ok = j.check?.ok;
-      showNote(ok, (ok ? "Capability check passed: " : "Capability check failed: ")
-        + (j.check?.message || ""));
-    } catch (e) { if (e.status !== 401 && !e.cancelled) showNote(false, e.message); }
+      if ([base.value.trim(), modelValue(), key.value, conc.value, clear.checked].join("\n") !== before)
+        setCheck("idle");
+      else if (j.check?.ok) setCheck("ok");
+      else { setCheck("idle"); showNote(false, j.check?.message || "check failed"); }
+    } catch (e) {
+      setCheck("idle");
+      if (e.status !== 401 && !e.cancelled) showNote(false, e.message);
+    }
   });
   p.append(form,
     el("p", { class: "hint", text: "One admin-managed endpoint serves every capture, including Personal collections. The key stays server-side." }));
