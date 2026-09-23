@@ -117,5 +117,5 @@
   </div>
 </dialog>
 <footer class="ver"><a href="https://github.com/Skare69/clipshelf">clipshelf</a> v{{ CLIPSHELF_VERSION }}</footer>
-<script src="{% static 'clipshelf/app.js' %}" defer></script>
+<script type="module" src="{% static 'clipshelf/app.js' %}?v={{ CLIPSHELF_VERSION }}"></script>
 {% endblock %}
