@@ -366,6 +366,33 @@ def test_interpretation_bounds():
         assert report["ok"] is False and "sekret" not in report["message"]
     finally:
         interp._post = real_post
+
+    # the check gives reasoning models output headroom (same ceiling as interpret)
+    def spy_post(base, key, payload, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": '{"ok": true, "color": "red"}'},
+                             "finish_reason": "stop"}]}
+
+    interp._post = spy_post
+    try:
+        report = interp.check_connection({"base_url": "http://h/x", "model": "m"})
+        assert report["ok"] is True
+        assert calls[-1]["max_tokens"] == interp.OUTPUT_TOKENS_MAX
+    finally:
+        interp._post = real_post
+
+    # a length-truncated empty answer reports the ceiling, not raw response soup
+    def long_post(base, key, payload, timeout):
+        return {"choices": [{"message": {"content": "", "reasoning_content": "thinking"},
+                             "finish_reason": "length"}]}
+
+    interp._post = long_post
+    try:
+        report = interp.check_connection({"base_url": "http://h/x", "model": "m"})
+        assert report["ok"] is False and "output ceiling" in report["message"]
+        assert "thinking" not in report["message"]
+    finally:
+        interp._post = real_post
     print("interpretation bounds ok")
 
 

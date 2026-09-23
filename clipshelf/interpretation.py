@@ -159,6 +159,15 @@ def _content(response, key):
             raise ValueError("empty content")
         return content
     except (KeyError, IndexError, TypeError, ValueError):
+        finish = None
+        try:
+            finish = response["choices"][0].get("finish_reason")
+        except (KeyError, IndexError, TypeError):
+            pass
+        if finish == "length":
+            raise InterpretationError(
+                "model hit the output ceiling before answering (finish_reason=length); "
+                "the answer needs more output tokens than allowed") from None
         raise InterpretationError(
             f"unparsable model response: {_redact(repr(response), key)[:300]}") from None
 
@@ -454,7 +463,8 @@ def check_connection(config):
             image]}]
     try:
         response = _post(base, key, {"model": model, "messages": messages,
-                                     "max_tokens": 100, "temperature": 0}, CHECK_TIMEOUT)
+                                     "max_tokens": OUTPUT_TOKENS_MAX,
+                                     "temperature": 0}, CHECK_TIMEOUT)
         raw = _content(response, key)
         parsed = _parse_json_content(raw)
         if not isinstance(parsed, dict) or parsed.get("ok") is not True:
