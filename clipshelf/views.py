@@ -275,7 +275,11 @@ def static_asset(request, path):
     # never DATA_DIR/media; retained source bytes go through the authorized
     # /api/assets endpoint only. No collectstatic step: this is the source of
     # truth in every mode, so dev and production serve identical bytes.
-    return _static_serve(request, path, document_root=_STATIC_DIR)
+    # no-cache = store but revalidate: upgrades propagate without hard
+    # reloads, and unchanged files still 304.
+    response = _static_serve(request, path, document_root=_STATIC_DIR)
+    response["Cache-Control"] = "no-cache"
+    return response
 
 
 # --- identity, settings, collections ----------------------------------------
