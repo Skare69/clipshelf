@@ -13,7 +13,9 @@ tests, and architecture reviews use the same nouns.
   collection; shared collections have explicit members. Captures land in one
   destination collection.
 - **Job** — one processing attempt pipeline for a capture URL: acquisition →
-  interpretation → publication. Its row owns the projections clients render
+  interpretation → publication. Its row owns the lifecycle transitions
+  (`mark_running`, `defer`, `mark_blocked`, `mark_done`, `fail`, `requeue` —
+  field rules; callers own transactions) and the projections clients render
   (`active`, `needs_attention`, `can_retry`, `guardrail`,
   `screening_warnings`); browsers and the Android client render those instead
   of re-deriving state rules.

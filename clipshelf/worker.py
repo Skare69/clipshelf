@@ -45,7 +45,7 @@ from clipshelf.management.locks import coordinator_lock, data_lock
 log = logging.getLogger(__name__)
 
 CONFIG_ERROR = "llm-not-configured"  # blocked marker; claim resumes when config exists
-MAX_ATTEMPTS = 5
+# MAX_ATTEMPTS moved to models.Job; the finite-failure policy lives in Job.fail.
 POLL_SECONDS = 5
 MAX_IMPORT_ITEMS = 5000  # own payload bound; acquisition.import_export batches at 500
 IMPORT_BATCH = 500
@@ -61,10 +61,6 @@ def _concurrency():
     except Exception:  # singleton missing during early bootstrap
         n = 2
     return max(1, min(n, 8))
-
-
-def _backoff(attempts):
-    return timedelta(seconds=min(30 * 2 ** max(0, attempts - 1), 3600))
 
 
 def _material(job):
@@ -168,18 +164,10 @@ def _claim(jid):
     try:
         with transaction.atomic():
             job = _claimable_jobs().select_for_update().get(pk=jid)
-            job.state = "running"
-            job.retry_at = None
-            job.save()
+            job.mark_running()
             return job
     except models.Job.DoesNotExist:
         return None
-
-
-def _set(job, **fields):
-    for key, value in fields.items():
-        setattr(job, key, value)
-    job.save()
 
 
 def _warn(job, *messages):
@@ -198,13 +186,13 @@ def _process(job):
 
 def _process_job(job):
     if not services.can_write(job.capture.user, job.collection):
-        _set(job, state="queued", retry_at=timezone.now() + timedelta(seconds=POLL_SECONDS),
-             error="paused: account or collection access changed")
+        job.defer(timedelta(seconds=POLL_SECONDS),
+                  error="paused: account or collection access changed")
         return
     if job.acquisition in ("blocked", "error"):
         # re-claimed imported job: upstream refused, interpretation needs a
         # usable source; keep blocked for manual retry/import, never hang in running
-        _set(job, state="blocked")
+        job.mark_blocked()
         return
     if job.acquisition == "pending":
         if not _acquire_phase(job):
@@ -213,7 +201,7 @@ def _process_job(job):
         _interpret_phase(job)
         return
     if job.acquisition != "pending" and job.interpretation != "pending":
-        _set(job, state="done", error="")
+        job.mark_done()
 
 
 def _acquire_phase(job):
@@ -232,19 +220,19 @@ def _acquire_phase(job):
     # store_source owns every source fact: final_url, acquisition and warnings.
     services.store_source(job, source)
     if status in ("blocked", "error"):
-        _set(job, state="blocked")  # honest: saved, needs manual retry/import
+        job.mark_blocked()  # honest: saved, needs manual retry/import
         return False
     return True
 
 
 def _interpret_phase(job):
     if lib.is_terminal(job.url):
-        _set(job, interpretation="blocked", state="done", error="",
-             warnings=_warn(job, "terminal host: retained as metadata only, never interpreted"))
+        job.mark_done(interpretation=models.Job.InterpretationStatus.BLOCKED,
+                      warnings=_warn(job, "terminal host: retained as metadata only, never interpreted"))
         return
     cfg = services.get_settings()
     if not (cfg.llm_base_url and cfg.llm_model):
-        _set(job, state="blocked", error=CONFIG_ERROR, retry_at=None)
+        job.mark_blocked(error=CONFIG_ERROR)
         return
     try:
         findings = interpretation.interpret(
@@ -252,7 +240,8 @@ def _interpret_phase(job):
             screening_key=services.screening_key())
     except interpretation.GuardrailBlocked as exc:
         # deterministic block: no attempts, no retry
-        _set(job, interpretation="blocked", state="blocked", error=str(exc)[:2000])
+        job.mark_blocked(error=str(exc)[:2000],
+                         interpretation=models.Job.InterpretationStatus.BLOCKED)
         return
     except (interpretation.ConfigurationError, interpretation.InterpretationError) as exc:
         _fail(job, exc)
@@ -262,7 +251,8 @@ def _interpret_phase(job):
         services.store_findings(job, findings)
     except interpretation.GuardrailBlocked as exc:
         # screening flagged dangerous findings: deterministic block, no retry
-        _set(job, interpretation="blocked", state="blocked", error=str(exc)[:2000])
+        job.mark_blocked(error=str(exc)[:2000],
+                         interpretation=models.Job.InterpretationStatus.BLOCKED)
         return
 
 
@@ -275,15 +265,7 @@ def _categories(collection):
 
 def _fail(job, exc):
     with transaction.atomic():
-        job.attempts = (job.attempts or 0) + 1
-        job.error = (str(exc) or exc.__class__.__name__)[:2000]
-        if job.attempts >= MAX_ATTEMPTS:
-            job.state = "blocked"
-            job.retry_at = None
-        else:
-            job.state = "retry"
-            job.retry_at = timezone.now() + _backoff(job.attempts)
-        job.save()
+        job.fail(exc)
     log.warning("job %s attempt %d failed: %s", job.id, job.attempts, job.error)
 
 

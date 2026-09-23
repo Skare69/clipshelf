@@ -5,12 +5,14 @@ retained assets, server settings, invitations, and import records. All
 authorization lives in clipshelf.services; models stay plain persistence.
 """
 import uuid
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from django.utils.translation import gettext_lazy as _
 
@@ -231,6 +233,73 @@ class Job(models.Model):
     def can_retry(self) -> bool:
         """False while queued/running; every other valid state may reprocess."""
         return not self.active
+
+    MAX_ATTEMPTS = 5
+
+    @staticmethod
+    def backoff(attempts) -> timedelta:
+        return timedelta(seconds=min(30 * 2 ** max(0, attempts - 1), 3600))
+
+    # Lifecycle transitions: the one owner of every state rewrite. Callers own
+    # transactions (select_for_update/atomic); these own the field rules and
+    # full-row save, because callers legitimately stage other columns
+    # (findings, source, warnings) before transitioning.
+
+    def mark_running(self):
+        self.state = self.State.RUNNING
+        self.retry_at = None
+        self.save()
+
+    def defer(self, delay, error):
+        """Back to queued with a scheduled retry and an explanatory error."""
+        self.state = self.State.QUEUED
+        self.retry_at = timezone.now() + delay
+        self.error = error
+        self.save()
+
+    def mark_blocked(self, error=None, interpretation=None):
+        """Terminal scheduled state: no retry is pending, so retry_at clears.
+        Deterministic blocks pass interpretation; error=None keeps the row's
+        existing message."""
+        self.state = self.State.BLOCKED
+        self.retry_at = None
+        if error is not None:
+            self.error = error
+        if interpretation is not None:
+            self.interpretation = interpretation
+        self.save()  # full row: callers may stage findings/source/warnings first
+
+    def mark_done(self, error="", interpretation=None, warnings=None):
+        """Terminal success; the findings-withheld variant passes
+        interpretation=BLOCKED. warnings=None keeps the row's list."""
+        self.state = self.State.DONE
+        self.error = error
+        self.interpretation = (interpretation if interpretation is not None
+                               else self.InterpretationStatus.COMPLETE)
+        if warnings is not None:
+            self.warnings = warnings
+        self.save()  # full row: services stages findings before calling
+
+    def fail(self, exc):
+        """One failed attempt: bounded retries with backoff, then blocked."""
+        self.attempts = (self.attempts or 0) + 1
+        self.error = (str(exc) or exc.__class__.__name__)[:2000]
+        if self.attempts >= self.MAX_ATTEMPTS:
+            self.state = self.State.BLOCKED
+            self.retry_at = None
+        else:
+            self.state = self.State.RETRY
+            self.retry_at = timezone.now() + self.backoff(self.attempts)
+        self.save()
+
+    def requeue(self):
+        """Operator reprocess; refuses while a run is in flight so the rule
+        cannot drift from the mutation."""
+        if not self.can_retry:
+            raise ValueError("job is already queued or running")
+        self.state = self.State.QUEUED
+        self.retry_at = None
+        self.save()
 
     def __str__(self):
         return f"{self.url} [{self.state}]"

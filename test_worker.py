@@ -61,6 +61,59 @@ class WorkerMixin:
         return job
 
 
+class JobTransitionTests(WorkerMixin, TestCase):
+    """The lifecycle methods are the one owner of state rewrites; pin their
+    policy boundaries here."""
+
+    def test_fail_bounds_retries_then_blocks(self):
+        job = self.make_job()
+        for attempt in range(1, models.Job.MAX_ATTEMPTS):
+            job.fail(Exception(f"boom {attempt}"))
+            self.assertEqual(job.state, "retry")
+            self.assertEqual(job.attempts, attempt)
+            self.assertIsNotNone(job.retry_at)
+        job.fail(Exception("final"))
+        self.assertEqual(job.state, "blocked")
+        self.assertEqual(job.attempts, models.Job.MAX_ATTEMPTS)
+        self.assertIsNone(job.retry_at)
+        self.assertEqual(job.error, "final")
+
+    def test_requeue_refuses_active_and_moves_terminal(self):
+        job = self.make_job(state="running")
+        with self.assertRaises(ValueError):
+            job.requeue()
+        self.assertEqual(job.state, "running")  # mutation and rule agree
+        job.state = "blocked"
+        job.error = "kept"  # requeue keeps the error row; guardrail derives from state
+        job.save(update_fields=["state", "error"])
+        job.requeue()
+        self.assertEqual(job.state, "queued")
+        self.assertIsNone(job.retry_at)
+        self.assertEqual(job.error, "kept")
+
+    def test_mark_blocked_clears_retry_and_keeps_error_when_unspecified(self):
+        job = self.make_job(state="retry", retry_at=timezone.now(), error="old")
+        job.mark_blocked()
+        self.assertEqual(job.state, "blocked")
+        self.assertIsNone(job.retry_at)
+        self.assertEqual(job.error, "old")
+        job.mark_blocked(error="config", interpretation="blocked")
+        self.assertEqual(job.error, "config")
+        self.assertEqual(job.interpretation, "blocked")
+
+    def test_mark_done_defaults_and_withheld_variant(self):
+        job = self.make_job(state="running")
+        job.mark_done()
+        self.assertEqual(
+            (job.state, job.error, job.interpretation),
+            ("done", "", "complete"))
+        job.mark_done(interpretation="blocked",
+                      warnings=["terminal host: retained as metadata only, never interpreted"])
+        self.assertEqual(
+            (job.state, job.interpretation, job.warnings),
+            ("done", "blocked", ["terminal host: retained as metadata only, never interpreted"]))
+
+
 class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
     def test_pipeline_publishes_assets_before_done(self):
         job = self.make_job()
@@ -171,7 +224,7 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         # Exercise the real interpreter; only the HTTP transport is replaced.
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("urllib.request.urlopen", side_effect=refused) as upstream:
-            for attempt in range(1, worker.MAX_ATTEMPTS + 1):
+            for attempt in range(1, models.Job.MAX_ATTEMPTS + 1):
                 claimed = worker._claim_batch(1)
                 self.assertEqual([j.pk for j in claimed], [job.pk])
                 worker._process(claimed[0])
@@ -181,7 +234,7 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
                 self.assertIn("429", job.error)
                 self.assertNotIn(cfg.llm_api_key, job.error)
                 self.assertEqual(worker._claim_batch(1), [])
-                if attempt < worker.MAX_ATTEMPTS:
+                if attempt < models.Job.MAX_ATTEMPTS:
                     self.assertEqual(job.state, "retry")
                     self.assertGreater(job.retry_at, timezone.now())
                     job.retry_at = timezone.now() - timezone.timedelta(seconds=1)

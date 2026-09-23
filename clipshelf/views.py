@@ -616,13 +616,12 @@ def api_job_retry(request, job_id):
     # eligibility projection and this write is refused, never double-queued.
     with transaction.atomic():
         current = Job.objects.select_for_update().get(pk=job.pk)
-        if not current.can_retry:
-            raise ApiError(409, "conflict", "job is already queued or running")
         # Requeue only: retained source/findings stay until the worker replaces
         # them; attempts/backoff history is untouched.
-        current.state = "queued"
-        current.retry_at = None
-        current.save(update_fields=["state", "retry_at", "updated_at"])
+        try:
+            current.requeue()
+        except ValueError:
+            raise ApiError(409, "conflict", "job is already queued or running")
     return _json({"job": _job_json(current)})
 
 

@@ -433,10 +433,9 @@ def store_findings(job, findings):
         if not can_write(user, job.collection):
             # Access lost after acquisition: keep the last good findings, do
             # not write into a collection the user can no longer write.
-            job.interpretation = Job.InterpretationStatus.BLOCKED
-            job.state = Job.State.BLOCKED
-            job.error = "Collection access was lost; previous findings were kept."
-            job.save()
+            job.mark_blocked(
+                error="Collection access was lost; previous findings were kept.",
+                interpretation=Job.InterpretationStatus.BLOCKED)
             caller_job.refresh_from_db()
             return False
         # Same identity store_source published under: a redirected job keeps
@@ -469,11 +468,7 @@ def store_findings(job, findings):
                     job=job,
                 )
         job.findings = validated
-        job.interpretation = Job.InterpretationStatus.COMPLETE
-        job.state = Job.State.DONE
-        job.error = ""
-        job.warnings = list(dict.fromkeys(warnings + validated["warnings"]))[:100]
-        job.save()
+        job.mark_done(warnings=list(dict.fromkeys(warnings + validated["warnings"]))[:100])
     caller_job.refresh_from_db()
     return True
 
