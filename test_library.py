@@ -635,6 +635,27 @@ class CaptureTests(ApiTestCase):
         target = next(c for c in listing if c["id"] == str(capture_id))
         self.assertTrue(any(j["needs_attention"] for j in target["jobs"]))
 
+        # Verdict projections: guardrail is state-scoped, screening_warnings
+        # is the server-filtered, deduplicated sublist.
+        detail = projected(
+            "blocked", interpretation="blocked",
+            error="interpreter-directed content detected; findings withheld")
+        self.assertTrue(detail["guardrail"])
+        self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 200)
+        detail = alice.get(f"/api/captures/{capture_id}").json()["jobs"][0]
+        # requeued with the error still on the row: no longer a guardrail block
+        self.assertFalse(detail["guardrail"])
+        detail = projected(
+            "blocked", error="findings withheld: danger 2.5",
+            warnings=["screening dropped 1 unrelated entry", "other warn",
+                      "screening dropped 1 unrelated entry"])
+        self.assertTrue(detail["guardrail"])
+        self.assertEqual(
+            detail["screening_warnings"],
+            ["screening dropped 1 unrelated entry"])
+        detail = projected("blocked", error="upstream refused")
+        self.assertFalse(detail["guardrail"])
+
 
 class EntryApiTests(ApiTestCase):
     def test_query_validation(self):

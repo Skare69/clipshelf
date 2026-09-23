@@ -93,6 +93,8 @@
     <string name="job_acquisition_label">Acquisition: %1$s</string>
     <string name="job_interpretation_label">Interpretation: %1$s</string>
     <string name="job_error_label">Error: %1$s</string>
+    <string name="job_guardrail_label">Guardrail blocked — findings withheld</string>
+    <string name="job_screened_label">Screened · %1$d warning(s)</string>
     <string name="setup_missing_fields">Enter your server address, email, and password.</string>
     <string name="entry_open_url">Open in browser</string>
     <string name="asset_kind_page">page</string>

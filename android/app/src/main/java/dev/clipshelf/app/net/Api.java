@@ -106,6 +106,8 @@ public final class Api {
     public static final class Job {
         public final String id, url, state, acquisition, interpretation, error;
         public final int attempts;
+        public final boolean guardrail;
+        public final int screeningWarnings;
 
         Job(JSONObject o) {
             id = o.optString("id");
@@ -115,6 +117,9 @@ public final class Api {
             interpretation = o.optString("interpretation");
             error = o.optString("error", "");
             attempts = o.optInt("attempts");
+            guardrail = o.optBoolean("guardrail", false);
+            JSONArray sw = o.optJSONArray("screening_warnings");
+            screeningWarnings = sw == null ? 0 : sw.length();
         }
     }
 

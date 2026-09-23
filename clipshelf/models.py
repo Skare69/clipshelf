@@ -207,6 +207,26 @@ class Job(models.Model):
             in {self.InterpretationStatus.BLOCKED, self.InterpretationStatus.ERROR}
         )
 
+    GUARDRAIL_PREFIXES = (
+        "interpreter-directed content detected",
+        "findings withheld:",
+    )
+    SCREENING_PREFIX = "screening"
+
+    @property
+    def guardrail(self) -> bool:
+        """Currently blocked by the screening guard rail. State-scoped: a
+        retried job requeues with the old error still on the row."""
+        return self.state == self.State.BLOCKED and self.error.startswith(
+            self.GUARDRAIL_PREFIXES)
+
+    @property
+    def screening_warnings(self) -> list:
+        """Screening-related warnings, deduplicated the way the payload shows
+        all warnings (rows written before the write-side cap can repeat)."""
+        return [w for w in dict.fromkeys(self.warnings or [])
+                if isinstance(w, str) and w.startswith(self.SCREENING_PREFIX)]
+
     @property
     def can_retry(self) -> bool:
         """False while queued/running; every other valid state may reprocess."""

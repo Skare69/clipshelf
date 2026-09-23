@@ -573,17 +573,15 @@ async function refreshInboxCount() {
     $("#nInbox").textContent = S.inboxActive || "";
   } catch {}
 }
-const guardrailBlocked = j => !!(j.error && (j.error.startsWith("interpreter-directed content detected") || j.error.startsWith("findings withheld:")));
-const screeningWarns = j => (j.warnings || []).filter(w => w.startsWith("screening"));
 const jobChips = j => [
   el("span", { class: "badge " + (j.state === "done" ? "ok" : j.active ? "run" : j.needs_attention ? "err" : ""), text: "job: " + j.state }),
   j.acquisition ? el("span", { class: "badge " + ({ complete: "ok", pending: "", partial: "warn", blocked: "err", error: "err" }[j.acquisition] ?? ""), text: "acquisition: " + j.acquisition }) : null,
   j.interpretation ? el("span", { class: "badge " + ({ complete: "ok", pending: "", blocked: "err", error: "err" }[j.interpretation] ?? ""), text: "interpretation: " + j.interpretation }) : null,
-  guardrailBlocked(j) ? el("span", { class: "badge err", title: j.error, text: "guardrail" }) : null,
+  j.guardrail ? el("span", { class: "badge err", title: j.error, text: "guardrail" }) : null,
   (j.attempts > 1) ? el("span", { class: "badge", text: `${j.attempts} attempts` }) : null
 ];
 function jobRow(j, onDone) {
-  const sw = screeningWarns(j);
+  const sw = j.screening_warnings || [];
   const row = el("div", { class: "job" },
     el("div", { class: "jhead" },
       el("span", { class: "jurl", text: hostOf(j.final_url || j.url) }),
@@ -591,7 +589,7 @@ function jobRow(j, onDone) {
       sw.length ? el("span", { class: "badge", title: sw.join("\n"), text: "screened" }) : null),
     (j.warnings || []).length ? el("div", { class: "jwarn",
       text: j.warnings.map(w => "⚠ " + w).join("\n"), style: "white-space:pre-wrap" }) : null,
-    j.error ? el("div", { class: "jerr" + (guardrailBlocked(j) ? " guardrail" : ""), text: j.error }) : null);
+    j.error ? el("div", { class: "jerr" + (j.guardrail ? " guardrail" : ""), text: j.error }) : null);
   // can_retry is the action the server will accept right now; completed jobs
   // stay reprocessable, so the offer appears there too.
   if (j.can_retry) {

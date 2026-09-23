@@ -215,6 +215,8 @@ def _job_json(job):
         "active": job.active,
         "needs_attention": job.needs_attention,
         "can_retry": job.can_retry,
+        "guardrail": job.guardrail,
+        "screening_warnings": job.screening_warnings,
     }
 
 

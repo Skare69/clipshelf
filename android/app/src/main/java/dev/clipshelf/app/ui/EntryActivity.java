@@ -145,6 +145,12 @@ public class EntryActivity extends Activity {
                 .append(getString(R.string.job_state_label, job.state)).append("  ·  ")
                 .append(getString(R.string.job_acquisition_label, job.acquisition)).append("  ·  ")
                 .append(getString(R.string.job_interpretation_label, job.interpretation));
+        if (job.guardrail) {
+            sb.append('\n').append(getString(R.string.job_guardrail_label));
+        }
+        if (job.screeningWarnings > 0) {
+            sb.append('\n').append(getString(R.string.job_screened_label, job.screeningWarnings));
+        }
         if (job.error != null && !job.error.isEmpty()) {
             sb.append('\n').append(getString(R.string.job_error_label, job.error));
         }
