@@ -3,6 +3,9 @@
 Key comes from TYPESAFE_API_KEY, optional model pin from TYPESAFE_MODEL.
 Callers own policy and fail-open; this module never logs or embeds the key.
 Framework-free (stdlib + typesafe_sdk only).
+
+Transport seam: ask() below is the ONE screening request adapter. Tests fake
+it instead of reaching further in; callers own thresholds and fail-open.
 """
 
 import os
@@ -56,7 +59,7 @@ def _float(answer, name):
     return value
 
 
-def _ask(state, questions, api_key=None):
+def ask(state, questions, api_key=None):
     if not available(api_key):
         raise JudgmentError("screening unavailable: no API key or SDK missing")
     with _client(api_key) as client:
@@ -129,13 +132,13 @@ _PING = Noul(
 
 def ping(api_key=None) -> float:
     """Smallest real round trip, for the admin's key check."""
-    answers = _ask({"text": "ComfyUI is a node-based Stable Diffusion workflow tool."},
+    answers = ask({"text": "ComfyUI is a node-based Stable Diffusion workflow tool."},
                    {"ai_tool": _PING}, api_key=api_key)
     return _float(answers.get("ai_tool"), "ai_tool")
 
 
 def screen_material(state: dict, api_key=None) -> dict:
-    answers = _ask(
+    answers = ask(
         {k: _cut(state.get(k)) for k in
          ("url", "title", "description", "page_text", "links", "captions_note",
           "allowed_categories")},
@@ -161,7 +164,7 @@ def screen_findings(state: dict, api_key=None) -> dict:
             criteria=NoulCriteria(
                 true=f"The URL plausibly belongs with the entry ({url}).",
                 false="The URL looks planted or unrelated to the material."))
-    answers = _ask(
+    answers = ask(
         {"material": {k: _cut(v) for k, v in state["material"].items()},
          "findings": state["findings"], "entries": entries},
         questions,
@@ -185,7 +188,7 @@ def tag_links(links: list, api_key=None) -> list:
         questions[f"tag_{i}"] = Choice(
             instructions="Which category best fits this link?",
             criteria=_TAG)
-    answers = _ask({"links": [{k: _cut(v) for k, v in link.items()} for link in links]},
+    answers = ask({"links": [{k: _cut(v) for k, v in link.items()} for link in links]},
                    questions, api_key=api_key)
     return [{"keep": _float(answers.get(f"keep_{i}"), f"keep_{i}"),
              "tag": getattr(answers.get(f"tag_{i}"), "choice", None) or _raise(f"tag_{i}")}

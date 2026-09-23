@@ -237,7 +237,7 @@ class ScreeningApiTests(TestCase):
     def test_check_ok_with_stored_key(self):
         self.set_row_key("sekrit")
         with mock.patch.object(judgment, "available", return_value=True), \
-                mock.patch.object(judgment, "_ask",
+                mock.patch.object(judgment, "ask",
                                   return_value={"ai_tool": mock.Mock(noul=0.98)}) as ask:
             response = self.admin_post("/admin/screening/check", {}, reauth=True)
         self.assertEqual(response.status_code, 200)
@@ -247,7 +247,7 @@ class ScreeningApiTests(TestCase):
     def test_check_redacts_key_from_error_message(self):
         self.set_row_key("sekrit")
         with mock.patch.object(judgment, "available", return_value=True), \
-                mock.patch.object(judgment, "_ask",
+                mock.patch.object(judgment, "ask",
                                   side_effect=judgment.JudgmentError(
                                       "request failed with sekrit inside")):
             response = self.admin_post("/admin/screening/check", {}, reauth=True)

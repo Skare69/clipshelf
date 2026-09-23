@@ -320,7 +320,7 @@ def test_interpretation_bounds():
     assert any("bogus" in w for w in warnings)
 
     # interpret: one malformed retry then preserve the failure (2 POSTs max)
-    real_post = interp._post
+    real_post = interp.post
     calls = []
 
     def fake_post(base, key, payload, timeout):
@@ -329,7 +329,7 @@ def test_interpretation_bounds():
                   '"links": [], "categories": [], "installs": [], "warnings": []}'
         return {"choices": [{"message": {"content": content}}]}
 
-    interp._post = fake_post
+    interp.post = fake_post
     try:
         try:
             interp.interpret(source, cfg, categories)
@@ -337,7 +337,7 @@ def test_interpretation_bounds():
             assert "retry" in str(exc)
         assert len(calls) == 2, len(calls)  # exactly one malformed retry
     finally:
-        interp._post = real_post
+        interp.post = real_post
 
     # happy path: source identity injected, unverified URLs flagged honestly
     def ok_post(base, key, payload, timeout):
@@ -345,27 +345,27 @@ def test_interpretation_bounds():
 
     real_fetch = net.fetch_public
     net.fetch_public = lambda url, **k: (_ for _ in ()).throw(net.NetworkError("down"))
-    interp._post = ok_post
+    interp.post = ok_post
     try:
         findings = interp.interpret(source, cfg, categories)
         assert findings["source"] == source["url"]
         assert any("unverified: https://github.com/a/b" in w
                    for w in findings["warnings"])
     finally:
-        interp._post = real_post
+        interp.post = real_post
         net.fetch_public = real_fetch
 
     # key redaction: check_connection never leaks the api key
     def leak_post(base, key, payload, timeout):
         raise Exception(f"connect failed for key {key} at host")
 
-        interp._post = leak_post
+        interp.post = leak_post
     try:
         report = interp.check_connection({"base_url": "http://h/x", "model": "m",
                                           "api_key": "sekret"})
         assert report["ok"] is False and "sekret" not in report["message"]
     finally:
-        interp._post = real_post
+        interp.post = real_post
 
     # the check gives reasoning models output headroom (same ceiling as interpret)
     def spy_post(base, key, payload, timeout):
@@ -373,26 +373,26 @@ def test_interpretation_bounds():
         return {"choices": [{"message": {"content": '{"ok": true, "color": "red"}'},
                              "finish_reason": "stop"}]}
 
-    interp._post = spy_post
+    interp.post = spy_post
     try:
         report = interp.check_connection({"base_url": "http://h/x", "model": "m"})
         assert report["ok"] is True
         assert calls[-1]["max_tokens"] == interp.OUTPUT_TOKENS_MAX
     finally:
-        interp._post = real_post
+        interp.post = real_post
 
     # a length-truncated empty answer reports the ceiling, not raw response soup
     def long_post(base, key, payload, timeout):
         return {"choices": [{"message": {"content": "", "reasoning_content": "thinking"},
                              "finish_reason": "length"}]}
 
-    interp._post = long_post
+    interp.post = long_post
     try:
         report = interp.check_connection({"base_url": "http://h/x", "model": "m"})
         assert report["ok"] is False and "output ceiling" in report["message"]
         assert "thinking" not in report["message"]
     finally:
-        interp._post = real_post
+        interp.post = real_post
     print("interpretation bounds ok")
 
 
@@ -427,7 +427,7 @@ def test_screening_policy():
         with mock.patch.object(interp.judgment, "available", return_value=False), \
              mock.patch.object(interp.judgment, "screen_material",
                                side_effect=AssertionError("must not screen")), \
-             mock.patch.object(interp, "_post", ok_post):
+             mock.patch.object(interp, "post", ok_post):
             findings = interp.interpret(source, cfg, categories)
         assert findings["repos"] == ["https://github.com/owner/repo"]
         assert findings["installs"] == ["pip install foo"]
@@ -437,7 +437,7 @@ def test_screening_policy():
         with mock.patch.object(interp.judgment, "available", return_value=True), \
              mock.patch.object(interp.judgment, "screen_material",
                                screen(0.98, sev=2.0)), \
-             mock.patch.object(interp, "_post", spy_post):
+             mock.patch.object(interp, "post", spy_post):
             try:
                 interp.interpret(source, cfg, categories)
                 raise AssertionError("severe interpreter-directed content accepted")
@@ -449,7 +449,7 @@ def test_screening_policy():
         with mock.patch.object(interp.judgment, "available", return_value=True), \
              mock.patch.object(interp.judgment, "screen_material",
                                screen(0.90, sev=1.0)), \
-             mock.patch.object(interp, "_post", ok_post):
+             mock.patch.object(interp, "post", ok_post):
             findings = interp.interpret(source, cfg, categories)
         assert findings["repos"] == [] and findings["installs"] == []
         assert any("repos and installs withheld" in w for w in findings["warnings"])
@@ -457,7 +457,7 @@ def test_screening_policy():
         # mid steer: flagged, but findings pass through intact
         with mock.patch.object(interp.judgment, "available", return_value=True), \
              mock.patch.object(interp.judgment, "screen_material", screen(0.50)), \
-             mock.patch.object(interp, "_post", ok_post):
+             mock.patch.object(interp, "post", ok_post):
             findings = interp.interpret(source, cfg, categories)
         assert findings["repos"] == ["https://github.com/owner/repo"]
         assert any("suspicious content flagged" in w for w in findings["warnings"])
@@ -468,7 +468,7 @@ def test_screening_policy():
 
         with mock.patch.object(interp.judgment, "available", return_value=True), \
              mock.patch.object(interp.judgment, "screen_material", boom), \
-             mock.patch.object(interp, "_post", ok_post):
+             mock.patch.object(interp, "post", ok_post):
             findings = interp.interpret(source, cfg, categories)
         assert findings["repos"] == ["https://github.com/owner/repo"]
         assert any("screening unavailable" in w for w in findings["warnings"])

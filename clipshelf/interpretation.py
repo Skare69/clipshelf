@@ -4,6 +4,9 @@ base_url/model are valid (trusted LAN endpoint). The LLM connection is a
 separate trust path from public fetch policy; only the current capture's
 material is sent. Findings shape, types, sizes, and URL validity are enforced;
 one malformed retry; never invents findings on configuration failure.
+
+Transport seam: post() below is the ONE http adapter. Tests fake it instead
+of reaching further in; the worker owns retries and policy around it.
 """
 import base64
 import io
@@ -98,7 +101,7 @@ def _config(config):
 
 
 # ------------------------------------------------------------- HTTP core
-def _post(base, key, payload, timeout):
+def post(base, key, payload, timeout):
     """One bounded request. The worker owns transport retries and backoff."""
     body = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
@@ -419,7 +422,7 @@ def interpret(source, config, categories, screening_key=None):
         if reason:
             messages = messages + [{"role": "user",
                                     "content": _RETRY_NOTE.format(reason=reason)}]
-        response = _post(base, key, {"model": model, "messages": messages,
+        response = post(base, key, {"model": model, "messages": messages,
                                     "max_tokens": OUTPUT_TOKENS_MAX,
                                     "temperature": 0.2}, LLM_TIMEOUT)
         content = _content(response, key)
@@ -462,7 +465,7 @@ def check_connection(config):
             {"type": "text", "text": "What is the dominant color of this image?"},
             image]}]
     try:
-        response = _post(base, key, {"model": model, "messages": messages,
+        response = post(base, key, {"model": model, "messages": messages,
                                      "max_tokens": OUTPUT_TOKENS_MAX,
                                      "temperature": 0}, CHECK_TIMEOUT)
         raw = _content(response, key)
