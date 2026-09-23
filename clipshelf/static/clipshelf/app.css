@@ -287,8 +287,9 @@ dialog::backdrop{background:rgba(10,5,20,.45);backdrop-filter:blur(2px)}
 .msg-warning,.msg-info{background:var(--warn-container);color:var(--on-warn-container);
   border-color:transparent}
 .foot{padding:18px 0;font-size:12.5px;color:var(--outline)}
-.foot a{color:var(--outline)}
+.foot a{color:var(--outline);font-weight:700}
 .ver{text-align:center;padding:10px 0 22px;font-size:12px;color:var(--outline)}
+.ver a{color:inherit;font-weight:700}
 /* ---------- mobile ---------- */
 #scrim{position:fixed;inset:0;z-index:15;background:rgba(0,0,0,.4)}
 @media (max-width:960px){
