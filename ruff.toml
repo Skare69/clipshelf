@@ -1,0 +1,11 @@
+# Conservative lint for the Django code in the clipshelf package.
+# E/F core plus the built-in Django (DJ) rules — DJ stays only while zero-churn.
+target-version = "py313"
+include = ["clipshelf/**/*.py"]
+
+[lint]
+select = ["E", "F", "DJ"]
+# ponytail: E501 has no autofix and reformatting files is churn beyond this task;
+# drop the ignore if a formatter lands later. DJ012 (method ordering in models)
+# needs manual reordering — the only DJ rule that churns today.
+ignore = ["E501", "DJ012"]
