@@ -350,7 +350,7 @@ def api_collection_members(request, collection_id):
             raise ApiError(409, "conflict", "owner is already a member")
         try:
             with transaction.atomic():  # keep the outer transaction usable on conflict
-                membership = Membership.objects.create(collection=collection, user=target)
+                Membership.objects.create(collection=collection, user=target)
         except IntegrityError:
             raise ApiError(409, "conflict", "already a member")
         return _json(

@@ -21,7 +21,7 @@ import urllib.parse
 from PIL import Image
 
 from clipshelf import network
-from clipshelf.lib import TEXT_LIMIT, PageParser, is_short, norm
+from clipshelf.lib import PageParser, is_short, norm
 
 __all__ = ["AcquisitionError", "acquire", "import_export", "validate_image",
            "validate_video_file"]
