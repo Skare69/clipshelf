@@ -74,6 +74,7 @@ urlpatterns = [
     path("admin/llm/models", admin_views.llm_models),
     path("admin/llm/check", admin_views.llm_check),
     path("admin/llm", admin_views.llm_config),
+    path("admin/invitations", admin_views.invitations),
     path("invite/<str:token>", accounts.invite_view, name="clipshelf_invite"),
     path("accounts/", include("allauth.account.urls")),
     path("_allauth/", include("allauth.headless.urls")),
@@ -576,6 +577,39 @@ class LlmModelPickerTests(AccountTestCase):
         self.client.force_login(make_user("member@clipshelf.test"))
         self.assertEqual(self.admin_post("/admin/llm/models", body, reauth=True).status_code, 403)
         self.assertEqual(self.requests, [])
+
+
+class InvitationUrlOriginTests(AccountTestCase):
+    """The copyable invitation link follows the approved canonical origin;
+    a spoofed Host header must never choose its destination (finding D3)."""
+
+    def _admin_post_invitation(self, **client_kwargs):
+        return self.client.post(
+            "/admin/invitations",
+            data=json.dumps(
+                {"email": "newbie@clipshelf.test", "reauth_password": PASSWORD}
+            ),
+            content_type="application/json",
+            **client_kwargs,
+        )
+
+    def test_configured_origin_overrides_host_header(self):
+        self.client.force_login(self.admin)
+        with override_settings(CLIPSHELF_ORIGIN="https://clipshelf.example"):
+            response = self._admin_post_invitation(HTTP_HOST="evil.example")
+        self.assertEqual(response.status_code, 201)
+        url = response.json()["invitation"]["url"]
+        self.assertTrue(url.startswith("https://clipshelf.example/invite/"))
+
+    def test_unset_origin_keeps_the_request_host_fallback(self):
+        self.client.force_login(self.admin)
+        response = self._admin_post_invitation()
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            response.json()["invitation"]["url"].startswith(
+                "http://testserver/invite/"
+            )
+        )
 
 
 class JobPolicyTests(SimpleTestCase):

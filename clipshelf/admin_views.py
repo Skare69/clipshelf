@@ -30,6 +30,7 @@ from clipshelf.accounts import (
     ApiError,
     api_csrf,
     api_user,
+    canonical_url,
     has_recent_reauthentication,
     invitation_token_hash,
     json_error,
@@ -224,8 +225,9 @@ def invitations(request, user):
     )
     data = _invitation_dict(invitation)
     # The copyable link exists exactly once: raw tokens are never stored.
-    data["url"] = request.build_absolute_uri(
-        reverse("clipshelf_invite", args=[token])
+    # Host headers are untrusted: prefer the approved canonical origin.
+    data["url"] = canonical_url(
+        request.build_absolute_uri(reverse("clipshelf_invite", args=[token]))
     )
     return JsonResponse({"invitation": data}, status=201)
 

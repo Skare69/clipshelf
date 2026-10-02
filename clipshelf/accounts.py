@@ -89,6 +89,19 @@ class InviteSignupForm(SignupForm):
         return email
 
 
+# Links always come from the configured origin, never a Host header. With no
+# CLIPSHELF_ORIGIN configured the URL is returned unchanged.
+def canonical_url(url):
+    origin = getattr(django_settings, "CLIPSHELF_ORIGIN", "") or ""
+    if not origin:
+        return url
+    base = urlsplit(origin)
+    parts = urlsplit(url)
+    return urlunsplit(
+        (base.scheme, base.netloc, parts.path, parts.query, parts.fragment)
+    )
+
+
 class AccountAdapter(DefaultAccountAdapter):
     """Allauth adapter implementing invitation-only admission.
 
@@ -132,19 +145,13 @@ class AccountAdapter(DefaultAccountAdapter):
         return saved
 
     # -- links always come from the configured origin, never a Host header ----
-    def _origin(self, url):
-        origin = getattr(django_settings, "CLIPSHELF_ORIGIN", "") or ""
-        if not origin:
-            return url
-        base = urlsplit(origin)
-        parts = urlsplit(url)
-        return urlunsplit((base.scheme, base.netloc, parts.path, parts.query, parts.fragment))
-
     def get_reset_password_from_key_url(self, key):
-        return self._origin(super().get_reset_password_from_key_url(key))
+        return canonical_url(super().get_reset_password_from_key_url(key))
 
     def get_email_confirmation_url(self, request, emailconfirmation):
-        return self._origin(super().get_email_confirmation_url(request, emailconfirmation))
+        return canonical_url(
+            super().get_email_confirmation_url(request, emailconfirmation)
+        )
 
     def send_mail(self, template_prefix, email, context):
         # SMTP failures must stay observable: never swallow them into a fake
