@@ -46,6 +46,11 @@ Published image (linux/amd64 + linux/arm64), built and verified by CI:
 [release](https://github.com/Skare69/clipshelf/releases) — there is no app
 store, you sideload it.
 
+Android APK versions come from the release tag: `versionName` is the tag
+without its `v`, and `versionCode` is `major*1_000_000 + minor*1_000 + patch`
+so later tags always sort above earlier installs. Untagged builds must pass
+`-PversionName=X.Y.Z` or the build fails.
+
 ```
 cp deploy/clipshelf.env.example .env      # fill in image, UID/GID, data dir, port
 docker compose up -d

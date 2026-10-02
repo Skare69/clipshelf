@@ -33,7 +33,11 @@ jobs:
             fi
           done
           exit "$missing"
+      # Full history so :app:assembleRelease can stamp versionName/versionCode
+      # from the nearest v* tag (android/app/build.gradle releaseVersion rule).
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Restore keystore outside the repo
         run: |
           echo "$CLIPSHELF_RELEASE_KEYSTORE_BASE64" | base64 -d > "$HOME/clipshelf-release.jks"

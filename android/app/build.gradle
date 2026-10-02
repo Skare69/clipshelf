@@ -2,6 +2,37 @@ plugins {
     id "com.android.application"
 }
 
+// Release versioning: the v* tag is the single source of truth, shared by local
+// and CI builds. versionName comes from -PversionName=X.Y.Z when supplied,
+// else the nearest vX.Y.Z git tag (so CI needs full tag history — see
+// android-release.yml fetch-depth). versionCode packs the semver as
+// major*1_000_000 + minor*1_000 + patch, so any later tag outranks every
+// earlier build (and the legacy hardcoded versionCode 1). A build that cannot
+// derive a valid version fails loudly instead of stamping a wrong version.
+def releaseVersion = {
+    def name = providers.gradleProperty('versionName').orElse('').get()
+    if (!name) {
+        try {
+            def out = new ByteArrayOutputStream()
+            project.exec {
+                commandLine 'git', 'describe', '--tags', '--abbrev=0'
+                standardOutput = out
+                ignoreExitValue = true
+            }
+            name = out.toString().trim()
+        } catch (Exception ignored) {
+            // no git on PATH — handled by the loud failure below
+        }
+    }
+    def m = name =~ /^v?(\d+)\.(\d+)\.(\d+)$/
+    if (!m) throw new GradleException(
+        "Cannot derive release version from '${name}' — tag as vX.Y.Z or pass -PversionName=X.Y.Z")
+    def (major, minor, patch) = [m[0][1], m[0][2], m[0][3]]*.toInteger()
+    if ([major, minor, patch].any { it > 999 }) throw new GradleException(
+        "Version '${name}' has a component > 999; versionCode packing would not stay monotonic")
+    [name: "$major.$minor.$patch", code: major * 1_000_000 + minor * 1_000 + patch]
+}()
+
 android {
     namespace "dev.clipshelf.app"
     compileSdk 35
@@ -10,8 +41,8 @@ android {
         applicationId "dev.clipshelf.app"
         minSdk 26
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        versionCode releaseVersion.code
+        versionName releaseVersion.name
     }
 
     signingConfigs {
