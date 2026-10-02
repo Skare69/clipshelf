@@ -111,8 +111,16 @@ public final class OutboxStore extends SQLiteOpenHelper {
             "requested_collection_id", "state", "attempts", "last_error", "receipt_json",
             "created_at", "updated_at", "delivered_at"};
 
-    public List<Row> listAll() {
-        return query(null, null, "created_at DESC");
+    /** Newest page for the outbox screen, newest first. */
+    public List<Row> listNewest(int limit) {
+        return query(null, null, "created_at DESC, id DESC LIMIT " + Math.max(1, limit));
+    }
+
+    /** Next older page after the (created_at, id) keyset position; stable across deletes. */
+    public List<Row> listOlderThan(long createdAt, String id, int limit) {
+        return query("created_at < ? OR (created_at = ? AND id < ?)",
+                new String[]{String.valueOf(createdAt), String.valueOf(createdAt), id},
+                "created_at DESC, id DESC LIMIT " + Math.max(1, limit));
     }
 
     public List<Row> listQueuedFor(String instanceId, String userId, int limit) {
@@ -208,6 +216,11 @@ public final class OutboxStore extends SQLiteOpenHelper {
 
     public int deleteDelivered() {
         return db().delete(TABLE, "state=" + STATE_DELIVERED, null);
+    }
+
+    /** Explicit user delete of a single row (the UI offers it for rejected/paused rows). */
+    public int delete(String id) {
+        return db().delete(TABLE, "id=?", new String[]{id});
     }
 
     private void update(String id, int state, String error, String receiptJson, long deliveredAt) {

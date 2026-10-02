@@ -1,8 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
-<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:padding="16dp"
-    android:text="@string/limits_text"
-    android:textAppearance="?android:attr/textAppearanceSmall"
-    android:textColor="@color/text_secondary" />
+    android:orientation="vertical">
+
+    <Button
+        android:id="@+id/outbox_load_older"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="16dp"
+        android:text="@string/outbox_load_older"
+        android:visibility="gone" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:padding="16dp"
+        android:text="@string/limits_text"
+        android:textAppearance="?android:attr/textAppearanceSmall"
+        android:textColor="@color/text_secondary" />
+</LinearLayout>

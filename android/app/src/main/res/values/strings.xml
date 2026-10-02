@@ -59,6 +59,9 @@
     <string name="outbox_other_account">Saved for %1$s — sign in as that account on %2$s to deliver.</string>
     <string name="outbox_toast_requeued">Requeued for delivery.</string>
     <string name="outbox_toast_cleared">Delivered entries cleared.</string>
+    <string name="outbox_toast_deleted">Entry deleted.</string>
+    <string name="outbox_delete">Delete</string>
+    <string name="outbox_load_older">Load older entries</string>
 
     <!-- Platform limits disclosure (plan section 4) -->
     <string name="limits_title">Background delivery limits</string>

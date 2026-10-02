@@ -27,9 +27,13 @@ import dev.clipshelf.app.work.WorkScheduler;
  */
 public class OutboxActivity extends Activity {
 
+    private static final int PAGE_SIZE = 100;
+
     private OutboxStore db;
     private List<OutboxStore.Row> rows;
     private Adapter adapter;
+    private Button loadOlder;
+    private boolean haveMore;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,6 +57,8 @@ public class OutboxActivity extends Activity {
         list.addHeaderView(header);
 
         View footer = LayoutInflater.from(this).inflate(R.layout.item_outbox_limits, list, false);
+        loadOlder = footer.findViewById(R.id.outbox_load_older);
+        loadOlder.setOnClickListener(v -> loadOlder());
         list.addFooterView(footer);
 
         adapter = new Adapter();
@@ -72,10 +78,25 @@ public class OutboxActivity extends Activity {
     }
 
     private void reload() {
-        rows = db.listAll();
+        rows = db.listNewest(PAGE_SIZE);
+        haveMore = rows.size() == PAGE_SIZE;
+        loadOlder.setVisibility(haveMore ? View.VISIBLE : View.GONE);
         adapter.notifyDataSetChanged();
         TextView empty = findViewById(R.id.outbox_empty);
         empty.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);
+    }
+
+    /** Appends the next older page; keyset paging stays stable across deletes. */
+    private void loadOlder() {
+        if (rows == null || rows.isEmpty()) {
+            return;
+        }
+        OutboxStore.Row last = rows.get(rows.size() - 1);
+        List<OutboxStore.Row> older = db.listOlderThan(last.createdAt, last.id, PAGE_SIZE);
+        rows.addAll(older);
+        haveMore = older.size() == PAGE_SIZE;
+        loadOlder.setVisibility(haveMore ? View.VISIBLE : View.GONE);
+        adapter.notifyDataSetChanged();
     }
 
     private void actOn(OutboxStore.Row row) {
@@ -87,6 +108,11 @@ public class OutboxActivity extends Activity {
                 .setPositiveButton(R.string.outbox_requeue, (d, w) -> {
                     db.requeue(row.id);
                     WorkScheduler.drainNow(this);
+                    reload();
+                })
+                .setNeutralButton(R.string.outbox_delete, (d, w) -> {
+                    db.delete(row.id);
+                    Toast.makeText(this, R.string.outbox_toast_deleted, Toast.LENGTH_SHORT).show();
                     reload();
                 })
                 .setNegativeButton(R.string.cancel, null)
