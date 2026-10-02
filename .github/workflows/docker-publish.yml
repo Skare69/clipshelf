@@ -63,7 +63,9 @@ jobs:
           VERSION_INPUT: ${{ inputs.version }}
         run: |
           v="${VERSION_INPUT:-${GITHUB_REF_NAME#v}}"
-          case "$v" in ""|*[!0-9.]*) echo "::error::invalid version '$v' (need numeric like 1.0.0)"; exit 1;; esac
+          if ! [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::invalid version '$v' (need exactly three numeric components like 1.0.0)"; exit 1
+          fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
           image="$(printf '%s' 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
           major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%.*}"
