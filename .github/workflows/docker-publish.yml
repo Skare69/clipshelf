@@ -45,6 +45,36 @@ jobs:
             echo "::error::entrypoint accepted an unknown operation"; exit 1
           fi
           echo "ok: unknown op rejected"
+      - name: Verify default serve, startup migrations, and healthcheck
+        # Finding G8: never verified the default CMD `serve` end to end. Start
+        # it exactly as operators do (no command, no debug env), against a
+        # throwaway data dir inside the container — no host volume, nothing
+        # pre-existing is touched or deleted. On a fresh dir, /healthz answering
+        # ok+database proves startup migrations applied (get_settings needs the
+        # migrated schema). The probe is deploy/healthcheck.py, the same script
+        # compose.yaml wires as the container healthcheck. Teardown is a normal
+        # graceful `docker stop` (SIGTERM) of the throwaway container.
+        run: |
+          docker run -d --rm --name clipshelf-verify-serve \
+            -e CLIPSHELF_DATA_DIR=/tmp/vdata clipshelf:verify
+          trap 'docker stop clipshelf-verify-serve' EXIT
+          healthy=""
+          for _ in $(seq 1 30); do
+            if docker exec clipshelf-verify-serve python deploy/healthcheck.py; then
+              healthy=1
+              break
+            fi
+            sleep 2
+          done
+          if [ -z "$healthy" ]; then
+            docker logs clipshelf-verify-serve
+            echo "::error::default serve never answered /healthz (bounded 60s poll)"
+            exit 1
+          fi
+          echo "ok: /healthz ok+database on a fresh data dir (startup migrations applied)"
+          docker logs clipshelf-verify-serve 2>&1 | grep -F 'clipshelf on http://' \
+            || { echo "::error::serve banner missing — waitress did not bind after migrations"; exit 1; }
+          echo "ok: default serve bound 0.0.0.0:8000 and healthy"
 
   publish:
     needs: verify
