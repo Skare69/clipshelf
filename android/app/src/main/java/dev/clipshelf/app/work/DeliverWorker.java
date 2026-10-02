@@ -26,6 +26,11 @@ import dev.clipshelf.app.outbox.OutboxStore;
  *  5. Transport failures and 5xx retry with WorkManager exponential backoff;
  *     the server dedupes via client_request_id, so a lost response cannot
  *     create a second contribution or reroute an accepted receipt.
+ *  6. Endpoint semantics (review A10 decision): identity binds a row, not the
+ *     hostname. Delivery posts through the active profile's endpoint, so a
+ *     settings-verified host change under the same instance/account moves
+ *     queued transport; row.endpoint is capture-time provenance only, and a
+ *     different server/account never acquires queued rows.
  */
 public class DeliverWorker extends Worker {
 

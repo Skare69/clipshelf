@@ -13,8 +13,13 @@ import java.util.UUID;
 /**
  * App-private durable outbox. Rows are keyed by the client request UUID and
  * carry the server instance + account identity they were captured for, so an
- * endpoint or account change can never reroute them. Schema changes must be
- * non-destructive upgrades (ALTER TABLE), never drops or recreations.
+ * endpoint or account change can never reroute them. Identity binds a row,
+ * not the hostname: delivery routes through the active profile's endpoint
+ * once it has verified the same instance + account (see DeliverWorker), so a
+ * verified host change moves queued transport. The endpoint column is
+ * capture-time provenance for the outbox screen, never a routing input.
+ * Schema changes must be non-destructive upgrades (ALTER TABLE), never drops
+ * or recreations.
  */
 public final class OutboxStore extends SQLiteOpenHelper {
 
@@ -29,7 +34,7 @@ public final class OutboxStore extends SQLiteOpenHelper {
             + "instance_id TEXT NOT NULL,"
             + "user_id TEXT NOT NULL,"
             + "account_email TEXT NOT NULL,"
-            + "endpoint TEXT NOT NULL,"                  // routing snapshot at capture time
+            + "endpoint TEXT NOT NULL,"                  // capture-time provenance (outbox screen); never a routing input
             + "text TEXT NOT NULL,"
             + "requested_collection_id TEXT,"
             + "state INTEGER NOT NULL DEFAULT 0,"

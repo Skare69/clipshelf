@@ -189,6 +189,16 @@ background daemon. Primary docs: [receiving shared data][android-receive],
 - Persist the destination at capture time. Changing the default affects future
   shares only. Identify outboxes by server instance and account, not just the
   currently selected login or a changeable hostname.
+- Endpoint semantics (decided for review finding A10): a queued share is bound
+  by identity (server instance + account), never by the capture-time hostname.
+  Delivery posts through the active profile's endpoint, and only after that
+  endpoint has proven the same identity: a hostname/origin change in settings
+  must pass a verified `/api/me` identity match before it applies, every drain
+  re-verifies identity before any POST, and a receipt must match the row's
+  identity or delivery blocks. A verified hostname change under the same
+  instance/account therefore moves queued transport; a different server or
+  account never acquires queued rows. The row's capture-time endpoint column
+  is provenance for the outbox screen, never a routing input.
 - Store revocable session credentials separately with platform-backed protection;
   do not retain the password or require a biometric prompt on each background
   retry. Use allauth's maintained mobile session-token path, not homemade JWTs.
