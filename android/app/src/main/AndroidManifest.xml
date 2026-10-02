@@ -3,8 +3,12 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Backup off (review A3): prefs hold identity + the Keystore-encrypted
+         session token, outbox.db holds captured shared text and receipts.
+         Keystore keys never survive restore anyway, so backup would only
+         export ciphertext + identity. No OS backup, no device transfer. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.Clipshelf"
