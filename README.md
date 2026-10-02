@@ -77,6 +77,25 @@ redirect, HSTS and secure cookies — set it only when a TLS ingress actually
 terminates in front of the app. The residual risk of the wildcard host default
 is DNS rebinding; narrow it by setting `CLIPSHELF_ALLOWED_HOSTS`.
 
+### Dependency and build pinning
+
+`requirements.txt` holds version ranges for local development. CI and the
+published image install one hash-locked resolution of it — `requirements.lock`,
+with per-platform wheel hashes for Windows CI and linux/amd64 + arm64 — so the
+audited set is the shipped set:
+
+- `python scripts/lock_deps.py check` fails when `requirements.txt` would
+  resolve differently from the lock (CI runs this gate).
+- `python scripts/lock_deps.py make` regenerates the lock — after changing
+  `requirements.txt`, or when the check fails on a new upstream release.
+- `pip-audit` in CI audits the lock directly (`--no-deps`), never a fresh
+  re-resolution.
+
+The image base is pinned by manifest digest (`python:3.13-slim@sha256:...`)
+and every GitHub Action is pinned to a commit SHA. Bump these deliberately,
+one review per bump; the publish workflow additionally verifies the built
+image's installed packages against the lock before pushing.
+
 ## The loop
 
 1. **Capture** — share to the Android app (saved on the phone first, delivered in

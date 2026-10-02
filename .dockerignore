@@ -6,6 +6,7 @@
 !clipshelf.py
 !deploy/
 !requirements.txt
+!requirements.lock
 !THIRD_PARTY_NOTICES.md
 
 # Even inside included trees, never ship generated/volatile state.

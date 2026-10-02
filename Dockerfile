@@ -4,13 +4,13 @@
 #
 # Multistage: the first stage compiles the pinned SQLite with the WAL-reset fix
 # (>= 3.51.3, per https://www.sqlite.org/wal.html); its compilers and headers
-# are discarded and only the shared library ships. Pin the base image digest
-# after the first verified build:
-#   docker image inspect python:3.13-slim --format '{{index .RepoDigests 0}}'
+# are discarded and only the shared library ships.
+# Both stages pin python:3.13-slim by manifest-list digest (linux/amd64 + arm64);
+# re-pin deliberately after review: docker buildx imagetools inspect python:3.13-slim
 ARG SQLITE_VERSION=3.53.1
 
 # ---- SQLite build stage: gcc/make/libc6-dev live here and are thrown away ----
-FROM python:3.13-slim AS sqlite-build
+FROM python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81 AS sqlite-build
 ARG SQLITE_TARBALL=sqlite-autoconf-3530100.tar.gz
 ARG SQLITE_URL=https://sqlite.org/2026/sqlite-autoconf-3530100.tar.gz
 ARG SQLITE_SHA256=83e6b2020a034e9a7ad4a72feea59e1ad52f162e09cbd26735a3ffb98359fc4f
@@ -49,8 +49,8 @@ RUN set -eux; \
 # No ldconfig here: the builder runs nothing; the runtime stage keeps its own
 # loader path below.
 
-# ---- Runtime stage: same base, no compilers, only the built shared library ---
-FROM python:3.13-slim
+# ---- Runtime stage: same pinned base, no compilers, only the built shared library ---
+FROM python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81
 ARG SQLITE_VERSION
 
 # ffmpeg is the only OS package the worker needs (fixed version within the Debian
@@ -66,11 +66,11 @@ RUN apt-get update \
 COPY --from=sqlite-build /usr/local/lib/libsqlite3.so* /usr/local/lib/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
-# Pinned Python dependencies (owned by clipshelf requirements, includes the
-# gallery-dl / yt-dlp extractors). All ship wheels for this platform; nothing
-# here needs the discarded compiler toolchain.
-COPY requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
+# Hash-locked Python dependencies: the exact resolution CI audits (includes the
+# gallery-dl / yt-dlp extractors); all ship wheels, nothing needs the discarded
+# compiler toolchain. Regenerate with scripts/lock_deps.py.
+COPY requirements.lock /tmp/requirements.lock
+RUN pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock && rm /tmp/requirements.lock
 
 WORKDIR /app
 COPY clipshelf.py clipshelf.py
