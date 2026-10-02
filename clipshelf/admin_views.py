@@ -76,19 +76,28 @@ def admin_endpoint(*methods):
         @wraps(view)
         def wrapped(request, *args, **kwargs):
             if request.method not in methods:
-                return json_error(405, detail="method_not_allowed")
-            try:
-                user = api_user(request)
-            except PermissionDenied:
-                return json_error(401, detail="unauthenticated")
-            if not user.is_app_admin:
-                return json_error(403, detail="forbidden")
-            try:
-                return view(request, user, *args, **kwargs)
-            except ApiError as exc:
-                return exc.response
-            except ValidationError as exc:
-                return json_error(400, errors=[str(m) for m in exc.messages])
+                response = json_error(405, detail="method_not_allowed")
+            else:
+                try:
+                    user = api_user(request)
+                except PermissionDenied:
+                    response = json_error(401, detail="unauthenticated")
+                else:
+                    if not user.is_app_admin:
+                        response = json_error(403, detail="forbidden")
+                    else:
+                        try:
+                            response = view(request, user, *args, **kwargs)
+                        except ApiError as exc:
+                            response = exc.response
+                        except ValidationError as exc:
+                            response = json_error(
+                                400, errors=[str(m) for m in exc.messages]
+                            )
+            # Same contract as the /api wrapper: admin responses carry user,
+            # invitation and reset-link data and never enter private caches.
+            response["Cache-Control"] = "no-store"
+            return response
 
         return wrapped
 

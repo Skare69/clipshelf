@@ -65,6 +65,7 @@ urlpatterns = [
     path("admin/users", admin_views.user_list),
     path("admin/users/<uuid:user_id>/status", admin_views.user_status),
     path("admin/users/<uuid:user_id>/recover", admin_views.user_recover),
+    path("admin/invitations", admin_views.invitations),
     path("admin/collections", admin_views.collection_list),
     path(
         "admin/collections/<uuid:collection_id>/transfer",
@@ -344,6 +345,29 @@ class AdminBoundaryTests(AccountTestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 403)
+
+    def test_admin_responses_are_no_store(self):
+        # Finding D2: users, invitation links and reset links must never land
+        # in private browser caches — success and failure paths alike.
+        self.assertEqual(self.client.get("/admin/users")["Cache-Control"], "no-store")
+        self.client.force_login(self.admin)
+        target = make_user("cache-target@clipshelf.test")
+        responses = [
+            self.admin_post(f"/admin/users/{target.pk}/recover", {}),
+            self.client.get("/admin/users"),
+            self.admin_post(
+                "/admin/invitations",
+                {"email": "invited@clipshelf.test"},
+                reauth=True,
+            ),
+            self.admin_post(f"/admin/users/{target.pk}/recover", {}, reauth=True),
+            self.admin_post("/admin/invitations", {"email": "not-an-email"}),
+        ]
+        self.assertEqual(
+            [r.status_code for r in responses], [403, 200, 201, 200, 400]
+        )
+        for response in responses:
+            self.assertEqual(response["Cache-Control"], "no-store")
 
     def test_admin_role_grants_no_content_access(self):
         other = make_user("other@clipshelf.test")
