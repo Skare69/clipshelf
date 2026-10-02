@@ -63,9 +63,17 @@ public class ShareReceiverActivity extends Activity {
             return;
         }
 
+        OutboxStore db = new OutboxStore(this);
+        long[] usage = db.usage();
+        if (OutboxPolicy.outboxFull((int) usage[0], usage[1],
+                text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)) {
+            reject(title, detail, open, getString(R.string.share_outbox_full,
+                    usage[0], OutboxPolicy.MAX_OUTBOX_ROWS));
+            return;
+        }
+
         String id;
         try {
-            OutboxStore db = new OutboxStore(this);
             id = db.insert(profile.instanceId, profile.userId, profile.email, profile.endpoint,
                     text, profile.defaultCollectionId);
             WorkScheduler.drainNow(this);

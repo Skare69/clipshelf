@@ -22,6 +22,26 @@ public final class OutboxPolicy {
     public static final int MAX_TEXT_BYTES = 32768;
     public static final int MAX_URLS = 50;
 
+    /**
+     * Whole-outbox capacity cap (all identities on this phone): row count and
+     * summed UTF-8 text bytes. Enforced at the share boundary before any
+     * write; a full outbox rejects the new share visibly and never evicts
+     * stored rows.
+     */
+    public static final int MAX_OUTBOX_ROWS = 500;
+    public static final long MAX_OUTBOX_TOTAL_TEXT_BYTES = 8L * 1024 * 1024;
+
+    /**
+     * The outbox is full when the incoming share cannot fit without exceeding
+     * the approved capacity.
+     */
+    // ponytail: text bytes only — receipt/error columns are ~0.2 KB/row and
+    // unaccounted; fold them into OutboxStore.usage() if that ever matters.
+    public static boolean outboxFull(int totalRows, long totalTextBytes, int incomingTextBytes) {
+        return totalRows >= MAX_OUTBOX_ROWS
+                || totalTextBytes + incomingTextBytes > MAX_OUTBOX_TOTAL_TEXT_BYTES;
+    }
+
     public static final Pattern URL_PATTERN =
             Pattern.compile("https?://\\S+", Pattern.CASE_INSENSITIVE);
 

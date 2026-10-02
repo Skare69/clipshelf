@@ -74,6 +74,34 @@ public class OutboxPolicyCheck {
         check("null identity never matches",
                 !OutboxPolicy.identityMatches(null, rowUser, rowInstance, rowUser));
 
+        // Whole-outbox capacity: the cap binds exactly and admission never
+        // deletes anything — the store has no eviction path, so growth stops
+        // at the cap with visible rejection instead of lost shares.
+        check("empty outbox admits one max share",
+                !OutboxPolicy.outboxFull(0, 0L, OutboxPolicy.MAX_TEXT_BYTES));
+        check("row cap admits just below",
+                !OutboxPolicy.outboxFull(OutboxPolicy.MAX_OUTBOX_ROWS - 1, 0L, 1));
+        check("row cap rejects at cap",
+                OutboxPolicy.outboxFull(OutboxPolicy.MAX_OUTBOX_ROWS, 0L, 1));
+        long belowBytes = OutboxPolicy.MAX_OUTBOX_TOTAL_TEXT_BYTES - OutboxPolicy.MAX_TEXT_BYTES;
+        check("byte cap admits share reaching it exactly",
+                !OutboxPolicy.outboxFull(1, belowBytes, OutboxPolicy.MAX_TEXT_BYTES));
+        check("byte cap rejects one byte over",
+                OutboxPolicy.outboxFull(1, belowBytes + 1, OutboxPolicy.MAX_TEXT_BYTES));
+
+        // Offline growth simulation: admit small shares until the outbox is
+        // full; rows only ever grow and stop exactly at the cap.
+        String grow = "https://e.io/offline-growth";
+        int growBytes = grow.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        int grownRows = 0;
+        long grownBytes = 0;
+        while (!OutboxPolicy.outboxFull(grownRows, grownBytes, growBytes)) {
+            grownRows++;
+            grownBytes += growBytes;
+        }
+        check("growth stops exactly at the row cap", grownRows == OutboxPolicy.MAX_OUTBOX_ROWS);
+        check("full outbox stays full", OutboxPolicy.outboxFull(grownRows, grownBytes, growBytes));
+
         if (failures > 0) {
             System.err.println(failures + " check(s) FAILED");
             System.exit(1);

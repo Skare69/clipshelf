@@ -130,6 +130,14 @@ public final class OutboxStore extends SQLiteOpenHelper {
         return out;
     }
 
+    /** Whole-outbox usage across identities: [0] rows, [1] summed UTF-8 text bytes. */
+    public long[] usage() {
+        try (Cursor c = db().rawQuery(
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(text AS BLOB))), 0) FROM " + TABLE, null)) {
+            return c.moveToFirst() ? new long[]{c.getLong(0), c.getLong(1)} : new long[]{0L, 0L};
+        }
+    }
+
     /** Counts for the active profile: index = state constant. */
     public int[] countsFor(String instanceId, String userId) {
         int[] counts = new int[4];

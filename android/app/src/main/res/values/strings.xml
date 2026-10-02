@@ -39,6 +39,7 @@
     <string name="share_too_large">Shared text is too large (%1$d bytes; limit is 32768 bytes).</string>
     <string name="share_no_url">No http(s) link found in the shared text.</string>
     <string name="share_too_many_urls">Too many links in shared text (limit is 50).</string>
+    <string name="share_outbox_full">The outbox is full (%1$d of %2$d entries). Open Clipshelf, open the Outbox, and clear delivered entries to make room.</string>
     <string name="share_wrong_mime">Only text shares are supported.</string>
     <string name="share_not_setup">Clipshelf is not set up yet. Open the app to choose your server and sign in first.</string>
     <string name="share_storage_error">Could not save the share locally. Please try again.</string>
