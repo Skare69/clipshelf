@@ -23,16 +23,15 @@ import javax.crypto.spec.GCMParameterSpec;
 public final class Creds {
 
     public static final class Profile {
-        public final String endpoint, instanceId, userId, email, isAppAdmin;
+        public final String endpoint, instanceId, userId, email;
         public final String defaultCollectionId, defaultCollectionName;
 
-        public Profile(String endpoint, String instanceId, String userId, String email, String isAppAdmin,
+        public Profile(String endpoint, String instanceId, String userId, String email,
                 String defaultCollectionId, String defaultCollectionName) {
             this.endpoint = endpoint;
             this.instanceId = instanceId;
             this.userId = userId;
             this.email = email;
-            this.isAppAdmin = isAppAdmin;
             this.defaultCollectionId = defaultCollectionId;
             this.defaultCollectionName = defaultCollectionName;
         }
@@ -54,7 +53,6 @@ public final class Creds {
     private static final String K_INSTANCE = "instance_id";
     private static final String K_USER = "user_id";
     private static final String K_EMAIL = "email";
-    private static final String K_ADMIN = "is_app_admin";
     private static final String K_DEFAULT_COL = "default_collection_id";
     private static final String K_DEFAULT_COL_NAME = "default_collection_name";
     private static final String K_TOKEN = "session_token";
@@ -70,7 +68,7 @@ public final class Creds {
         }
         return new Profile(endpoint,
                 p.getString(K_INSTANCE, ""), p.getString(K_USER, ""),
-                p.getString(K_EMAIL, ""), p.getString(K_ADMIN, "false"),
+                p.getString(K_EMAIL, ""),
                 p.getString(K_DEFAULT_COL, null), p.getString(K_DEFAULT_COL_NAME, ""));
     }
 
@@ -100,7 +98,6 @@ public final class Creds {
                 .putString(K_INSTANCE, profile.instanceId)
                 .putString(K_USER, profile.userId)
                 .putString(K_EMAIL, profile.email)
-                .putString(K_ADMIN, profile.isAppAdmin)
                 .putString(K_DEFAULT_COL, profile.defaultCollectionId)
                 .putString(K_DEFAULT_COL_NAME, profile.defaultCollectionName)
                 .putString(K_TOKEN, encrypt(token))

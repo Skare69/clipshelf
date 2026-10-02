@@ -69,7 +69,7 @@ public class SetupActivity extends Activity {
                     }
                 }
                 Creds.save(this, new Creds.Profile(endpoint, me.instanceId, me.userId, me.email,
-                        String.valueOf(me.isAppAdmin), me.defaultCollectionId, collectionName), token);
+                        me.defaultCollectionId, collectionName), token);
                 // Durable periodic drain exists before any share is accepted.
                 WorkScheduler.ensurePeriodic(this);
                 // Re-login of this identity resumes its paused rows immediately.

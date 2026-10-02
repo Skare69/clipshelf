@@ -60,7 +60,6 @@ public final class Api {
 
     public static final class Me {
         public final String instanceId, userId, email, defaultCollectionId;
-        public final boolean isAppAdmin;
         public final List<Collection> collections;
 
         Me(JSONObject o) {
@@ -68,7 +67,6 @@ public final class Api {
             JSONObject u = o.optJSONObject("user");
             userId = u == null ? "" : u.optString("id");
             email = u == null ? "" : u.optString("email");
-            isAppAdmin = u != null && u.optBoolean("is_app_admin");
             defaultCollectionId = o.optString("default_collection_id", null);
             collections = new ArrayList<>();
             JSONArray cs = o.optJSONArray("collections");
