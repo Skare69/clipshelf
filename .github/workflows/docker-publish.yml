@@ -3,7 +3,7 @@ name: docker-publish
 # Builds and publishes a versioned image to GHCR. Manual dispatch or v* tag
 # push only — never ordinary pushes, never executed by the agent. The image is
 # built and verified outside the NAS (TrueNAS consumes the published tag).
-# Requires a token with write:packages (workflow GITHUB_TOKEN provides it).
+# Requires a token with write:packages, scoped to the publish job only.
 
 on:
   workflow_dispatch:
@@ -16,7 +16,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   verify:
@@ -79,6 +78,10 @@ jobs:
   publish:
     needs: verify
     runs-on: ubuntu-latest
+    # Job-level permissions replace (not extend) the workflow defaults.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
