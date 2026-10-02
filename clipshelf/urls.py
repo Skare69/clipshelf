@@ -9,6 +9,7 @@ urlpatterns = [
     path("", views.shell, name="shell"),
     path("healthz", views.healthz, name="healthz"),
     path("setup", setup.setup_view, name="clipshelf_setup"),
+    path("api/instance", views.api_instance),
     path("api/me", views.api_me),
     path("api/collections", views.api_collections),
     path("api/collections/<uuid:collection_id>", views.api_collection_detail),

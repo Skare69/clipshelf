@@ -292,6 +292,17 @@ def api_me(request):
     return _json(_me_payload(request.user))
 
 
+@require_GET
+def api_instance(request):
+    """Unauthenticated instance disclosure for client origin verification:
+    the Android client probes a candidate endpoint through this view and only
+    sends its session token after it answers with the instance_id the client
+    is enrolled under (session tokens must never reach unverified origins)."""
+    response = _json({"instance_id": str(services.get_settings().instance_id)})
+    response["Cache-Control"] = "no-store"
+    return response
+
+
 @api
 @require_http_methods(["GET", "POST"])
 def api_collections(request):

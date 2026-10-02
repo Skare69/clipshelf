@@ -115,6 +115,18 @@ class ApiTestCase(TestCase):
         return body
 
 
+class InstanceProbeTests(ApiTestCase):
+    def test_instance_probe_answers_without_credentials(self):
+        # Finding A2 containment: the Android client verifies a candidate
+        # origin through this view BEFORE sending it the session token, so
+        # the probe itself must answer unauthenticated.
+        client = Client()
+        response = client.get("/api/instance")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"instance_id": self.instance_id})
+        self.assertEqual(response["Cache-Control"], "no-store")
+
+
 class AuthenticationBoundaryTests(ApiTestCase):
     def test_unauthenticated_reads_get_json_401(self):
         client = Client()

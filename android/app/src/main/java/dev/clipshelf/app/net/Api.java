@@ -246,6 +246,16 @@ public final class Api {
         return new Me(requestJson(endpoint + "/api/me", "GET", token, null));
     }
 
+    /**
+     * Unauthenticated probe for a candidate origin's instance id. Endpoint
+     * changes use it to verify the candidate serves the enrolled instance
+     * BEFORE any session token is sent there. Takes no token by design.
+     * Servers older than this release answer 404 (endpoint change fails closed).
+     */
+    public static String instanceId(String endpoint) throws IOException {
+        return requestJson(endpoint + "/api/instance", "GET", null, null).optString("instance_id", "");
+    }
+
     public static List<Collection> collections(String endpoint, String token) throws IOException {
         JSONArray a = requestJson(endpoint + "/api/collections", "GET", token, null).optJSONArray("collections");
         List<Collection> out = new ArrayList<>();
@@ -339,7 +349,10 @@ public final class Api {
     public static String downloadAsset(String endpoint, String token, String assetUrlOrPath,
                                        File dest, long maxBytes) throws IOException {
         String url = assetUrlOrPath.startsWith("http") ? assetUrlOrPath : endpoint + assetUrlOrPath;
-        HttpURLConnection c = openWithRedirects(url, "GET", token, null);
+        // Finding A2 containment: the session token never leaves the origin it
+        // was issued for; server-provided absolute asset URLs on other origins
+        // load without it (public assets render, authorized ones fail closed).
+        HttpURLConnection c = openWithRedirects(url, "GET", sameOrigin(url, endpoint) ? token : null, null);
         try {
             int code = c.getResponseCode();
             if (code != 200) {
@@ -391,6 +404,7 @@ public final class Api {
     private static HttpURLConnection openWithRedirects(String url, String method, String token, JSONObject body)
             throws IOException {
         boolean safe = "GET".equals(method);
+        String origin = originOf(url); // the origin the token may travel to
         for (int hop = 0; hop < 4; hop++) {
             checkScheme(url);
             HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
@@ -422,11 +436,39 @@ public final class Api {
                     throw new IOException("Redirect without Location");
                 }
                 url = new URL(new URL(url), loc).toString();
+                if (token != null && !originOf(url).equals(origin)) {
+                    throw new IOException("Refusing cross-origin redirect on an authenticated request");
+                }
                 continue; // re-checked by checkScheme: blocks https -> http downgrade
             }
             return c;
         }
         throw new IOException("Too many redirects");
+    }
+
+    /** scheme + host + effective port; the session token never crosses this boundary. */
+    private static String originOf(String url) throws IOException {
+        try {
+            URL u = new URL(url);
+            int port = u.getPort();
+            if (port == -1) {
+                port = "https".equalsIgnoreCase(u.getProtocol()) ? 443 : 80;
+            }
+            return u.getProtocol().toLowerCase(java.util.Locale.ROOT) + "://"
+                    + u.getHost().toLowerCase(java.util.Locale.ROOT) + ":" + port;
+        } catch (IOException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IOException("Invalid server address");
+        }
+    }
+
+    private static boolean sameOrigin(String a, String b) {
+        try {
+            return originOf(a).equals(originOf(b));
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     /** HTTPS-only in release. Debug builds may use plain http to emulator loopback only. */

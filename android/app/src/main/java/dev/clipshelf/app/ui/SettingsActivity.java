@@ -25,11 +25,14 @@ import dev.clipshelf.app.net.Async.Done;
 import dev.clipshelf.app.outbox.OutboxPolicy;
 
 /**
- * Profile settings. Endpoint changes are verified against GET /api/me first:
- * a different instance or account is refused, because queued shares must
- * never be moved to another server or identity. Same-instance hostname
- * changes are routing-only and leave the outbox identity untouched.
- * Also discloses the Android background-delivery limits.
+ * Profile settings. Endpoint changes are verified in two phases first: an
+ * unauthenticated GET /api/instance must prove the candidate serves this
+ * instance, then GET /api/me confirms the account — a different instance or
+ * account is refused, because queued shares must never be moved to another
+ * server or identity, and the session token never reaches an unverified
+ * origin. Same-instance hostname changes are routing-only and leave the
+ * outbox identity untouched. Also discloses the Android background-delivery
+ * limits.
  */
 public class SettingsActivity extends Activity {
 
@@ -128,24 +131,44 @@ public class SettingsActivity extends Activity {
                 return;
             }
             update.setEnabled(false);
-            Async.go(() -> Api.me(candidate, session.token), (me, error) -> {
-                update.setEnabled(true);
-                if (error != null) {
-                    Toast.makeText(this, Ui.message(this, error), Toast.LENGTH_LONG).show();
+            // Two-phase verification (finding A2 containment): the candidate must
+            // first prove, without any credential, that it serves this instance;
+            // only then does the session token cross to it for the account check.
+            Async.go(() -> Api.instanceId(candidate), (candidateInstanceId, probeError) -> {
+                if (probeError != null) {
+                    update.setEnabled(true);
+                    Toast.makeText(this, Ui.message(this, probeError), Toast.LENGTH_LONG).show();
                     return;
                 }
-                if (OutboxPolicy.identityMatches(me.instanceId, me.userId,
-                        profile.instanceId, profile.userId)) {
-                    Creds.updateEndpoint(this, candidate);
-                    Toast.makeText(this, R.string.endpoint_same_instance_ok, Toast.LENGTH_LONG).show();
-                } else {
-                    // Different server/account: refuse, outbox identity must not move.
+                if (!profile.instanceId.equals(candidateInstanceId)) {
+                    update.setEnabled(true);
+                    // Different server: refuse, outbox identity must not move.
                     new AlertDialog.Builder(this)
                             .setTitle(R.string.error_title)
                             .setMessage(R.string.endpoint_mismatch_rejected)
                             .setPositiveButton(R.string.ok, null)
                             .show();
+                    return;
                 }
+                Async.go(() -> Api.me(candidate, session.token), (me, verifyError) -> {
+                    update.setEnabled(true);
+                    if (verifyError != null) {
+                        Toast.makeText(this, Ui.message(this, verifyError), Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (OutboxPolicy.identityMatches(me.instanceId, me.userId,
+                            profile.instanceId, profile.userId)) {
+                        Creds.updateEndpoint(this, candidate);
+                        Toast.makeText(this, R.string.endpoint_same_instance_ok, Toast.LENGTH_LONG).show();
+                    } else {
+                        // Different account on the same instance: refuse.
+                        new AlertDialog.Builder(this)
+                                .setTitle(R.string.error_title)
+                                .setMessage(R.string.endpoint_mismatch_rejected)
+                                .setPositiveButton(R.string.ok, null)
+                                .show();
+                    }
+                });
             });
         });
 
