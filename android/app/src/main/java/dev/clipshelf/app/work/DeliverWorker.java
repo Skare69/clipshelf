@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.util.List;
 
 import dev.clipshelf.app.Creds;
+import dev.clipshelf.app.PendingLogout;
 import dev.clipshelf.app.R;
 import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.outbox.OutboxPolicy;
@@ -50,6 +51,8 @@ public class DeliverWorker extends Worker {
     @Override
     public Result doWork() {
         Context ctx = getApplicationContext();
+        // Finish any sign-out the network blocked before deciding what to deliver.
+        PendingLogout.revokeAll(ctx);
         Creds.Session session = Creds.session(ctx);
         if (session == null) {
             return Result.success(); // signed out (or token invalidated): nothing deliverable

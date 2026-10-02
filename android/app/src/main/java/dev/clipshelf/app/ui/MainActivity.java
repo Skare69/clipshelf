@@ -6,15 +6,18 @@ import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import android.app.AlertDialog;
 
 import dev.clipshelf.app.Creds;
+import dev.clipshelf.app.PendingLogout;
 import dev.clipshelf.app.R;
-import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.net.Async;
 import dev.clipshelf.app.outbox.OutboxStore;
 import dev.clipshelf.app.work.WorkScheduler;
+
+import java.util.List;
 
 /**
  * Hub. Re-registers the durable periodic drain on every open (KEEP is
@@ -33,6 +36,12 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         render();
+        if (!PendingLogout.pendingLabels(this).isEmpty()) {
+            Async.go(() -> {
+                PendingLogout.revokeAll(this);
+                return null;
+            }, (r, e) -> render());
+        }
         Creds.Profile profile = Creds.profile(this);
         if (profile != null && !profile.instanceId.isEmpty()) {
             WorkScheduler.ensurePeriodic(this);
@@ -70,9 +79,18 @@ public class MainActivity extends Activity {
             server.setVisibility(View.GONE);
             instance.setVisibility(View.GONE);
             summary.setVisibility(View.GONE);
+            List<String> pending = PendingLogout.pendingLabels(this);
+            if (pending.isEmpty()) {
+                hint.setVisibility(View.GONE);
+            } else {
+                hint.setText(getString(R.string.logout_pending,
+                        android.text.TextUtils.join(", ", pending)));
+                hint.setVisibility(View.VISIBLE);
+            }
             return;
         }
 
+        hint.setText(R.string.action_share_hint);
         email.setText(getString(R.string.signed_in_as, p.email));
         server.setText(getString(R.string.server_label, p.endpoint));
         instance.setText(getString(R.string.instance_label,
@@ -111,17 +129,17 @@ public class MainActivity extends Activity {
     private void logout() {
         Creds.Profile p = Creds.profile(this);
         Creds.Session s = Creds.session(this);
-        if (p != null && s != null) {
-            Async.go(() -> {
-                Api.logout(p.endpoint, s.token);
-                return null;
-            }, (r, e) -> {
-                Creds.clear(this); // outbox rows stay for this identity
-                render();
-            });
-        } else {
-            Creds.clear(this);
+        if (p == null || s == null) {
+            Creds.clear(this); // outbox rows stay for this identity
             render();
+            return;
         }
+        Async.go(() -> PendingLogout.signOut(this, p.endpoint, p.email, s.token), (notice, e) -> {
+            Creds.clear(this); // outbox rows stay for this identity
+            if (notice != null) {
+                Toast.makeText(this, notice, Toast.LENGTH_LONG).show();
+            }
+            render();
+        });
     }
 }

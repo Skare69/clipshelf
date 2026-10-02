@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import dev.clipshelf.app.Creds;
+import dev.clipshelf.app.PendingLogout;
 import dev.clipshelf.app.R;
 import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.net.Async;
@@ -178,11 +179,12 @@ public class SettingsActivity extends Activity {
                 .setTitle(R.string.logout_confirm_title)
                 .setMessage(R.string.logout_confirm_message)
                 .setPositiveButton(R.string.ok, (d, w) -> {
-                    Async.go(() -> {
-                        Api.logout(session.profile.endpoint, session.token);
-                        return null;
-                    }, (r, e) -> {
+                    Async.go(() -> PendingLogout.signOut(this, session.profile.endpoint,
+                            session.profile.email, session.token), (notice, e) -> {
                         Creds.clear(this);
+                        if (notice != null) {
+                            Toast.makeText(this, notice, Toast.LENGTH_LONG).show();
+                        }
                         startActivity(new Intent(this, SetupActivity.class));
                         finish();
                     });

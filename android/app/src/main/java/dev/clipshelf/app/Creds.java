@@ -124,7 +124,7 @@ public final class Creds {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
     }
 
-    // ---- Keystore AES-GCM ----
+    // ---- Keystore AES-GCM (shared with PendingLogout; never plaintext at rest) ----
 
     private static SecretKey key() throws Exception {
         KeyStore ks = KeyStore.getInstance("AndroidKeyStore");
@@ -143,7 +143,7 @@ public final class Creds {
         return gen.generateKey();
     }
 
-    private static String encrypt(String plain) {
+    static String encrypt(String plain) {
         try {
             Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
             c.init(Cipher.ENCRYPT_MODE, key());
@@ -158,7 +158,7 @@ public final class Creds {
         }
     }
 
-    private static String decrypt(String stored) throws Exception {
+    static String decrypt(String stored) throws Exception {
         byte[] all = Base64.decode(stored, Base64.NO_WRAP);
         Cipher c = Cipher.getInstance("AES/GCM/NoPadding");
         c.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, all, 0, 12));

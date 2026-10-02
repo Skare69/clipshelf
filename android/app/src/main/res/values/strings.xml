@@ -27,6 +27,8 @@
     <string name="action_logout">Sign out</string>
     <string name="logout_confirm_title">Sign out?</string>
     <string name="logout_confirm_message">Queued shares stay saved on this phone for this account and are delivered after you sign back in. They are never sent under a different account.</string>
+    <string name="logout_pending">Signed out. Server sign-out for %1$s is pending and completes automatically when the phone is online.</string>
+    <string name="logout_pending_failed">Signed out on this phone. The server session for %1$s stays active until it expires; pending revocation could not be recorded.</string>
 
     <!-- Share receiver -->
     <string name="share_saved">Saved on phone</string>
