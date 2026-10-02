@@ -10,6 +10,7 @@ from urllib.error import HTTPError, URLError
 
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
+from django.core.exceptions import ValidationError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -603,3 +604,159 @@ def _ingest(path):
     out = io.StringIO()
     call_command("ingest", "--user", "w1@example.com", str(path), stdout=out)
     return jsonlib.loads(out.getvalue())
+
+
+class StagingCleanupTests(WorkerMixin, TestCase):
+    """Review follow-up: rejected/unpublished staging bytes stay owned and
+    retained, and only terminal owners past the window are ever cleanup
+    candidates — never live work or paths no row names."""
+
+    def job_dir(self, job):
+        path = Path(self.tmp) / "staging" / f"job-{job.id}"
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "video.mp4").write_bytes(b"\0" * 32)
+        return path.resolve()
+
+    def media_dir(self):
+        rel = f"staging/import-{uuid.uuid4().hex}"
+        path = self.tmp / rel
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "video.mp4").write_bytes(b"\0" * 32)
+        return rel, path.resolve()
+
+    def record(self, rel, status, completed_at=None):
+        manifest = {"media_staging": rel, "status": status}
+        if completed_at is not None:
+            manifest["completed_at"] = completed_at
+        return models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex, manifest=manifest)
+
+    def backdate(self, job, days=60):
+        models.Job.objects.filter(pk=job.pk).update(
+            updated_at=timezone.now() - timedelta(days=days))
+
+    def candidates(self, days):
+        now = timezone.now() + timedelta(days=days)
+        with override_settings(DATA_DIR=str(self.tmp)):
+            return (worker.job_staging_cleanup_candidates(now=now),
+                    worker.import_media_cleanup_candidates(now=now))
+
+    def test_job_dirs_expire_only_after_the_terminal_window(self):
+        active = self.make_job(state="queued")
+        self.backdate(active)
+        fresh = self.make_job(state="blocked")
+        old_blocked = self.make_job(state="blocked")
+        self.backdate(old_blocked)
+        old_done = self.make_job(state="done")
+        self.backdate(old_done)
+        dirs = {job.id: self.job_dir(job)
+                for job in (active, fresh, old_blocked, old_done)}
+        # 60-day-old terminal dirs pass the 30-day window; the active job and
+        # the fresh blocked job stay ineligible.
+        self.assertEqual(self.candidates(0)[0],
+                         sorted([dirs[old_blocked.id], dirs[old_done.id]]))
+        self.assertEqual(self.candidates(31)[0],
+                         sorted([dirs[fresh.id], dirs[old_blocked.id],
+                                 dirs[old_done.id]]))
+
+    def test_unowned_and_misplaced_job_paths_are_never_candidates(self):
+        old = self.make_job(state="blocked")
+        self.backdate(old)
+        # A directory no Job row names (stray or crash leftover) is unreachable.
+        stray = Path(self.tmp) / "staging" / f"job-{uuid.uuid4()}"
+        stray.mkdir(parents=True)
+        self.assertEqual(self.candidates(3650)[0], [])
+        # Terminal job, but nothing (or a plain file) at its staging path.
+        (Path(self.tmp) / "staging" / f"job-{old.id}").write_text("x")
+        self.assertEqual(self.candidates(3650)[0], [])
+        models.Job.objects.filter(pk=old.pk).update(state="done")
+        self.assertEqual(self.candidates(3650)[0], [])
+
+    def test_media_dirs_expire_only_after_the_terminal_window(self):
+        live_rel, live_path = self.media_dir()
+        self.record(live_rel, "pending",
+                    completed_at=(timezone.now() - timedelta(days=60)).isoformat())
+        old = (timezone.now() - timedelta(days=60)).isoformat()
+        failed_rel, failed_path = self.media_dir()
+        self.record(failed_rel, "error", completed_at=old)
+        fresh_rel, fresh_path = self.media_dir()
+        self.record(fresh_rel, "done", completed_at=timezone.now().isoformat())
+        self.assertEqual(self.candidates(0)[1], [failed_path])
+        self.assertEqual(self.candidates(31)[1], sorted([failed_path, fresh_path]))
+        # A live (pending) owner keeps its directory ineligible at any age.
+        self.assertNotIn(live_path, self.candidates(3650)[1])
+
+    def test_live_owner_keeps_a_shared_media_dir_ineligible(self):
+        old = (timezone.now() - timedelta(days=60)).isoformat()
+        shared_rel, shared_path = self.media_dir()
+        self.record(shared_rel, "done", completed_at=old)
+        contender = self.record(shared_rel, "pending")
+        self.assertEqual(self.candidates(3650)[1], [])
+        contender.manifest = dict(contender.manifest, status="done")
+        contender.save(update_fields=["manifest"])
+        self.assertEqual(self.candidates(3650)[1], [shared_path])
+
+    def test_import_ownership_survives_a_crashed_media_directory(self):
+        record = models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "pending"})
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch.object(worker, "_stage_items",
+                                  side_effect=ValidationError("boom")):
+            with self.assertRaises(ValidationError):
+                worker.import_items(user=self.user, collection_id=self.personal.id,
+                                    record=record,
+                                    items=[{"url": "https://example.com/a"}])
+        record.refresh_from_db()
+        # The staged work failed, but the directory was owned by name before
+        # any work ran and the finally-cleanup removed it; recreating the
+        # crash state makes it a candidate only once finished and expired.
+        rel = record.manifest["media_staging"]
+        self.assertTrue(rel.startswith("staging/import-"))
+        self.assertFalse((self.tmp / rel).exists())
+        (self.tmp / rel).mkdir(parents=True)
+        self.assertEqual(self.candidates(3650)[1], [])
+        record.manifest = dict(record.manifest, status="error",
+                               completed_at=(timezone.now() - timedelta(days=60))
+                               .isoformat())
+        record.save(update_fields=["manifest"])
+        self.assertEqual(self.candidates(3650)[1], [(self.tmp / rel).resolve()])
+
+    def test_clean_command_lists_then_deletes_only_candidates(self):
+        old_blocked = self.make_job(state="blocked")
+        self.backdate(old_blocked)
+        expired = self.job_dir(old_blocked)
+        live = self.job_dir(self.make_job(state="running"))
+        live_rel, live_media = self.media_dir()
+        self.record(live_rel, "pending")
+        spool_rel = f"staging/import-{uuid.uuid4().hex}.json"
+        spool = self.tmp / spool_rel
+        spool.write_text('[{"url": "https://example.com/s"}]', encoding="utf-8")
+        models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"staging": spool_rel, "status": "done",
+                      "completed_at": (timezone.now() - timedelta(days=60))
+                      .isoformat()})
+        stray = Path(self.tmp) / "staging" / "import-stray.json"
+        stray.write_text("[]", encoding="utf-8")
+
+        listed = io.StringIO()
+        with override_settings(DATA_DIR=str(self.tmp)):
+            call_command("clean", stdout=listed)
+        self.assertIn(str(expired), listed.getvalue())
+        self.assertIn(str(spool), listed.getvalue())
+        self.assertIn("dry run", listed.getvalue())
+        self.assertTrue(expired.exists())
+        self.assertTrue(spool.exists())
+
+        executed = io.StringIO()
+        with override_settings(DATA_DIR=str(self.tmp)):
+            call_command("clean", "--execute", stdout=executed)
+        self.assertIn(f"deleted  {expired}", executed.getvalue())
+        self.assertIn(f"deleted  {spool}", executed.getvalue())
+        self.assertFalse(expired.exists())
+        self.assertFalse(spool.exists())
+        # Live work, its media dir, and unowned paths are untouched.
+        self.assertTrue(live.exists())
+        self.assertTrue(live_media.exists())
+        self.assertTrue(stray.exists())

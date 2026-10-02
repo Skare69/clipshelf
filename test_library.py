@@ -6,6 +6,7 @@ Real database, real views, real authorization — no mocks.
 
 import json
 import os
+import shutil
 import tempfile
 import uuid
 from datetime import timedelta
@@ -28,6 +29,7 @@ PASSWORD = "test-pass-1234"
 class ApiTestCase(TestCase):
     def setUp(self):
         tmp = tempfile.mkdtemp(prefix="clipshelf-test-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         override = override_settings(DATA_DIR=tmp)
         override.enable()
         self.addCleanup(override.disable)

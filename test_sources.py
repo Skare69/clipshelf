@@ -5,6 +5,7 @@ import gzip
 import json
 import io
 import socket
+import shutil
 import tempfile
 import os
 import unittest
@@ -556,7 +557,11 @@ def test():
     print("ssrf/pin ok")
     test_redirects_and_bounds()
     print("redirect/bounds ok")
-    test_import_media_bounds()
+    tmp = tempfile.mkdtemp(prefix="cs-src-")
+    try:
+        test_import_media_bounds(tmp)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     test_interpretation_bounds()
     test_screening_policy().debug()
     test_list_models()

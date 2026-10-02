@@ -95,6 +95,23 @@ The image base is pinned by manifest digest (`python:3.13-slim@sha256:...`)
 and every GitHub Action is pinned to a commit SHA. Bump these deliberately,
 one review per bump; the publish workflow additionally verifies the built
 image's installed packages against the lock before pushing.
+### Staging retention and cleanup
+
+Acquisition and import work spools bytes under `<data dir>/staging/` before
+publication. Everything there is owned: a job owns `staging/job-<id>` (its
+rejected or unpublished media, up to the 256 MiB direct-link ceiling), an
+import owns its spooled upload JSON plus a `staging/import-<hex>` media
+directory for its fetched bytes. Active work is never eligible for cleanup;
+finished work is kept for 30 days after completion for audit and replay.
+`python clipshelf.py clean` lists those candidates (paths and sizes) and
+deletes nothing; `python clipshelf.py clean --execute` deletes exactly the
+listed paths. Unowned staging files are never touched by the command — inspect
+and remove those by hand after checking no import or job refers to them.
+
+Verification leftovers on a development machine (regression fixtures and
+restore drills: `clipshelf-*`, `cs-src-*`, `restore-*` directories and probe
+databases in the OS temp directory) are disposable by policy; the test suite
+removes its own fixtures, and the server never scans the OS temp directory.
 
 ## The loop
 

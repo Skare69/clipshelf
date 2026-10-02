@@ -270,6 +270,41 @@ def _fail(job, exc):
     log.warning("job %s attempt %d failed: %s", job.id, job.attempts, job.error)
 
 
+# ---------------------------------------------- staging retention (job acquisition)
+# A job owns DATA_DIR/staging/job-<id>: _acquire_phase clears it at the start
+# of every attempt and publishes finished bytes out of it. After a terminal
+# state nothing reads it again — done jobs moved their assets to final paths;
+# blocked jobs keep only rejected or unpublished bytes, which reach the
+# 256 MiB direct-link ceiling per attempt. Those bytes are retention material,
+# not garbage: terminal jobs keep their directory for STAGING_RETENTION_DAYS
+# after the last state change, then an operator-approved sweep (the clean
+# command) may delete it. Active jobs (queued/running/retry) are never
+# eligible. Nothing here deletes anything.
+STAGING_RETENTION_DAYS = 30
+
+
+def job_staging_cleanup_candidates(now=None):
+    """staging/job-<id> directories an approved sweep may delete, sorted.
+
+    Ownership is the Job row, never the directory contents: a directory
+    qualifies only when its job is terminal (done/blocked), updated_at is
+    past the retention window, and the path is a directory directly under
+    DATA_DIR/staging.
+    """
+    now = now or timezone.now()
+    root = (Path(settings.DATA_DIR) / "staging").resolve()
+    cutoff = now - timedelta(days=STAGING_RETENTION_DAYS)
+    out = []
+    terminal = [models.Job.State.DONE, models.Job.State.BLOCKED]
+    for (job_id,) in (models.Job.objects
+                      .filter(state__in=terminal, updated_at__lte=cutoff)
+                      .values_list("id").iterator()):
+        path = (root / f"job-{job_id}").resolve()
+        if path.parent == root and path.is_dir():
+            out.append(path)
+    return sorted(out)
+
+
 # ------------------------------------------------------------ browser import
 
 def _claim_imports(limit=4):
@@ -327,7 +362,6 @@ def _update_manifest(record, updates):
 # upload time) for replay and audit. staging_cleanup_candidates is the whole
 # definition of what a future operator-approved sweep may delete; nothing
 # here deletes anything.
-STAGING_RETENTION_DAYS = 30
 
 
 def _staging_finished_at(manifest, created_at):
@@ -407,6 +441,46 @@ def run_staged_import(record):
         record=record,
         origin="browser-import",
     )
+
+
+# ---------------------------------------------- staging retention (import media)
+# import_items creates a media directory staging/import-<hex>/ next to the
+# spooled upload JSON and removes it in a finally block. It records the path
+# as manifest["media_staging"] so a crash between creation and cleanup leaves
+# an owned, sweepable directory instead of an orphan. Media directories follow
+# the same rule as the spooled uploads: pending/running records keep theirs at
+# any age; finished records (done/error) keep theirs for STAGING_RETENTION_DAYS
+# after completion. Nothing here deletes anything.
+def import_media_cleanup_candidates(now=None):
+    """Staged import media directories an approved sweep may delete, sorted.
+
+    Walks ImportRecord manifests (manifest["media_staging"]), never the
+    staging directory, so an unnamed path is unreachable. A directory
+    qualifies only when it is a directory directly under DATA_DIR/staging,
+    every record naming it is finished (done/error), and at least one owner
+    is past the retention window; any live (pending/running) owner keeps it
+    ineligible at any age.
+    """
+    now = now or timezone.now()
+    root = (Path(settings.DATA_DIR) / "staging").resolve()
+    cutoff = now - timedelta(days=STAGING_RETENTION_DAYS)
+    claims = {}
+    for record in models.ImportRecord.objects.only("manifest", "created_at").iterator():
+        manifest = record.manifest or {}
+        rel = manifest.get("media_staging")
+        if not isinstance(rel, str) or not rel:
+            continue
+        path = (Path(settings.DATA_DIR) / rel).resolve()
+        if path.parent != root or path == root:
+            continue
+        claims.setdefault(path, []).append(
+            (manifest.get("status"),
+             _staging_finished_at(manifest, record.created_at)))
+    return sorted(
+        path for path, owners in claims.items()
+        if path.is_dir()
+        and all(status in ("done", "error") for status, _ in owners)
+        and any(finished <= cutoff for _, finished in owners))
 
 
 # ------------------------------------------------------------- import engine
@@ -597,6 +671,11 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
                 "notice": notice, "collection_id": str(collection.id)}
 
     staging.mkdir(parents=True, exist_ok=True)
+    if record is not None:
+        # Own the media directory before any work: a crash anywhere below
+        # still leaves the path recorded for retention-based cleanup. CLI
+        # imports (record=None) own their directory only for the run.
+        _update_manifest(record, {"media_staging": f"staging/{staging.name}"})
     try:
         staged, files_record = _stage_items(items, cache_dir, staging)
         sources = []
