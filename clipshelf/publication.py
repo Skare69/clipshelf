@@ -68,6 +68,16 @@ def tombstoned(collection_id, user_id, *keys):
     ).exists()
 
 
+def record_removal(*, collection, user_ids, key):
+    """Tombstone key for these users in this collection. Owner moderation
+    records one row per contributor whose contribution was removed, so no
+    removed contributor's pending job can resurrect the entry."""
+    for user_id in set(user_ids):
+        History.objects.update_or_create(
+            collection=collection, user_id=user_id,
+            kind=History.Kind.REMOVED, url=key, defaults={"data": {}})
+
+
 def job_account(job):
     """Recheck the account inside the write transaction: active or no write."""
     user = job.capture.user

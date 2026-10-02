@@ -262,9 +262,11 @@ def serialize_entry(entry, user):
 
 def remove_entry(user, entry):
     """Remove the caller's contributions; a collection owner may remove the
-    whole entry. Records a collection+user-local tombstone so worker/import/
-    findings never resurrect the removed key. Entry disappears only when no
-    contributions remain; retained asset bytes are never deleted here."""
+    whole entry. Tombstones the acting user and, on owner moderation, every
+    contributor whose contribution was removed — via the shared publication
+    seam — so no removed contributor's pending job can resurrect the removed
+    key. Entry disappears only when no contributions remain; retained asset
+    bytes are never deleted here."""
     is_owner = entry.collection.owner_id == user.id
     if is_owner:
         targets = entry.contributions.all()
@@ -273,14 +275,10 @@ def remove_entry(user, entry):
         if not targets.exists():
             raise PermissionDenied("You can only remove your own contributions.")
     with transaction.atomic():
+        removed_users = set(targets.values_list("user_id", flat=True)) | {user.id}
         targets.delete()
-        History.objects.update_or_create(
-            collection=entry.collection,
-            user=user,
-            kind=History.Kind.REMOVED,
-            url=entry.key,
-            defaults={"data": {}},
-        )
+        publication.record_removal(
+            collection=entry.collection, user_ids=removed_users, key=entry.key)
         if not entry.contributions.exists():
             entry.delete()
 

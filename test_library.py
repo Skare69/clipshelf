@@ -17,7 +17,7 @@ from allauth.account.models import EmailAddress
 
 from clipshelf import services
 from clipshelf.models import ImportRecord
-from clipshelf.models import Asset, Capture, Collection, Contribution, Entry, Job, Membership
+from clipshelf.models import Asset, Capture, Collection, Contribution, Entry, History, Job, Membership
 
 User = get_user_model()
 PASSWORD = "test-pass-1234"
@@ -391,6 +391,32 @@ class RemovalTests(ApiTestCase):
         self.assertFalse(
             Contribution.objects.filter(entry=entry).exists()
         )
+
+    def test_owner_removal_tombstones_every_contributor(self):
+        shared = Collection.objects.create(
+            name="Shared", kind="shared", owner=self.alice
+        )
+        Membership.objects.create(collection=shared, user=self.bob)
+        entry, pending = self._contribute(self.bob, shared)
+        response = self._login(self.alice).delete(f"/api/entries/{entry.id}")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            History.objects.filter(
+                collection=shared, kind=History.Kind.REMOVED, url=entry.key
+            ).count(),
+            2,
+        )
+        # Bob's pending findings finish, but the owner's removal holds: no
+        # contribution is re-attached and the entry stays absent.
+        self.assertTrue(services.store_findings(
+            pending, {"source": pending.url, "prompts": ["Use native interfaces."]}))
+        pending.refresh_from_db()
+        self.assertIn(
+            "removed from this collection", " ".join(pending.warnings))
+        self.assertFalse(
+            Entry.objects.filter(collection=shared, key=entry.key).exists())
+        self.assertFalse(
+            Contribution.objects.filter(user=self.bob, job=pending).exists())
 
 
 class CaptureTests(ApiTestCase):
