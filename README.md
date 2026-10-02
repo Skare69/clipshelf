@@ -173,6 +173,30 @@ only; the original files are never modified and a repeated import is a no-op.
 Tests: `python clipshelf.py test` plus `python test_clipshelf.py` and
 `python test_sources.py` (both stdlib-only, no network).
 
+### Mutation testing
+
+`python mutate.py` checks that the tests actually pin the domain logic: it
+generates single-site mutants (operator swaps, constant tweaks) of the target
+modules and runs the normal offline test suite once per mutant. A mutant the
+suite still passes is a survived mutant — a behavior no test guards.
+
+- Stdlib only (Python 3.13, `ast` + `unittest`), no new dependencies; the
+  mutation tool never ships in the runtime image.
+- Safety: mutants run in a copied workspace under `TEMP/clipshelf-mutation/`
+  with a per-mutant throwaway `CLIPSHELF_DATA_DIR`; the checkout is never
+  modified, mutant runs execute only the offline test suite (no network, no
+  other commands), and nothing the harness creates is deleted.
+- Scope: `DEFAULT_TARGETS` in `mutate.py` — the pure-logic domain modules.
+  For a change-sized run use `python mutate.py --diff origin/main`; view and
+  command modules join the scope the same way. Tests, migrations and wiring
+  are never mutated (the suite is the oracle).
+- Gate: `--fail-under` exits nonzero below the score percent. The default
+  `DEFAULT_FAIL_UNDER = 55` is the ratchet floor from the initial 120-mutant
+  stratified sample of the default scope (~59% killed; the gap sits mostly in
+  `clipshelf/interpretation.py`) minus one sampling margin — raise it as tests
+  improve, never lower it. `--max-mutants N` gives a stratified smoke sample;
+  `python mutate.py self-check` verifies the harness itself in under a second.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Bundled third-party code is inventoried in
