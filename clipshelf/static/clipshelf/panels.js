@@ -1,7 +1,7 @@
 /* clipshelf web app — library, inbox, collections, settings panels. */
 "use strict";
 
-import { $, FALLBACK, ICONS, S, api, avatar, banner, captureActive, captureBad, catsFresh, confirmDialog, copyBtn, csrf, el, fmtDate, fmtWhen, hostOf, icon, note, onEnter, out, refreshMe, safeUrl, setView, shortHost, toast, uuid } from "./core.js";
+import { $, FALLBACK, ICONS, S, api, avatar, banner, captureActive, captureBad, catsFresh, confirmDialog, copyBtn, csrf, el, fmtDate, fmtWhen, hostOf, icon, note, onAuthLoss, onEnter, out, refreshMe, safeUrl, setView, shortHost, toast, uuid } from "./core.js";
 
 /* ---------- library ---------- */
 const qInput = $("#q"), qClear = $("#qclear"), tagSel = $("#tag"), kindSel = $("#kind");
@@ -466,6 +466,7 @@ impBtn.addEventListener("click", () => {
       S.libTimer = setTimeout(() => { if (S.view === "library") loadEntries(true); }, 4000);
       return;
     }
+    if (xhr.status === 401) { onAuthLoss(); return; }
     impProg.hidden = true;
     const msg = data && (typeof data === "object" ? (data.detail || data.error) : data) ||
       FALLBACK[xhr.status] || `Import failed (${xhr.status}).`;
