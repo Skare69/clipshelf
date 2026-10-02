@@ -2,29 +2,29 @@
 # Clipshelf server image: one image, two roles (web serve / background worker).
 # Runs unprivileged; the operator chooses the actual runtime UID/GID in compose.yaml.
 #
-# Pin the base image digest after the first verified build:
+# Multistage: the first stage compiles the pinned SQLite with the WAL-reset fix
+# (>= 3.51.3, per https://www.sqlite.org/wal.html); its compilers and headers
+# are discarded and only the shared library ships. Pin the base image digest
+# after the first verified build:
 #   docker image inspect python:3.13-slim --format '{{index .RepoDigests 0}}'
-FROM python:3.13-slim
-
-# Pinned SQLite with the WAL-reset corruption fix (>= 3.51.3, per
-# https://www.sqlite.org/wal.html). The distro build inside a python image tag is
-# NOT assumed fixed, so we build a known-good SQLite from the pinned release
-# tarball and put it first on the loader path. Verify/re-pin when bumping:
-#   https://www.sqlite.org/download.html (sha256 quoted there and re-checked in build)
 ARG SQLITE_VERSION=3.53.1
+
+# ---- SQLite build stage: gcc/make/libc6-dev live here and are thrown away ----
+FROM python:3.13-slim AS sqlite-build
 ARG SQLITE_TARBALL=sqlite-autoconf-3530100.tar.gz
 ARG SQLITE_URL=https://sqlite.org/2026/sqlite-autoconf-3530100.tar.gz
 ARG SQLITE_SHA256=83e6b2020a034e9a7ad4a72feea59e1ad52f162e09cbd26735a3ffb98359fc4f
 
-# ffmpeg is the only OS package the worker needs (fixed version within the Debian
-# release; invocations stay fixed-arg in clipshelf.sources). gcc/make/libc6-dev are
-# build-only for SQLite and are not needed at runtime.
+# ca-certificates is for the HTTPS download below; the rest is build-only tooling.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates ffmpeg gcc libc6-dev make \
+    && apt-get install -y --no-install-recommends ca-certificates gcc libc6-dev make \
     && rm -rf /var/lib/apt/lists/*
 
 # Download, checksum-verify, build, and install the pinned SQLite into /usr/local.
-# Refuses to proceed on any hash mismatch.
+# Refuses to proceed on any hash mismatch. The distro build inside a python image
+# tag is NOT assumed fixed, so we build a known-good SQLite from the pinned
+# release tarball. Verify/re-pin when bumping:
+#   https://www.sqlite.org/download.html (sha256 quoted there and re-checked in build)
 RUN python - <<'PY'
 import hashlib, os, sys, tarfile, urllib.request
 
@@ -45,15 +45,30 @@ RUN set -eux; \
     cd "/tmp/src/${SQLITE_TARBALL%.tar.gz}"; \
     ./configure --disable-static; \
     make -j"$(nproc)"; \
-    make install; \
-    ldconfig; \
-    rm -rf /tmp/src
-# Python's _sqlite3 extension links soname libsqlite3.so.0; the freshly installed
-# shared library satisfies it at import time.
+    make install
+# No ldconfig here: the builder runs nothing; the runtime stage keeps its own
+# loader path below.
+
+# ---- Runtime stage: same base, no compilers, only the built shared library ---
+FROM python:3.13-slim
+ARG SQLITE_VERSION
+
+# ffmpeg is the only OS package the worker needs (fixed version within the Debian
+# release; invocations stay fixed-arg in clipshelf.sources).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Only the shared library ships: Python's _sqlite3 extension links soname
+# libsqlite3.so.0, satisfied by the copied library and its relative soname
+# symlinks at import time. Headers, the static archive, and the sqlite3 CLI
+# stay in the build stage.
+COPY --from=sqlite-build /usr/local/lib/libsqlite3.so* /usr/local/lib/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
 # Pinned Python dependencies (owned by clipshelf requirements, includes the
-# gallery-dl / yt-dlp extractors).
+# gallery-dl / yt-dlp extractors). All ship wheels for this platform; nothing
+# here needs the discarded compiler toolchain.
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
