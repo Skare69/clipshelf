@@ -73,8 +73,14 @@ public class AssetActivity extends Activity {
         status.setText(R.string.loading);
         Async.go(() -> {
             File dest = File.createTempFile("asset", ".bin", getCacheDir());
-            Api.downloadAsset(session.profile.endpoint, session.token, url, dest, Api.MAX_ASSET_BYTES);
-            return decode(dest);
+            try {
+                Api.downloadAsset(session.profile.endpoint, session.token, url, dest, Api.MAX_ASSET_BYTES);
+                return decode(dest);
+            } finally {
+                // Owned staging file: deleted on success, decode failure, or download error
+                // (non-200, over-limit, mid-copy failure all land here).
+                dest.delete();
+            }
         }, (bitmap, error) -> {
             if (error != null || bitmap == null) {
                 status.setText(error == null ? getString(R.string.asset_load_failed, "?")
@@ -108,9 +114,6 @@ public class AssetActivity extends Activity {
                 throw new Exception("Not a decodable image");
             }
             return b;
-        } finally {
-            // ponytail: no cache policy needed at one image per view; delete immediately.
-            file.delete();
         }
     }
 
@@ -121,15 +124,18 @@ public class AssetActivity extends Activity {
         TextView body = findViewById(R.id.asset_body);
         Async.go(() -> {
             File dest = File.createTempFile("asset", ".txt", getCacheDir());
-            Api.downloadAsset(session.profile.endpoint, session.token, url, dest, TEXT_PREVIEW_BYTES);
-            byte[] all = new byte[(int) dest.length()];
-            try (FileInputStream in = new FileInputStream(dest)) {
-                int read = in.read(all);
-                if (read < 0) {
-                    read = 0;
+            try {
+                Api.downloadAsset(session.profile.endpoint, session.token, url, dest, TEXT_PREVIEW_BYTES);
+                byte[] all = new byte[(int) dest.length()];
+                try (FileInputStream in = new FileInputStream(dest)) {
+                    int read = in.read(all);
+                    if (read < 0) {
+                        read = 0;
+                    }
+                    return new String(all, 0, read, java.nio.charset.StandardCharsets.UTF_8);
                 }
-                return new String(all, 0, read, java.nio.charset.StandardCharsets.UTF_8);
             } finally {
+                // Owned staging file: deleted on success and on download/read error.
                 dest.delete();
             }
         }, (text, error) -> {
