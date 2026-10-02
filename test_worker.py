@@ -3,10 +3,12 @@ import io
 import shutil
 import tempfile
 import uuid
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 from urllib.error import HTTPError, URLError
 
+from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
@@ -484,6 +486,110 @@ class MergeTaggingTests(WorkerMixin, TransactionTestCase):
         self.assertEqual(tag_links.call_args.args[0],
                          [{"url": "https://example.com/tut-1", "title": "Nice Thing"}])
         self.assertEqual(self.tags("https://github.com/owner/repo"), ["github"])
+
+
+class StagingRetentionTests(WorkerMixin, TestCase):
+    """Review S12: staged uploads are owned by their ImportRecord, kept past
+    completion, and only finished uploads past the window are ever named as
+    cleanup candidates — never live or unrelated files."""
+
+    def stage(self, status="pending", rel=None, extra=None):
+        rel = rel or f"staging/import-{uuid.uuid4().hex}.json"
+        path = self.tmp / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('[{"url": "https://example.com/a"}]', encoding="utf-8")
+        manifest = {"status": status, "staging": rel,
+                    "collection_id": str(self.personal.id), "format": "tiktok",
+                    "client_request_id": str(uuid.uuid4())}
+        manifest.update(extra or {})
+        record = models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex, manifest=manifest)
+        return path, record
+
+    def candidates(self, days):
+        with override_settings(DATA_DIR=str(self.tmp)):
+            return worker.staging_cleanup_candidates(
+                now=timezone.now() + timedelta(days=days))
+
+    def test_finished_imports_expire_only_after_the_window(self):
+        fresh_path, _ = self.stage(
+            status="done", extra={"completed_at": timezone.now().isoformat()})
+        old = (timezone.now() - timedelta(days=60)).isoformat()
+        failed_path, _ = self.stage(status="error", extra={"completed_at": old})
+        self.assertEqual(self.candidates(0), [failed_path.resolve()])
+        self.assertEqual(self.candidates(31),
+                         sorted([fresh_path.resolve(), failed_path.resolve()]))
+
+    def test_run_import_stamps_completion_and_retains_the_upload(self):
+        path, record = self.stage()
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.worker.import_items",
+                           return_value={"counts": {}}):
+            worker._run_import(record)
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "done")
+        self.assertTrue(record.manifest["completed_at"])
+        self.assertTrue(path.is_file())
+        self.assertEqual(self.candidates(0), [])
+        self.assertEqual(self.candidates(31), [path.resolve()])
+
+    def test_failed_import_stamps_error_and_retains_the_upload(self):
+        path, record = self.stage()
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.worker.import_items",
+                           side_effect=ValidationError("boom")):
+            worker._run_import(record)
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "error")
+        self.assertIn("boom", record.manifest["error"])
+        self.assertTrue(record.manifest["completed_at"])
+        self.assertTrue(path.is_file())
+        self.assertEqual(self.candidates(31), [path.resolve()])
+
+    def test_live_records_keep_their_uploads_ineligible(self):
+        old = (timezone.now() - timedelta(days=60)).isoformat()
+        self.stage(status="pending", extra={"completed_at": old})
+        self.stage(status="running", extra={"completed_at": old})
+        self.assertEqual(self.candidates(3650), [])
+        # A finished record and a live record naming the same file: live wins.
+        shared_rel = f"staging/import-{uuid.uuid4().hex}.json"
+        shared_path, _ = self.stage(status="done", rel=shared_rel,
+                                    extra={"completed_at": old})
+        contender = models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "pending", "staging": shared_rel})
+        self.assertEqual(self.candidates(3650), [])
+        contender.manifest = dict(contender.manifest, status="done")
+        contender.save(update_fields=["manifest"])
+        self.assertEqual(self.candidates(3650), [shared_path.resolve()])
+
+    def test_unrelated_and_misowned_paths_are_never_candidates(self):
+        old = (timezone.now() - timedelta(days=60)).isoformat()
+        staging = self.tmp / "staging"
+        staging.mkdir(parents=True, exist_ok=True)
+        (staging / "import-stray.json").write_text("[]", encoding="utf-8")
+        (staging / "job-7").mkdir(parents=True, exist_ok=True)
+        media = staging / "import-media" / "x.png"
+        media.parent.mkdir(parents=True, exist_ok=True)
+        media.write_bytes(b"\x89PNG")
+        # No record claims the stray file or the directories.
+        self.assertEqual(self.candidates(3650), [])
+        # Records whose staging value is not a staged upload file under
+        # DATA_DIR/staging are skipped: outside the root, a directory, absent.
+        self.stage(status="done", rel="cache/evil.json",
+                   extra={"completed_at": old})
+        models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "done", "staging": "staging/import-media",
+                      "completed_at": old})
+        models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "done", "staging": "staging/import-gone.json",
+                      "completed_at": old})
+        models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "done", "completed_at": old})
+        self.assertEqual(self.candidates(3650), [])
 
 
 def _json(obj):

@@ -8,6 +8,7 @@ import json
 import os
 import tempfile
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -15,7 +16,7 @@ from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 from allauth.account.models import EmailAddress
 
-from clipshelf import services
+from clipshelf import services, worker
 from clipshelf.models import ImportRecord
 from clipshelf.models import Asset, Capture, Collection, Contribution, Entry, History, Job, Membership
 
@@ -820,6 +821,25 @@ class ImportTests(ApiTestCase):
             user=self.bob,
         )
         self.assertIn(response.status_code, (403, 404))
+
+    def test_replayed_import_keeps_one_owned_upload(self):
+        content = json.dumps([{"id": "1", "desc": "clip one"}]).encode()
+        first = self._post_import(self._login(self.alice), content)
+        self.assertEqual(first.status_code, 201)
+        record = ImportRecord.objects.get(pk=first.json()["import"]["id"])
+        record.manifest = dict(
+            record.manifest, status="done",
+            completed_at=(timezone.now() - timedelta(days=60)).isoformat())
+        record.save(update_fields=["manifest"])
+        # Replaying the same bytes reuses the record and spares a second file.
+        replay = self._post_import(self._login(self.alice), content)
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.json()["import"]["id"], str(record.id))
+        staged = sorted(
+            os.listdir(os.path.join(os.path.realpath(self._data_dir()), "staging")))
+        self.assertEqual(len(staged), 1)
+        self.assertEqual(
+            [p.name for p in worker.staging_cleanup_candidates()], staged)
 
 
 class ShellAndHealthTests(ApiTestCase):

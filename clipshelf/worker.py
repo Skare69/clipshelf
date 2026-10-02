@@ -29,6 +29,7 @@ from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from clipshelf import (
     acquisition,
@@ -290,12 +291,16 @@ def _claim_imports(limit=4):
 def _run_import(record, say=None):
     try:
         result = run_staged_import(record)
-        _update_manifest(record, {"status": "done", "result": result})
+        _update_manifest(record, {"status": "done",
+                                  "completed_at": timezone.now().isoformat(),
+                                  "result": result})
         if say:
             say(f"import {record.id}: done ({result.get('counts', {})})")
     except Exception as exc:
         log.exception("import %s failed", record.id)
-        _update_manifest(record, {"status": "error", "error": str(exc)[:2000]})
+        _update_manifest(record, {"status": "error",
+                                  "completed_at": timezone.now().isoformat(),
+                                  "error": str(exc)[:2000]})
         if say:
             say(f"import {record.id}: failed ({exc})")
 
@@ -307,6 +312,63 @@ def _update_manifest(record, updates):
         manifest.update(updates)
         record.manifest = manifest
         record.save(update_fields=["manifest"])
+
+
+# ------------------------------------------------- staging retention (review S12)
+# Ownership: api_import spools each upload to DATA_DIR/staging/import-<hex>.json
+# and the ImportRecord created for it owns that exact path via
+# manifest["staging"]; the request deletes its own spooled file when no record
+# commits (invalid payload, duplicate digest, claim race). Everything else
+# under staging/ (acquisition job-* dirs, import media dirs, stray files) is
+# unrelated to import retention.
+# Retention: pending/running records still read their upload, so those files
+# are live and never eligible. Finished records (done/error) keep the upload
+# for STAGING_RETENTION_DAYS after completion (manifest["completed_at"], else
+# upload time) for replay and audit. staging_cleanup_candidates is the whole
+# definition of what a future operator-approved sweep may delete; nothing
+# here deletes anything.
+STAGING_RETENTION_DAYS = 30
+
+
+def _staging_finished_at(manifest, created_at):
+    """Completion time of a finished import; rows predating the policy fall
+    back to their upload time."""
+    finished = manifest.get("completed_at")
+    parsed = parse_datetime(finished) if isinstance(finished, str) else None
+    if parsed is None:
+        return created_at
+    return parsed if timezone.is_aware(parsed) else timezone.make_aware(parsed)
+
+
+def staging_cleanup_candidates(now=None):
+    """Staged uploads an approved retention sweep may delete, sorted by path.
+
+    Walks ImportRecord manifests, never the staging directory, so a file no
+    record names is unreachable. A path qualifies only when it is a file
+    under DATA_DIR/staging, every record naming it is finished (done/error),
+    and at least one owner is past the retention window; any live
+    (pending/running) owner keeps the path ineligible at any age.
+    """
+    now = now or timezone.now()
+    root = (Path(settings.DATA_DIR) / "staging").resolve()
+    cutoff = now - timedelta(days=STAGING_RETENTION_DAYS)
+    claims = {}
+    for record in models.ImportRecord.objects.only("manifest", "created_at").iterator():
+        manifest = record.manifest or {}
+        rel = manifest.get("staging")
+        if not isinstance(rel, str) or not rel:
+            continue
+        path = (Path(settings.DATA_DIR) / rel).resolve()
+        if not path.is_relative_to(root) or path == root:
+            continue
+        claims.setdefault(path, []).append(
+            (manifest.get("status"),
+             _staging_finished_at(manifest, record.created_at)))
+    return sorted(
+        path for path, owners in claims.items()
+        if path.is_file()
+        and all(status in ("done", "error") for status, _ in owners)
+        and any(finished <= cutoff for _, finished in owners))
 
 
 def run_staged_import(record):
