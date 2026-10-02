@@ -156,4 +156,6 @@ Tests: `python clipshelf.py test` plus `python test_clipshelf.py` and
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Bundled third-party code is inventoried in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and gated by
+`check_licenses.py` against `license_inventory.toml`.

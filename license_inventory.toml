@@ -1,0 +1,123 @@
+# Third-party license inventory and allowlist (review 2026-10-02).
+#
+# Ground truth sources:
+#   python  : importlib.metadata of the exact `pip install -r requirements.txt`
+#             resolution (the image installs exactly this set; CPython 3.13,
+#             linux). `observed` is the review-time version snapshot, NOT a
+#             gate — pip owns version resolution; this file gates the NAME SET
+#             and the LICENSE of every shipped distribution.
+#   android : `gradlew :app:dependencies --configuration releaseRuntimeClasspath`
+#             (versions here are resolved pins and ARE gate-checked exactly).
+#   image   : Dockerfile pins (base, apt lines, bundled SQLite).
+#
+# Enforced by check_licenses.py in ci.yml (python job: python+image modes,
+# android job: android mode). A new dependency — pip line, gradle line, apt
+# line, or new transitive — fails the build until it is reviewed and added
+# here and to THIRD_PARTY_NOTICES.md.
+
+[allow]
+# SPDX identifiers permitted for shipped third-party code.
+# GPL-2.0-only is allowed ONLY for separate executables the server invokes as
+# subprocesses (gallery-dl, Debian ffmpeg) — never import/link GPL code into
+# the MIT application. Any new copyleft entry needs operator review.
+ids = [
+    "MIT", "MIT-0", "MIT-CMU", "BSD-3-Clause", "Apache-2.0",
+    "PSF-2.0", "MPL-2.0", "ZPL-2.1", "Unlicense",
+    "GPL-2.0-only",
+    "LicenseRef-Public-Domain",
+]
+
+# Tooling excluded from the shipped-set check: never application dependencies.
+tooling = ["pip", "setuptools", "wheel"]
+
+[python.entries]
+
+django            = { observed = "5.2.17",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+django-allauth    = { observed = "65.19.3", license = "MIT",          meta = "MIT" }
+waitress          = { observed = "3.0.2",   license = "ZPL-2.1",      meta = "ZPL 2.1" }
+pillow            = { observed = "12.3.0",  license = "MIT-CMU",      meta = "MIT-CMU" }
+gallery-dl        = { observed = "1.32.12", license = "GPL-2.0-only", meta = "GPL-2.0-only" }
+yt-dlp            = { observed = "2026.8.19", license = "Unlicense",  meta = "Unlicense" }
+argon2-cffi       = { observed = "25.1.0",  license = "MIT",          meta = "MIT" }
+typesafe-sdk      = { observed = "0.7.0",   license = "MIT",          meta = "MIT" }
+truststore        = { observed = "0.10.4",  license = "MIT",          meta = "MIT" }
+asgiref           = { observed = "3.12.1",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+sqlparse          = { observed = "0.6.0",   license = "BSD-3-Clause", meta = "BSD License" }
+requests          = { observed = "2.34.2",  license = "Apache-2.0",   meta = "Apache-2.0" }
+charset-normalizer = { observed = "3.5.1",  license = "MIT",          meta = "MIT" }
+idna              = { observed = "3.19",    license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+urllib3           = { observed = "2.7.0",   license = "MIT",          meta = "MIT" }
+certifi           = { observed = "2026.7.22", license = "MPL-2.0",    meta = "MPL-2.0" }
+curl-cffi         = { observed = "0.16.3",  license = "MIT",          meta = "MIT" }
+cffi              = { observed = "2.1.1",   license = "MIT-0",        meta = "MIT-0" }
+pycparser         = { observed = "3.0",     license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+argon2-cffi-bindings = { observed = "26.1.0", license = "MIT",        meta = "MIT" }
+httpx2            = { observed = "2.13.0",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+pydantic          = { observed = "2.13.5",  license = "MIT",          meta = "MIT" }
+pydantic-core     = { observed = "2.46.5",  license = "MIT",          meta = "MIT" }
+tenacity          = { observed = "9.1.4",   license = "Apache-2.0",   meta = "Apache 2.0" }
+typing-extensions = { observed = "4.16.0",  license = "PSF-2.0",      meta = "PSF-2.0" }
+httpcore2         = { observed = "2.13.0",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+h11               = { observed = "0.16.0",  license = "MIT",          meta = "MIT" }
+anyio             = { observed = "4.15.1",  license = "MIT",          meta = "MIT" }
+annotated-types   = { observed = "0.8.0",   license = "MIT",          meta = "MIT" }
+typing-inspection = { observed = "0.4.4",   license = "MIT",          meta = "MIT" }
+# django declares tzdata only on win32: developer workstations only,
+# never installed in the linux image.
+tzdata            = { observed = "2026.3",  license = "Apache-2.0",   meta = "Apache-2.0", platforms = ["win32"] }
+
+[android]
+# Resolved releaseRuntimeClasspath (Gradle 8.9 / AGP 8.7.3, build-time tooling
+# itself is Apache-2.0 and not shipped). `com.google.guava:listenablefuture`
+# has no license in its POM; it is a Guava extract whose parent POM is
+# guava-parent (Apache-2.0). BOM/platform artifacts are metadata-only and
+# excluded from the packaged set (kotlinx-coroutines-bom).
+non_packaged = ["org.jetbrains.kotlinx:kotlinx-coroutines-bom"]
+
+[android.entries]
+"androidx.work:work-runtime"                  = { observed = "2.9.1",  license = "Apache-2.0" }
+"androidx.annotation:annotation"              = { observed = "1.3.0",  license = "Apache-2.0" }
+"androidx.annotation:annotation-experimental" = { observed = "1.3.0",  license = "Apache-2.0" }
+"androidx.arch.core:core-common"              = { observed = "2.1.0",  license = "Apache-2.0" }
+"androidx.arch.core:core-runtime"             = { observed = "2.1.0",  license = "Apache-2.0" }
+"androidx.collection:collection"              = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.concurrent:concurrent-futures"      = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.core:core"                          = { observed = "1.9.0",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-common"         = { observed = "2.5.1",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-livedata"       = { observed = "2.5.1",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-livedata-core"  = { observed = "2.5.1",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-runtime"        = { observed = "2.5.1",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-service"        = { observed = "2.5.1",  license = "Apache-2.0" }
+"androidx.room:room-common"                   = { observed = "2.5.0",  license = "Apache-2.0" }
+"androidx.room:room-ktx"                      = { observed = "2.5.0",  license = "Apache-2.0" }
+"androidx.room:room-runtime"                  = { observed = "2.5.0",  license = "Apache-2.0" }
+"androidx.sqlite:sqlite"                      = { observed = "2.3.0",  license = "Apache-2.0" }
+"androidx.sqlite:sqlite-framework"            = { observed = "2.3.0",  license = "Apache-2.0" }
+"androidx.startup:startup-runtime"            = { observed = "1.1.1",  license = "Apache-2.0" }
+"androidx.tracing:tracing"                    = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.versionedparcelable:versionedparcelable" = { observed = "1.1.1", license = "Apache-2.0" }
+"org.jetbrains:annotations"                   = { observed = "23.0.0", license = "Apache-2.0" }
+"org.jetbrains.kotlin:kotlin-stdlib"          = { observed = "1.8.22", license = "Apache-2.0" }
+"org.jetbrains.kotlin:kotlin-stdlib-common"   = { observed = "1.8.22", license = "Apache-2.0" }
+"org.jetbrains.kotlin:kotlin-stdlib-jdk7"     = { observed = "1.8.20", license = "Apache-2.0" }
+"org.jetbrains.kotlin:kotlin-stdlib-jdk8"     = { observed = "1.8.20", license = "Apache-2.0" }
+"org.jetbrains.kotlinx:kotlinx-coroutines-android" = { observed = "1.7.1", license = "Apache-2.0" }
+"org.jetbrains.kotlinx:kotlinx-coroutines-core"    = { observed = "1.7.1", license = "Apache-2.0" }
+"org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm" = { observed = "1.7.1", license = "Apache-2.0" }
+"com.google.guava:listenablefuture"           = { observed = "1.0",    license = "Apache-2.0" }
+
+[image]
+# Distro-level policy: Debian packages (base image + apt lines) are covered as
+# a set — Debian guarantees DFSG-free licenses and ships the exact license
+# text for every package inside the image at /usr/share/doc/<pkg>/copyright,
+# with sources on deb.debian.org. The gate checks the pins below, not each
+# package's license.
+base = "python:3.13-slim"   # TODO(operator): pin the base digest per Dockerfile comment
+apt = ["ca-certificates", "ffmpeg", "gcc", "libc6-dev", "make"]
+
+[image.sqlite]
+version = "3.53.1"
+tarball = "sqlite-autoconf-3530100.tar.gz"
+url = "https://sqlite.org/2026/sqlite-autoconf-3530100.tar.gz"
+sha256 = "83e6b2020a034e9a7ad4a72feea59e1ad52f162e09cbd26735a3ffb98359fc4f"
+license = "LicenseRef-Public-Domain"

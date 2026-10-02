@@ -76,6 +76,7 @@ WORKDIR /app
 COPY clipshelf.py clipshelf.py
 COPY clipshelf/ clipshelf/
 COPY deploy/ deploy/
+COPY THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -92,7 +93,7 @@ ARG IMAGE_REVISION=dev
 ENV CLIPSHELF_VERSION=${IMAGE_VERSION}
 LABEL org.opencontainers.image.title="clipshelf" \
     org.opencontainers.image.description="Clipshelf capture/library server (Django, SQLite WAL, one worker)" \
-    org.opencontainers.image.licenses="MIT" \
+    org.opencontainers.image.licenses="MIT AND GPL-2.0-only" \
     org.opencontainers.image.version="${IMAGE_VERSION}" \
     org.opencontainers.image.revision="${IMAGE_REVISION}" \
     org.opencontainers.image.sqlite.version="${SQLITE_VERSION}"

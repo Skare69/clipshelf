@@ -24,6 +24,9 @@ jobs:
           python-version: "3.13"
           cache: pip
       - run: pip install -r requirements.txt
+      # License gate runs on the exact shipped set, before any tooling
+      # (ruff/pip-audit) pollutes the env. See license_inventory.toml.
+      - run: python check_licenses.py
       # Lint + dependency-audit gates before the Django steps. ruff.toml scopes
       # the lint to the clipshelf package; the DJ rules are built into ruff.
       - run: pip install ruff==0.16.9 pip-audit==2.10.1
@@ -51,6 +54,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           validate-wrappers: true
+      - run: ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --no-daemon -q
+          > app/build/license-deps.txt
+        working-directory: android
+      - run: python3 check_licenses.py android --deps android/app/build/license-deps.txt
       - run: ./gradlew :app:assembleDebug --no-daemon
         working-directory: android
       - uses: actions/upload-artifact@v4
