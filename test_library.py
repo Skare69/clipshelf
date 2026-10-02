@@ -12,6 +12,7 @@ from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.db import IntegrityError, transaction
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 from allauth.account.models import EmailAddress
@@ -782,6 +783,45 @@ class ImportTests(ApiTestCase):
         repeat = self._post_import(alice, content, crid=str(uuid.uuid4()))
         self.assertEqual(repeat.status_code, 200)
         self.assertEqual(repeat.json()["import"]["id"], record_id)
+        # Conflicts and replays leave no staged file behind.
+        self.assertEqual(
+            os.listdir(os.path.join(os.path.realpath(self._data_dir()), "staging")),
+            staged,
+        )
+
+    def test_import_request_id_unique_across_payloads(self):
+        # The database constraint is the race backstop: the pre-insert check
+        # can pass in two processes, only one insert may win.
+        crid = str(uuid.uuid4())
+        ImportRecord.objects.create(
+            user=self.alice, input_digest="a" * 64, client_request_id=crid
+        )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ImportRecord.objects.create(
+                user=self.alice, input_digest="b" * 64, client_request_id=crid
+            )
+        # The same request id is a separate identity for a different user.
+        ImportRecord.objects.create(
+            user=self.bob, input_digest="b" * 64, client_request_id=crid
+        )
+        # Legacy rows without a request id never collide on NULLs.
+        ImportRecord.objects.create(user=self.alice, input_digest="c" * 64)
+        ImportRecord.objects.create(user=self.alice, input_digest="d" * 64)
+
+    def test_import_conflict_detected_via_request_id_column(self):
+        alice = self._login(self.alice)
+        crid = str(uuid.uuid4())
+        ImportRecord.objects.create(
+            user=self.alice, input_digest="a" * 64, client_request_id=crid
+        )
+        response = self._post_import(
+            alice, json.dumps([{"id": "2", "desc": "other payload"}]).encode(), crid=crid
+        )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(ImportRecord.objects.count(), 1)
+        self.assertEqual(
+            os.listdir(os.path.join(os.path.realpath(self._data_dir()), "staging")), []
+        )
 
     def test_import_rejects_credentials_and_garbage(self):
         alice = self._login(self.alice)

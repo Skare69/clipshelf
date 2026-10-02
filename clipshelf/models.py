@@ -513,6 +513,9 @@ class ImportRecord(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="import_records")
     input_digest = models.CharField(max_length=64)
+    # Real column so the database enforces request-id uniqueness across
+    # concurrent uploads; legacy rows keep NULL (distinct in unique indexes).
+    client_request_id = models.UUIDField(null=True, blank=True)
     manifest = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -520,7 +523,11 @@ class ImportRecord(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["user", "input_digest"], name="clipshelf_import_digest_unique"
-            )
+            ),
+            models.UniqueConstraint(
+                fields=["user", "client_request_id"],
+                name="clipshelf_import_user_request_unique",
+            ),
         ]
 
     def __str__(self):

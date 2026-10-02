@@ -17,6 +17,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, connection, transaction
+from django.db.models import Q
 from django.http import (
     FileResponse,
     Http404,
@@ -681,7 +682,10 @@ def api_import(request):
         # Upload retry identity is the file digest, not the request id alone.
         existing = ImportRecord.objects.filter(user=user, input_digest=digest.hexdigest()).first()
         clash = (
-            ImportRecord.objects.filter(user=user, manifest__client_request_id=str(request_id))
+            ImportRecord.objects.filter(
+                Q(user=user, client_request_id=request_id)
+                | Q(user=user, manifest__client_request_id=str(request_id))
+            )
             .exclude(input_digest=digest.hexdigest())
             .exists()
         )
@@ -719,22 +723,30 @@ def api_import(request):
         _scan_import_keys(data)
 
         try:
-            record = ImportRecord.objects.create(
-                user=user,
-                input_digest=digest.hexdigest(),
-                manifest={
-                    "client_request_id": str(request_id),
-                    "staging": rel_path,
-                    "collection_id": str(collection.id),
-                    "status": "pending",
-                    "format": fmt,
-                },
-            )
+            with transaction.atomic():
+                record = ImportRecord.objects.create(
+                    user=user,
+                    input_digest=digest.hexdigest(),
+                    client_request_id=request_id,
+                    manifest={
+                        "client_request_id": str(request_id),
+                        "staging": rel_path,
+                        "collection_id": str(collection.id),
+                        "status": "pending",
+                        "format": fmt,
+                    },
+                )
         except IntegrityError:
-            # Concurrent identical upload won the unique(user, digest) race.
-            record = ImportRecord.objects.get(
+            # A concurrent upload won one of the two uniqueness races.
+            record = ImportRecord.objects.filter(
                 user=user, input_digest=digest.hexdigest()
-            )
+            ).first()
+            if record is None:
+                # unique(user, client_request_id) lost: same request id,
+                # different payload. Outer handler removes the staged file.
+                raise ApiError(
+                    409, "conflict", "request id reused with a different payload"
+                )
             os.remove(spooled)
             return _json(
                 {
