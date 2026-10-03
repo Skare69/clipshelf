@@ -9,7 +9,7 @@ dated evidence, not gates — enforcement lives in CI, not in this document.
 
 | Stack | Manifest | Direct deps | Audit surface |
 |---|---|---|---|
-| Python server | `requirements.txt` (range-pinned) | 8 | `pip-audit -r requirements.txt`, `ruff check` |
+| Python server | `requirements.txt` ranges, installed from hash-pinned `requirements.lock` | 8 | `pip-audit -r requirements.lock --no-deps`, `ruff check`, `scripts/lock_deps.py check` |
 | Android client | `android/app/build.gradle` (exact pins) | 1 | `gradlew :app:dependencies --configuration releaseRuntimeClasspath` |
 | JavaScript | none | 0 | none — see below |
 
@@ -26,13 +26,14 @@ applicable again and this record must be revised.
 
 | Gate | Status | Where |
 |---|---|---|
-| Python vulnerability audit | Applicable, enforced | `ci.yml` python job: `pip-audit -r requirements.txt` (green 2026-10-02: pip-audit 2.10.1, "No known vulnerabilities found") |
+| Python vulnerability audit | Applicable, enforced | `ci.yml` python job: `pip-audit -r requirements.lock --no-deps` (green 2026-10-03: "No known vulnerabilities found") |
 | Python lint | Applicable, enforced | `ci.yml`: `ruff check`, scoped by `ruff.toml` to the `clipshelf` package |
-| Python mutation testing | Applicable, separate task | `ott/27f2220b` establishes `mutate.py`; out of scope here |
-| Dependency license inventory + allowlist | Applicable, separate task | `ott/284fcee1` ships `license_inventory.toml` + `check_licenses.py` as the enforced gate; the tables below are the observed snapshot behind it |
+| Dependency lock consistency | Applicable, enforced | `ci.yml`: `python scripts/lock_deps.py check` (31 pins match the current resolution) |
+| Python mutation testing | Applicable, tooling on main | `mutate.py` (from `ott/27f2220b`) runs locally; it is not a CI gate |
+| Dependency license inventory + allowlist | Applicable, enforced | `ci.yml` runs `check_licenses.py` against `license_inventory.toml` in both jobs (green 2026-10-03: python 31 pins, android 30 artifacts); the tables below are the observed snapshot behind it |
 | Bun/JS vulnerability + license audit | Not applicable | No manifest exists (see stack inventory) |
-| Gradle vulnerability audit | No first-party scanner; mitigated | Exact pins in `build.gradle`; wrapper pins Gradle 8.9 and AGP 8.7.3; the full runtime set is resolved and license-reviewed below; every dependency addition must enter the license inventory before merge |
-| Docker image / OS-package audit | Out of scope here | Image pins (base, apt lines, bundled SQLite) are gated by the `ott/284fcee1` inventory in image mode |
+| Gradle vulnerability audit | No first-party scanner; licenses enforced | `ci.yml` android job resolves `releaseRuntimeClasspath` and gates it through `check_licenses.py android`; exact pins in `build.gradle`, wrapper pins Gradle 8.9 and AGP 8.7.3; Gradle-artifact vulnerability scanning remains a gap |
+| Docker image / OS-package audit | Out of scope here | Image pins (base, apt lines, bundled SQLite) are tracked in `license_inventory.toml`; `check_licenses.py image` exists but is not wired into CI |
 
 ## Observed license inventory (snapshot 2026-10-02)
 
@@ -41,8 +42,9 @@ Python rows come from `importlib.metadata` of the exact
 versions drift inside the manifest ranges and are not pinned here. The
 Android rows come from the resolved `releaseRuntimeClasspath` tree and the
 `<licenses>` block of each artifact's POM in the local Gradle cache. The
-enforced, machine-checked inventory is `license_inventory.toml`
-(`ott/284fcee1`); update that file, not this record, when dependencies change.
+enforced, machine-checked inventory is `license_inventory.toml`, gated by
+`check_licenses.py` in CI; update that file, not this record, when
+dependencies change.
 
 ### Python — direct (8)
 
@@ -95,8 +97,9 @@ Direct: `androidx.work:work-runtime:2.9.1`. Every POM in the resolved tree
 declares "The Apache Software License, Version 2.0" except
 `com.google.guava:listenablefuture:1.0`, whose POM carries no
 `<licenses>` block at all (its upstream source is Apache-2.0); that gap is
-tracked in the enforced inventory. Build-time tooling — Gradle wrapper 8.9,
-AGP 8.7.3, JDK 17 — is not shipped and stays out of this inventory.
+tracked in the enforced inventory. Build-time and test-scoped tooling — Gradle wrapper 8.9,
+AGP 8.7.3, JDK 17, junit (`testImplementation`) — is not shipped and stays out
+of this inventory.
 
 | Group | Artifacts |
 |---|---|
@@ -122,10 +125,16 @@ shipped artifact.)
 
 ## Reproducing the snapshot
 
-- `pip-audit -r requirements.txt` — vulnerability gate, must stay green in CI.
-- `pip install -r requirements.txt` into a clean CPython 3.13 venv, then
-  read `importlib.metadata` per distribution — Python rows above.
-- `cd android && gradlew.bat :app:dependencies --configuration
-  releaseRuntimeClasspath --no-daemon` — Android resolution tree.
+- `python scripts/lock_deps.py check` — lock consistency gate.
+- `pip-audit -r requirements.lock --no-deps` — vulnerability gate, must stay
+  green in CI.
+- `pip install --require-hashes -r requirements.lock` into a clean CPython 3.13
+  venv, then `python check_licenses.py` — the enforced python license gate (a
+  dev venv with extra tooling installed trips it by design; CI installs only
+  the lock).
+- `cd android && ./gradlew :app:dependencies --configuration
+  releaseRuntimeClasspath --no-daemon -q > app/build/license-deps.txt && python
+  ../check_licenses.py android --deps android/app/build/license-deps.txt` —
+  the enforced android license gate, as CI runs it.
 - `git ls-files | grep -iE 'package\.json|bun\.lock|.*lock'` — must return
   nothing for the JS gates to stay "not applicable".
