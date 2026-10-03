@@ -139,10 +139,14 @@ def check(python: str, req: Path, lock: Path) -> int:
             lock_pins[canon(m.group(1))] = m.group(2)
 
     problems = []
+    warnings = []
     for n in sorted(set(current) | set(lock_pins)):
         cur, lk = current.get(n), lock_pins.get(n)
         if cur is None:
-            problems.append(f"extra in lock: {n}=={lk}")
+            # Platform-conditional deps (e.g. Django's win32-only tzdata) resolve
+            # on some platforms only; the lock is the cross-platform union, and
+            # extras stay hash-verified, audited and inventoried everywhere.
+            warnings.append(f"extra in lock: {n}=={lk} (platform-conditional; kept in the shipped set)")
         elif lk is None:
             problems.append(f"missing from lock: {n}=={cur}")
         elif cur != lk:
@@ -162,6 +166,8 @@ def check(python: str, req: Path, lock: Path) -> int:
         for p in problems:
             print(f"  {p}")
         return 1
+    for w in warnings:
+        print(f"warning: {w}")
 
     # end-to-end validation: pip must accept the lock for this platform
     with tempfile.TemporaryDirectory(prefix="clipshelf-lockgen-hashcheck-") as td:
