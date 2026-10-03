@@ -112,7 +112,7 @@ non_packaged = ["org.jetbrains.kotlinx:kotlinx-coroutines-bom"]
 # text for every package inside the image at /usr/share/doc/<pkg>/copyright,
 # with sources on deb.debian.org. The gate checks the pins below, not each
 # package's license.
-base = "python:3.13-slim"   # TODO(operator): pin the base digest per Dockerfile comment
+base = "python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81"
 # Multistage build: the compiler set lives in the discarded sqlite-build stage;
 # only the runtime set ships.
 apt_build_stage = ["ca-certificates", "gcc", "libc6-dev", "make"]
