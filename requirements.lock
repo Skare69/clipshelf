@@ -3,7 +3,7 @@
 # Regenerate: python scripts/lock_deps.py make
 # Policy: regenerate whenever requirements.txt changes or `check` fails.
 # Platforms covered: win_amd64, manylinux x86_64/aarch64. Python 3.13 (cp313/abi3).
-# Date: 2026-10-02
+# Date: 2026-10-03
 
 annotated-types==0.8.0 \
     --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
@@ -35,8 +35,8 @@ django==5.2.17 \
     --hash=sha256:f04fb3b36ee119e1af4fa1d397d5fd6cf12700f49321e84d4f4c642c5b1973db
 django-allauth==65.19.7 \
     --hash=sha256:8899377f38afabf10445c9ee2f808a730304ca8aecc540657d51a8b3928283d6
-gallery-dl==1.32.14 \
-    --hash=sha256:c1be6e1397a9eaf53252eceb0fc3701631fa1f29a34c155cb374f71e5345b943
+gallery-dl==1.32.15 \
+    --hash=sha256:e8fc03eebddcd4ba816ae7a9c42548a68e7ae8a01e7c5a83d6f591e253f092a6
 h11==0.16.0 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
 httpcore2==2.13.1 \
@@ -71,8 +71,8 @@ typing-extensions==4.16.0 \
     --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
 typing-inspection==0.4.4 \
     --hash=sha256:65b8397ba37ccbce054456aaccddfc91e6e3083c92824df348d96ca832f3f147
-tzdata==2026.4 \
-    --hash=sha256:c2169a8b0a7a5e9674da5a135ccdfb2b3e671b333ed9fed17b41f73c34476e81
+tzdata==2026.5 \
+    --hash=sha256:b683bd1b6659ddcd810ff02ad09ba821d4bf1065072805063eb35c49617905ac
 urllib3==2.8.0 \
     --hash=sha256:0cf3cae568d36aa9576b28dfb35f11328f1cb974ca7647d9475ebb86c75ac6e3
 waitress==3.0.2 \
