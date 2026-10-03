@@ -11,7 +11,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   signed-apk:
@@ -56,3 +56,23 @@ jobs:
           name: clipshelf-release-apk
           path: android/app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
+      # Attach the signed APK to the GitHub release for this tag. Ottr's
+      # Create release pushes the tag and makes the release right after, so
+      # the upload waits briefly for it and fails loudly if it never shows.
+      # A workflow_dispatch build has no release and skips this step.
+      - name: Attach APK to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk=android/app/build/outputs/apk/release/app-release.apk
+          for i in $(seq 1 20); do
+            if gh release upload "$GITHUB_REF_NAME" "$apk" --clobber; then
+              echo "attached $apk to $GITHUB_REF_NAME"
+              exit 0
+            fi
+            [ "$i" = 1 ] && echo "release $GITHUB_REF_NAME not up yet; retrying"
+            sleep 15
+          done
+          echo "::error::release $GITHUB_REF_NAME did not appear for the APK upload"
+          exit 1
