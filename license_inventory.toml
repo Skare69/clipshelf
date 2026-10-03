@@ -62,9 +62,9 @@ h11               = { observed = "0.16.0",  license = "MIT",          meta = "MI
 anyio             = { observed = "4.15.1",  license = "MIT",          meta = "MIT" }
 annotated-types   = { observed = "0.8.0",   license = "MIT",          meta = "MIT" }
 typing-inspection = { observed = "0.4.4",   license = "MIT",          meta = "MIT" }
-# django declares tzdata only on win32: developer workstations only,
-# never installed in the linux image.
-tzdata            = { observed = "2026.3",  license = "Apache-2.0",   meta = "Apache-2.0", platforms = ["win32"] }
+# django declares tzdata only on win32, but the hash-locked requirements.lock
+# ships it on every platform (harmless data package, Apache-2.0).
+tzdata            = { observed = "2026.5",  license = "Apache-2.0",   meta = "Apache-2.0" }
 
 [android]
 # Resolved releaseRuntimeClasspath (Gradle 8.9 / AGP 8.7.3, build-time tooling
