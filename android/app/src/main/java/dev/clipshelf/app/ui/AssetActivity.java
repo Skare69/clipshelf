@@ -71,7 +71,7 @@ public class AssetActivity extends Activity {
         TextView status = findViewById(R.id.asset_status);
         status.setVisibility(View.VISIBLE);
         status.setText(R.string.loading);
-        Async.go(() -> {
+        Async.goUi(this, () -> {
             File dest = File.createTempFile("asset", ".bin", getCacheDir());
             try {
                 Api.downloadAsset(session.profile.endpoint, session.token, url, dest, Api.MAX_ASSET_BYTES);
@@ -122,7 +122,7 @@ public class AssetActivity extends Activity {
         status.setVisibility(View.VISIBLE);
         status.setText(R.string.loading);
         TextView body = findViewById(R.id.asset_body);
-        Async.go(() -> {
+        Async.goUi(this, () -> {
             File dest = File.createTempFile("asset", ".txt", getCacheDir());
             try {
                 Api.downloadAsset(session.profile.endpoint, session.token, url, dest, TEXT_PREVIEW_BYTES);

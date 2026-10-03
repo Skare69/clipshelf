@@ -98,7 +98,7 @@ public class LibraryActivity extends Activity {
         offset = 0;
         entries.clear();
         adapter.notifyDataSetChanged();
-        Async.go(() -> Api.me(session.profile.endpoint, session.token), (me, error) -> {
+        Async.goUi(this, () -> Api.me(session.profile.endpoint, session.token), (me, error) -> {
             if (error != null) {
                 fail(error);
                 return;
@@ -150,7 +150,7 @@ public class LibraryActivity extends Activity {
             return;
         }
         setStatus(getString(R.string.loading));
-        Async.go(() -> Api.entries(session.profile.endpoint, session.token, collectionId,
+        Async.goUi(this, () -> Api.entries(session.profile.endpoint, session.token, collectionId,
                         q, sort, kind, offset, PAGE),
                 (page, error) -> {
                     if (error != null) {

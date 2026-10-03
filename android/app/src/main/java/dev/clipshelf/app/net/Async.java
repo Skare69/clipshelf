@@ -1,5 +1,6 @@
 package dev.clipshelf.app.net;
 
+import android.app.Activity;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -35,6 +36,16 @@ public final class Async {
             final T r = result;
             final Exception e = error;
             MAIN.post(() -> done.done(r, e));
+        });
+    }
+
+    /** go() for UI-only delivery: drops the outcome when the activity is gone. */
+    public static <T> void goUi(Activity a, Job<T> job, Done<T> done) {
+        go(job, (r, e) -> {
+            if (a.isFinishing() || a.isDestroyed()) {
+                return;
+            }
+            done.done(r, e);
         });
     }
 }

@@ -85,7 +85,7 @@ public class SettingsActivity extends Activity {
                         Toast.makeText(this, R.string.collection_default_set, Toast.LENGTH_SHORT).show();
                     });
         });
-        Async.go(() -> Api.me(session.profile.endpoint, session.token), (Done<Api.Me>) (me, error) -> {
+        Async.goUi(this, () -> Api.me(session.profile.endpoint, session.token), (Done<Api.Me>) (me, error) -> {
             if (error != null) {
                 Toast.makeText(this, Ui.message(this, error), Toast.LENGTH_LONG).show();
                 return;

@@ -54,7 +54,7 @@ public class CollectionDetailActivity extends Activity {
                 return;
             }
             addBtn.setEnabled(false);
-            Async.go(() -> {
+            Async.goUi(this, () -> {
                 Api.addMember(session.profile.endpoint, session.token, collectionId, email);
                 return null;
             }, (r, e) -> {
@@ -74,7 +74,7 @@ public class CollectionDetailActivity extends Activity {
         TextView status = findViewById(R.id.members_status);
         status.setVisibility(View.VISIBLE);
         status.setText(R.string.loading);
-        Async.go(() -> Api.members(session.profile.endpoint, session.token, collectionId),
+        Async.goUi(this, () -> Api.members(session.profile.endpoint, session.token, collectionId),
                 (result, error) -> {
                     status.setVisibility(View.GONE);
                     if (error != null) {
@@ -117,7 +117,7 @@ public class CollectionDetailActivity extends Activity {
             remove.setVisibility(m.isOwner ? View.GONE : View.VISIBLE);
             remove.setOnClickListener(iv -> new AlertDialog.Builder(CollectionDetailActivity.this)
                     .setMessage(getString(R.string.member_remove) + " " + m.email + "?")
-                    .setPositiveButton(R.string.ok, (d, w) -> Async.go(() -> {
+                    .setPositiveButton(R.string.ok, (d, w) -> Async.goUi(CollectionDetailActivity.this, () -> {
                         Api.removeMember(session.profile.endpoint, session.token, collectionId, m.id);
                         return null;
                     }, (r, e) -> {

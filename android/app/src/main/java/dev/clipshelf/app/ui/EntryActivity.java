@@ -46,7 +46,7 @@ public class EntryActivity extends Activity {
         TextView status = findViewById(R.id.entry_status);
         status.setVisibility(View.VISIBLE);
         status.setText(R.string.loading);
-        Async.go(() -> Api.entry(session.profile.endpoint, session.token, entryId),
+        Async.goUi(this, () -> Api.entry(session.profile.endpoint, session.token, entryId),
                 (detail, error) -> {
                     if (error != null) {
                         String m = Ui.message(this, error);
@@ -161,7 +161,7 @@ public class EntryActivity extends Activity {
         retry.setText(R.string.entry_retry_job);
         retry.setOnClickListener(v -> {
             retry.setEnabled(false);
-            Async.go(() -> {
+            Async.goUi(this, () -> {
                 Api.retryJob(session.profile.endpoint, session.token, job.id);
                 return null;
             }, (r, e) -> {
@@ -186,7 +186,7 @@ public class EntryActivity extends Activity {
     }
 
     private void deleteEntry() {
-        Async.go(() -> {
+        Async.goUi(this, () -> {
             Api.deleteEntry(session.profile.endpoint, session.token, entryId);
             return null;
         }, (r, e) -> {

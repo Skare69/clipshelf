@@ -61,7 +61,7 @@ public class CollectionsActivity extends Activity {
         TextView status = findViewById(R.id.collections_status);
         status.setVisibility(View.VISIBLE);
         status.setText(R.string.loading);
-        Async.go(() -> Api.me(session.profile.endpoint, session.token), (me, error) -> {
+        Async.goUi(this, () -> Api.me(session.profile.endpoint, session.token), (me, error) -> {
             status.setVisibility(View.GONE);
             if (error != null) {
                 status.setText(Ui.message(this, error));
@@ -84,7 +84,7 @@ public class CollectionsActivity extends Activity {
                     if (name.isEmpty()) {
                         return;
                     }
-                    Async.go(() -> Api.createCollection(session.profile.endpoint, session.token, name),
+                    Async.goUi(this, () -> Api.createCollection(session.profile.endpoint, session.token, name),
                             (c, error) -> {
                                 if (error != null) {
                                     Toast.makeText(this, Ui.message(this, error), Toast.LENGTH_LONG).show();
