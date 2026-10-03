@@ -113,7 +113,10 @@ non_packaged = ["org.jetbrains.kotlinx:kotlinx-coroutines-bom"]
 # with sources on deb.debian.org. The gate checks the pins below, not each
 # package's license.
 base = "python:3.13-slim"   # TODO(operator): pin the base digest per Dockerfile comment
-apt = ["ca-certificates", "ffmpeg", "gcc", "libc6-dev", "make"]
+# Multistage build: the compiler set lives in the discarded sqlite-build stage;
+# only the runtime set ships.
+apt_build_stage = ["ca-certificates", "gcc", "libc6-dev", "make"]
+apt_runtime = ["ca-certificates", "ffmpeg"]
 
 [image.sqlite]
 version = "3.53.1"

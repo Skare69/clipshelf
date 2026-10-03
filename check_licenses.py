@@ -131,10 +131,11 @@ def check_image() -> None:
         fail(f"image: base image is {base.group(1) if base else 'missing'}, "
              f"inventory pins {img['base']}")
 
-    apt = re.search(r"apt-get install -y --no-install-recommends ([^\\]+)", text)
-    got = sorted((apt.group(1).split()) if apt else [])
-    if got != sorted(img["apt"]):
-        fail(f"image: apt packages {got} != inventoried {sorted(img['apt'])}")
+    stages = [sorted(m.group(1).split())
+              for m in re.finditer(r"apt-get install -y --no-install-recommends ([^\\]+)", text)]
+    want = [sorted(img["apt_build_stage"]), sorted(img["apt_runtime"])]
+    if stages != want:
+        fail(f"image: apt stage sets {stages} != inventoried {want}")
 
     for key, arg in [("version", "SQLITE_VERSION"), ("tarball", "SQLITE_TARBALL"),
                      ("url", "SQLITE_URL"), ("sha256", "SQLITE_SHA256")]:

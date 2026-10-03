@@ -114,7 +114,8 @@ tooling; they are not shipped in the APK.
 |---|---|---|---|
 | python:3.13-slim base | pinned tag | PSF-2.0 (CPython) + Debian distro set | digest pin TODO (see Dockerfile) |
 | pip (in base) | per base image | MIT | tooling, not an application dependency |
-| Debian packages: ca-certificates, ffmpeg, gcc, libc6-dev, make | per Debian release | DFSG set; ffmpeg program build is **GPL-2.0-or-later** | license texts ship in-image at `/usr/share/doc/<pkg>/copyright`; sources on deb.debian.org. gcc/libc6-dev/make are SQLite build tools that remain in the image |
+| Debian packages: ca-certificates, ffmpeg (runtime image) | per Debian release | DFSG set; ffmpeg program build is **GPL-2.0-or-later** | license texts ship in-image at `/usr/share/doc/<pkg>/copyright`; sources on deb.debian.org |
+| Debian packages: ca-certificates, gcc, libc6-dev, make (build stage only) | per Debian release | DFSG set | compile the bundled SQLite; discarded in the multistage build, never shipped |
 | SQLite (bundled, built from pinned tarball) | 3.53.1 | Public domain | sqlite.org; sha256-verified at build |
 
 Debian policy: the distro guarantees DFSG-free licenses for its packages; the
