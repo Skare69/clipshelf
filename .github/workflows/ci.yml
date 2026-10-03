@@ -54,7 +54,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           validate-wrappers: true
-      - run: ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --no-daemon -q
+      - run: mkdir -p app/build && ./gradlew :app:dependencies --configuration releaseRuntimeClasspath --no-daemon -q
           > app/build/license-deps.txt
         working-directory: android
       - run: python3 check_licenses.py android --deps android/app/build/license-deps.txt
