@@ -36,11 +36,14 @@ jobs:
       - run: python test_sources.py
 
   android:
-    # Debug-build gate for the Android client. Versions come from the source
-    # tree (android/gradle/wrapper/gradle-wrapper.properties), never from CI.
+    # Debug-build gate for the Android client. Versions are stamped from the
+    # nearest v* tag (android/app/build.gradle releaseVersion rule), so the
+    # checkout needs full tag history.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
