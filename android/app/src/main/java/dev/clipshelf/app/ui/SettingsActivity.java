@@ -68,8 +68,12 @@ public class SettingsActivity extends Activity {
             if (selectedCollectionId == null) {
                 return;
             }
+            // Snapshot: the background job must not read the mutable spinner
+            // selection after scheduling — a spinner change mid-flight would
+            // otherwise retarget the request.
+            final String target = selectedCollectionId;
             applyDefault.setEnabled(false);
-            Async.go(() -> Api.setDefaultCollection(session.profile.endpoint, session.token, selectedCollectionId),
+            Async.go(() -> Api.setDefaultCollection(session.profile.endpoint, session.token, target),
                     (me, error) -> {
                         applyDefault.setEnabled(true);
                         if (error != null) {
