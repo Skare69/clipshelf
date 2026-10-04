@@ -83,8 +83,16 @@ public class ShareReceiverActivity extends Activity {
             return;
         }
 
-        OutboxStore db = new OutboxStore(this);
-        long[] usage = db.usage();
+        OutboxStore db;
+        long[] usage;
+        try {
+            db = new OutboxStore(this);
+            usage = db.usage();
+        } catch (Exception e) {
+            // The store may be unusable (locked/corrupt): reject, never crash.
+            reject(title, detail, open, getString(R.string.share_storage_error));
+            return;
+        }
         if (OutboxPolicy.outboxFull((int) usage[0], usage[1],
                 text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)) {
             reject(title, detail, open, getString(R.string.share_outbox_full,
@@ -96,8 +104,11 @@ public class ShareReceiverActivity extends Activity {
         String destinationText = profile.defaultCollectionName == null
                 || profile.defaultCollectionName.isEmpty()
                 ? "" : getString(R.string.share_default_destination, profile.defaultCollectionName);
-        if (!DurableShare.commit(() -> db.insert(profile.instanceId, profile.userId, profile.email,
-                profile.endpoint, text, profile.defaultCollectionId))) {
+        String[] committed = new String[1];
+        boolean saved = DurableShare.commit(() -> committed[0] = db.insert(profile.instanceId,
+                profile.userId, profile.email, profile.endpoint, text, profile.defaultCollectionId));
+        if (!saved || committed[0] == null) {
+            // The store could not commit the row: never claim "saved".
             reject(title, detail, open, getString(R.string.share_storage_error));
             return;
         }

@@ -13,6 +13,8 @@ public final class OutboxPolicy {
     public static final int STATE_DELIVERED = 1;
     public static final int STATE_REJECTED = 2;
     public static final int STATE_PAUSED = 3;
+    /** Receipt mismatch: paused per-row, never auto-resumed by a healthy session. */
+    public static final int STATE_PAUSED_MISMATCH = 4;
 
     public static final int DECISION_DELIVER = 0;
     public static final int DECISION_RETRY = 1;

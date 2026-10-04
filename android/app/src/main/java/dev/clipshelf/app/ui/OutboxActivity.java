@@ -100,7 +100,9 @@ public class OutboxActivity extends Activity {
     }
 
     private void actOn(OutboxStore.Row row) {
-        if (row.state != OutboxStore.STATE_PAUSED && row.state != OutboxStore.STATE_REJECTED) {
+        if (row.state != OutboxStore.STATE_PAUSED
+                && row.state != OutboxStore.STATE_PAUSED_MISMATCH
+                && row.state != OutboxStore.STATE_REJECTED) {
             return;
         }
         new AlertDialog.Builder(this)
@@ -165,6 +167,7 @@ public class OutboxActivity extends Activity {
                     stateColor = R.color.status_error;
                     break;
                 case OutboxStore.STATE_PAUSED:
+                case OutboxStore.STATE_PAUSED_MISMATCH:
                     stateRes = R.string.outbox_state_paused;
                     stateColor = R.color.status_paused;
                     break;

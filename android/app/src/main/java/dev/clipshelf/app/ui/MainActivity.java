@@ -101,8 +101,9 @@ public class MainActivity extends Activity {
         OutboxStore db = new OutboxStore(this);
         int[] counts = db.countsFor(p.instanceId, p.userId);
         int others = db.countOtherIdentities(p.instanceId, p.userId);
+        int paused = counts[OutboxStore.STATE_PAUSED] + counts[OutboxStore.STATE_PAUSED_MISMATCH];
         String text = getString(R.string.outbox_summary,
-                counts[OutboxStore.STATE_QUEUED], counts[OutboxStore.STATE_PAUSED],
+                counts[OutboxStore.STATE_QUEUED], paused,
                 counts[OutboxStore.STATE_DELIVERED]);
         if (others > 0) {
             text += "  (+" + others + ")";
