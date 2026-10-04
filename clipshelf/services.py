@@ -316,9 +316,11 @@ def store_source(job, source):
             job.collection = personal_collection(user)
             warnings.append("Selected collection is unavailable; results saved to your Personal collection.")
         canonical = publication.link_key(url)
-        # A removal of either identity holds: a redirect must not re-add it.
+        # A removal of any recognized identity holds: a redirect, or the
+        # legacy all-lowercase form of either URL, must not re-add it.
         tombstoned = publication.tombstoned(
-            job.collection_id, user.id, canonical, publication.link_key(job.url))
+            job.collection_id, user.id,
+            *publication.link_keys(url), *publication.link_keys(job.url))
         metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
 
         job.final_url = url  # the resolved URL this acquisition actually read
@@ -463,7 +465,8 @@ def store_findings(job, findings, screen=True):
         # its source and its findings on one entry.
         canonical = publication.link_key((job.source or {}).get("url") or job.url)
         warnings = list(job.warnings or [])
-        if publication.tombstoned(job.collection_id, user.id, canonical):
+        if publication.tombstoned(
+                job.collection_id, user.id, *publication.link_keys(canonical)):
             warnings.append("URL was removed from this collection; findings were not attached.")
         else:
             publication.contribute_link(
@@ -589,7 +592,7 @@ def _validate_findings(job, findings):
     if not isinstance(findings, dict):
         raise ValidationError({"findings": "Findings must be an object."}, code="invalid")
     source_url = _str(findings.get("source"))
-    if source_url not in {job.url, job.final_url, publication.link_key(job.url)}:
+    if source_url not in {job.url, job.final_url, *publication.link_keys(job.url)}:
         raise ValidationError({"source": "Findings do not match this job's source."}, code="invalid")
     return {
         "source": source_url,

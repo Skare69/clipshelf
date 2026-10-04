@@ -733,15 +733,18 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
 
 
 def _dedupe(items, removed_keys):
+    """Exact-duplicate and removal suppression across both recognized key
+    forms: a cased URL must match a legacy all-lowercase seen/removed key."""
     seen_keys = set()
     out = []
     for item in items:
         if not isinstance(item, dict) or not item.get("url"):
             raise ValidationError("every import item needs a dict with a url")
-        key = lib.norm(str(item["url"])) or str(item["url"])
-        if key in removed_keys or key in seen_keys:
+        key = publication.link_key(str(item["url"]))
+        keys = publication.link_keys(key)
+        if keys & removed_keys or keys & seen_keys:
             continue
-        seen_keys.add(key)
+        seen_keys |= keys
         item = dict(item)
         item["url"] = key
         out.append(item)
@@ -901,10 +904,10 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
             key = publication.link_key(plan["url"])
             # ponytail: a removed entry never comes back through an import; the
             # already-published bytes stay as unreferenced files.
-            if publication.tombstoned(collection.id, user.id, key, plan["url"]):
+            if publication.tombstoned(collection.id, user.id,
+                                      *publication.link_keys(key)):
                 continue
-            entry, _ = models.Entry.objects.get_or_create(
-                collection=collection, kind="link", key=key)
+            entry, _ = publication.link_entry(collection, key)
             counts["entries"] += 1
             job = None
             if plan["published"] or plan["state"] != "done":
@@ -1039,10 +1042,9 @@ def _merge_entry(personal, user, url):
     if not url:
         return None
     key = publication.link_key(url)
-    if publication.tombstoned(personal.id, user.id, key, url):
+    if publication.tombstoned(personal.id, user.id, *publication.link_keys(key)):
         return None
-    entry, _ = models.Entry.objects.get_or_create(
-        collection=personal, kind=models.Entry.Kind.LINK, key=key)
+    entry, _ = publication.link_entry(personal, key)
     return entry
 
 

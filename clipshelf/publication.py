@@ -6,11 +6,14 @@ extracted merge) routes identity and tombstone decisions through here so a
 removed entry can never resurrect on another route and the same link/prompt
 lands on one Entry per collection.
 
-Identity: links key on the canonical URL; prompts key on SHA-256 of
-whitespace-normalized text, with the legacy SHA-1(lowercase-normalized)[:16]
-scheme recognized wherever entries or tombstones already shipped under it.
-ponytail: no destructive re-key migration — historical SHA-1 entries and
-hash-only tombstones are reused in place; new prompts always get SHA-256.
+Identity: links key on the canonical URL (GitHub owner/repo folds, deep
+ref/file path case is preserved) with the legacy all-lowercase path
+recognized wherever entries or tombstones already shipped under it; prompts
+key on SHA-256 of whitespace-normalized text, with the legacy
+SHA-1(lowercase-normalized)[:16] scheme recognized the same way.
+ponytail: no destructive re-key migration — historical SHA-1 entries,
+hash-only tombstones, and legacy lowercase link keys are reused in place;
+new prompts always get SHA-256, new link entries the case-preserving key.
 """
 import hashlib
 from urllib.parse import urlsplit, urlunsplit
@@ -44,6 +47,45 @@ def link_key(url):
         return urlunsplit((scheme, netloc, parts.path or "/", parts.query, ""))
     except ValueError:
         return url.strip()
+
+
+def legacy_link_key(url):
+    """Legacy link identity: the all-lowercase GitHub path the pre
+    case-preserving norm minted (owner/repo folding was already the same;
+    deep ref/file case was flattened). Recognized wherever entries or
+    tombstones already shipped under it; never minted for new entries.
+    Non-GitHub URLs never had a case rule, so the current key is returned."""
+    key = link_key(url)
+    parts = urlsplit(key)
+    if (parts.hostname or "") not in ("github.com", "gist.github.com"):
+        return key
+    return urlunsplit((parts.scheme, parts.netloc, parts.path.lower(),
+                       parts.query, ""))
+
+
+def link_keys(url):
+    """Every recognized Entry/tombstone identity for one link: the current
+    case-preserving key plus its legacy all-lowercase form. Tombstone and
+    dedup lookups accept the whole set; nothing stored is ever rewritten.
+    Any History identity comparison (alias rows included) must use this set."""
+    key = link_key(url)
+    return {key, legacy_link_key(key)}
+
+
+def link_entry(collection, key):
+    """Variant-aware link Entry: reuses an entry shipped under the legacy
+    all-lowercase identity, keeping its stored key, so the case-preserving
+    key never duplicates it. New entries always get `key`."""
+    legacy = legacy_link_key(key)
+    if legacy != key:
+        existing = Entry.objects.filter(
+            collection=collection, kind=Entry.Kind.LINK, key__in=(key, legacy))
+        if not existing.filter(key=key).exists():
+            legacy_entry = existing.filter(key=legacy).first()
+            if legacy_entry is not None:
+                return legacy_entry, False
+    return Entry.objects.get_or_create(
+        collection=collection, kind=Entry.Kind.LINK, key=key)
 
 
 def prompt_key(text):
@@ -147,8 +189,7 @@ def publish_prompt(*, collection, user, text, data, origin, capture=None, job=No
 def contribute_link(*, collection, user, capture, job, key, data):
     """Create or merge the caller's capture contribution. Merge (not replace)
     so a good earlier `findings` blob survives a later failed reprocess."""
-    entry, _ = Entry.objects.get_or_create(
-        collection=collection, kind=Entry.Kind.LINK, key=key)
+    entry, _ = link_entry(collection, key)
     existing = Contribution.objects.filter(
         entry=entry, user=user, origin="capture"
     ).first()

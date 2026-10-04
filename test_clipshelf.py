@@ -117,6 +117,9 @@ def test():
     assert cs.norm("https://github.com/Foo/Bar") == cs.norm("https://github.com/foo/bar")
     assert cs.norm("https://github.com/Foo/Bar/blob/Main/SomeFile.py") == \
         "https://github.com/foo/bar/blob/Main/SomeFile.py"
+    # deep GitHub ref/file path case is preserved; owner/repo still folds
+    assert cs.norm("https://github.com/foo/bar/blob/Main/ReadMe.md") == "https://github.com/foo/bar/blob/Main/ReadMe.md"
+    assert cs.norm("https://github.com/foo/bar/blob/Main/F.py") != cs.norm("https://github.com/foo/bar/blob/main/f.py")
     assert cs.norm("https://Example.com/CaseMatters") != cs.norm("https://example.com/casematters")
     assert cs.repo_url("Foo/Bar") == "https://github.com/foo/bar"
     assert cs.repo_url("github.com/Foo/Bar") == "https://github.com/foo/bar"
