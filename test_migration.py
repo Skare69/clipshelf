@@ -309,6 +309,21 @@ class ImportTests(MigrationMixin, TestCase):
             collection=self.personal, user=self.user,
             kind=models.History.Kind.REMOVED).count(), len(urls))
 
+    def test_tombstoned_without_keys_is_false(self):
+        self.assertFalse(publication.tombstoned(self.personal.id, self.user.id))
+
+    def test_prompt_entry_reuses_exact_legacy_16_character_key(self):
+        text = "An unchanged legacy prompt."
+        legacy_key = "b45378c3b041e795"
+        self.assertEqual(publication.prompt_key(text), legacy_key)
+        legacy_entry = models.Entry.objects.create(
+            collection=self.personal, kind=models.Entry.Kind.PROMPT, key=legacy_key)
+
+        self.assertEqual(
+            publication.prompt_entry(self.personal, self.user, text), legacy_entry)
+        self.assertEqual(models.Entry.objects.filter(
+            collection=self.personal, kind=models.Entry.Kind.PROMPT).count(), 1)
+
     def test_removed_alias_blocks_canonical_and_alias_urls(self):
         alias = "https://short.example/item"
         target = "https://target.example/item"
