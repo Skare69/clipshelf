@@ -132,13 +132,16 @@ class _PinnedHTTP(http.client.HTTPConnection):
             self.sock.settimeout(self.timeout)
 
 
-def _open_pinned(scheme, host, port, path, infos, user_agent, timeout):
+def _open_pinned(scheme, host, port, path, infos, user_agent, deadline):
     headers = {"Host": host if port in (80, 443) else f"{host}:{port}",
                "User-Agent": user_agent, "Accept": "*/*",
                "Accept-Encoding": "gzip, deflate", "Connection": "close"}
     last = None
     for family, sockaddr in infos:
-        conn = _PinnedHTTP(host, port, family, sockaddr, timeout, _TLS.get(scheme))
+        left = deadline - time.monotonic()
+        if left <= 0.05:
+            raise NetworkError("fetch exceeded time bound")
+        conn = _PinnedHTTP(host, port, family, sockaddr, left, _TLS.get(scheme))
         try:
             conn.request("GET", path, headers=headers)
             return conn, conn.getresponse()
@@ -148,8 +151,13 @@ def _open_pinned(scheme, host, port, path, infos, user_agent, timeout):
     raise NetworkError(f"connect to {host[:255]} failed: {last}")
 
 
-def _bounded_read(resp, encoding, max_bytes, deadline):
-    """Decompression-bounded read; gzip/deflate bombs die at max_bytes."""
+def _bounded_read(resp, encoding, max_bytes, deadline, sock=None):
+    """Decompression-bounded read; gzip/deflate bombs die at max_bytes.
+
+    Reads one raw chunk at a time with the socket timeout re-tightened to the
+    remaining whole-fetch budget, so a slow trickle can never stretch the fetch
+    past its deadline. ponytail: header reads are only bounded per attempt.
+    """
     enc = (encoding or "").strip().lower()
     dec = None
     if enc in ("gzip", "x-gzip"):
@@ -171,11 +179,19 @@ def _bounded_read(resp, encoding, max_bytes, deadline):
             if dec is not None and dec.unconsumed_tail:
                 absorb(dec.decompress(dec.unconsumed_tail, 65536))
                 continue
-            chunk = resp.read(65536)
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise NetworkError("fetch exceeded time bound")
+            if sock is not None:
+                sock.settimeout(left)
+            try:
+                chunk = resp.read1(65536)
+            except TimeoutError as exc:   # settimeout(left) ran out: budget spent
+                raise NetworkError("fetch exceeded time bound") from exc
+            except OSError as exc:
+                raise NetworkError(f"connection lost mid-body: {exc}") from exc
             if not chunk:
                 break
-            if time.monotonic() > deadline:
-                raise NetworkError("fetch exceeded time bound")
             if dec is None:
                 absorb(chunk)
             else:
@@ -213,22 +229,21 @@ def fetch_public(url, max_bytes=DEFAULT_MAX_BYTES, timeout=DEFAULT_TIMEOUT,
     current = url
     for _hop in range(MAX_REDIRECTS + 1):
         scheme, host, port, path, infos = validate_url(current)
-        remaining = max(1.0, deadline - time.monotonic())
-        conn, resp = _open_pinned(scheme, host, port, path, infos, user_agent, remaining)
+        conn, resp = _open_pinned(scheme, host, port, path, infos, user_agent, deadline)
         try:
             status = resp.status
             if status in (301, 302, 303, 307, 308):
                 location = resp.headers.get("Location")
-                _bounded_read(resp, None, min(1 << 20, max_bytes), deadline)
+                _bounded_read(resp, None, min(1 << 20, max_bytes), deadline, conn.sock)
                 if not location:
                     raise NetworkError(f"redirect from {host[:255]} without location")
                 current = urllib.parse.urljoin(current, location)
                 continue
             if not 200 <= status < 300:
-                _bounded_read(resp, None, 1 << 20, deadline)
+                _bounded_read(resp, None, 1 << 20, deadline, conn.sock)
                 raise NetworkError(f"HTTP {status} from {host[:255]}")
             body = _bounded_read(resp, resp.headers.get("Content-Encoding"),
-                                 max_bytes, deadline)
+                                 max_bytes, deadline, conn.sock)
             return {"url": current, "body": body,
                     "content_type": _media_type(resp.headers.get("Content-Type"))}
         finally:

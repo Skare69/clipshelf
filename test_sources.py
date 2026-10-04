@@ -8,6 +8,8 @@ import socket
 import shutil
 import tempfile
 import os
+import time
+import threading
 import unittest
 from unittest import mock
 
@@ -199,6 +201,79 @@ def test_redirects_and_bounds():
             assert "404" in str(exc)
     finally:
         net.socket = original
+
+
+def test_deadline_bounded_reads():
+    # a slow trickle must fail at the whole-fetch deadline, not when the last
+    # byte finally arrives through a blocking buffered read
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def serve():
+        try:
+            conn, _ = srv.accept()
+            conn.sendall(b"HTTP/1.1 200 X\r\nContent-Type: application/octet-stream\r\n"
+                         b"Content-Length: 2\r\nConnection: close\r\n\r\n")
+            for gap in (0.75, 1.5):
+                time.sleep(gap)
+                conn.sendall(b"x")
+            time.sleep(0.2)
+            conn.close()
+        except OSError:
+            pass
+
+    real_validate = net.validate_url
+    net.validate_url = lambda url: ("http", "media.example", port, "/",
+                                    [(socket.AF_INET, ("127.0.0.1", port))])
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    start = time.monotonic()
+    try:
+        try:
+            net.fetch_public("http://media.example/x", timeout=1.0)
+            raise AssertionError("trickled body accepted past deadline")
+        except net.NetworkError as exc:
+            elapsed = time.monotonic() - start
+            assert "time bound" in str(exc), str(exc)
+            assert elapsed < 2.0, f"slow reader held the fetch {elapsed:.2f}s"
+    finally:
+        net.validate_url = real_validate
+        srv.close()
+
+    # address retries share one budget: two refused dials must not each take
+    # the full timeout
+    class SlowRefusedSock(FakeSock):
+        def settimeout(self, t):
+            self.timeout_left = t
+
+        def connect(self, sa):
+            self.fake.connected.append(sa[0])
+            time.sleep(min(0.7, getattr(self, "timeout_left", 0) or 0.7))
+            raise ConnectionRefusedError("refused")
+
+    class RetryNet(FakeNet):
+        def socket(self, family, type):
+            return SlowRefusedSock(self)
+
+    fake = RetryNet({"media.example": [PUBLIC, "203.0.113.9"]}, [])
+    real_socket = net.socket
+    net.validate_url = lambda url: ("http", "media.example", 80, "/",
+                                    [(socket.AF_INET, (PUBLIC, 80)),
+                                     (socket.AF_INET, ("203.0.113.9", 80))])
+    net.socket = fake
+    start = time.monotonic()
+    try:
+        try:
+            net.fetch_public("http://media.example/x", timeout=1.0)
+            raise AssertionError("retry past deadline accepted")
+        except net.NetworkError:
+            elapsed = time.monotonic() - start
+            assert elapsed < 1.2, f"retry budget doubled the fetch: {elapsed:.2f}s"
+    finally:
+        net.socket = real_socket
+        net.validate_url = real_validate
 
 
 def test_import_media_bounds(tmp=None):
@@ -745,6 +820,8 @@ def test():
     print("ssrf/pin ok")
     test_redirects_and_bounds()
     print("redirect/bounds ok")
+    test_deadline_bounded_reads()
+    print("deadline bounds ok")
     tmp = tempfile.mkdtemp(prefix="cs-src-")
     try:
         test_import_media_bounds(tmp)
