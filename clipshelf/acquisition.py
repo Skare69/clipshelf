@@ -155,20 +155,25 @@ def _network_status(source, exc):
     source["acquisition"] = "blocked" if "refused" in text or "non-public" in text else "error"
 
 
+def _direct_media_cap(ctype):
+    """One-fetch size bound: direct image/video gets the media ceiling,
+    everything else keeps the page ceiling."""
+    return MEDIA_MAX_BYTES if ctype.startswith(("image/", "video/")) else PAGE_MAX_BYTES
+
+
 def _acquire_page(url, directory, source):
-    resp = network.fetch_public(url, max_bytes=PAGE_MAX_BYTES)
+    resp = network.fetch_public(url, max_bytes=_direct_media_cap,
+                                timeout=max(network.DEFAULT_TIMEOUT, 120))
     ctype = resp["content_type"]
     if ctype.startswith("image/"):
-        data = _fetch_media(resp["url"], source, MEDIA_MAX_BYTES)
-        store_bytes(source, directory, _filename_from_url(resp["url"]), data,
+        store_bytes(source, directory, _filename_from_url(resp["url"]), resp["body"],
                     "image", ctype)
         source["metadata"].update({"media": "image", "metadata": "none",
                                    "captions": "none", "tier": "server", "failure": "none"})
         source["acquisition"] = "complete"
         return
     if ctype.startswith("video/"):
-        data = _fetch_media(resp["url"], source, MEDIA_MAX_BYTES)
-        path = store_bytes(source, directory, _filename_from_url(resp["url"]), data,
+        path = store_bytes(source, directory, _filename_from_url(resp["url"]), resp["body"],
                            "video", ctype)
         source["metadata"].update({"media": "video", "metadata": "none",
                                    "captions": "none", "tier": "server", "failure": "none"})
@@ -212,14 +217,6 @@ def _acquire_page(url, directory, source):
 def _filename_from_url(url, fallback="file"):
     name = os.path.basename(urllib.parse.urlsplit(url).path)
     return _safe_name(name, fallback)
-
-
-def _fetch_media(url, source, max_bytes):
-    try:
-        return network.fetch_public(url, max_bytes=max_bytes,
-                                    timeout=max(network.DEFAULT_TIMEOUT, 120))["body"]
-    except network.NetworkError as exc:
-        raise AcquisitionError(f"media fetch failed: {exc}")
 
 
 # --------------------------------------------------------------- tiktok

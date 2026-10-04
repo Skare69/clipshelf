@@ -213,16 +213,27 @@ def _media_type(content_type):
     return (content_type or "").split(";")[0].strip().lower()
 
 
+def _byte_cap(max_bytes, ctype):
+    """Resolved per-hop size bound; a callable cap sees the content type."""
+    if callable(max_bytes):
+        max_bytes = max_bytes(_media_type(ctype))
+    if not isinstance(max_bytes, int) or max_bytes <= 0:
+        raise ValueError("max_bytes must be a positive int")
+    return max_bytes
+
+
 def fetch_public(url, max_bytes=DEFAULT_MAX_BYTES, timeout=DEFAULT_TIMEOUT,
                  user_agent=UA_BROWSER):
     """Validated, IP-pinned public GET.
 
     Returns {"url": final URL, "body": bytes (decompressed), "content_type":
-    lowercased media type}. Every redirect hop is re-validated; decompression,
-    total bytes, and wall time are bounded. Raises NetworkError.
+    lowercased media type}. max_bytes bounds the body; it may be a callable
+    receiving the response content type, returning the int bound. Every
+    redirect hop is re-validated; decompression, total bytes, and wall time
+    are bounded. Raises NetworkError.
     """
-    if not isinstance(max_bytes, int) or max_bytes <= 0:
-        raise ValueError("max_bytes must be a positive int")
+    if not (callable(max_bytes) or isinstance(max_bytes, int) and max_bytes > 0):
+        raise ValueError("max_bytes must be a positive int or callable")
     if not isinstance(timeout, (int, float)) or timeout <= 0:
         raise ValueError("timeout must be a positive number")
     deadline = time.monotonic() + timeout
@@ -232,9 +243,10 @@ def fetch_public(url, max_bytes=DEFAULT_MAX_BYTES, timeout=DEFAULT_TIMEOUT,
         conn, resp = _open_pinned(scheme, host, port, path, infos, user_agent, deadline)
         try:
             status = resp.status
+            cap = _byte_cap(max_bytes, resp.headers.get("Content-Type"))
             if status in (301, 302, 303, 307, 308):
                 location = resp.headers.get("Location")
-                _bounded_read(resp, None, min(1 << 20, max_bytes), deadline, conn.sock)
+                _bounded_read(resp, None, min(1 << 20, cap), deadline, conn.sock)
                 if not location:
                     raise NetworkError(f"redirect from {host[:255]} without location")
                 current = urllib.parse.urljoin(current, location)
@@ -243,7 +255,7 @@ def fetch_public(url, max_bytes=DEFAULT_MAX_BYTES, timeout=DEFAULT_TIMEOUT,
                 _bounded_read(resp, None, 1 << 20, deadline, conn.sock)
                 raise NetworkError(f"HTTP {status} from {host[:255]}")
             body = _bounded_read(resp, resp.headers.get("Content-Encoding"),
-                                 max_bytes, deadline, conn.sock)
+                                 cap, deadline, conn.sock)
             return {"url": current, "body": body,
                     "content_type": _media_type(resp.headers.get("Content-Type"))}
         finally:
