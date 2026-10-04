@@ -26,6 +26,7 @@ import javax.net.ssl.SSLSocket;
 import javax.net.ssl.TrustManagerFactory;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -105,6 +106,45 @@ public class ApiOriginTest {
     }
 
     @Test
+    public void htmlErrorsKeepStatusAndDoNotLeakResponseBodies() throws Exception {
+        String bodyMarker = "<html>response-body-marker</html>";
+        for (int code : new int[]{401, 404}) {
+            originA.response("/api/collections", code + (code == 401 ? " Unauthorized" : " Not Found"),
+                    "text/html", bodyMarker, true);
+            try {
+                Api.collections(originA.url, SENTINEL);
+                fail("HTML error responses must preserve their HTTP status");
+            } catch (Api.ApiException e) {
+                assertEquals(code, e.code);
+                assertEquals("Server error " + code, e.getMessage());
+                assertFalse(e.getMessage().contains(bodyMarker));
+            }
+        }
+    }
+
+    @Test
+    public void streamingAssetAtLimitWritesTheExactBody() throws Exception {
+        originA.response("/asset-exact", "200 OK", "application/octet-stream", "four", false);
+        File dest = File.createTempFile("clipshelf-bounded-asset", ".bin");
+        Api.downloadAsset(originA.url, SENTINEL, "/asset-exact", dest, 4);
+        assertEquals(4, Files.size(dest.toPath()));
+        assertEquals("four", new String(Files.readAllBytes(dest.toPath()), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void oversizedStreamingAssetDoesNotWriteTheLookaheadByte() throws Exception {
+        originA.response("/asset-over", "200 OK", "application/octet-stream", "fives", false);
+        File dest = File.createTempFile("clipshelf-oversized-asset", ".bin");
+        try {
+            Api.downloadAsset(originA.url, SENTINEL, "/asset-over", dest, 4);
+            fail("oversized asset must be rejected");
+        } catch (IOException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("size limit"));
+        }
+        assertEquals(4, Files.size(dest.toPath()));
+    }
+
+    @Test
     public void sameOriginRedirectChainKeepsToken() throws Exception {
         File dest = File.createTempFile("clipshelf-chain-asset", ".bin");
         Api.downloadAsset(originA.url, SENTINEL, originA.url + "/asset", dest, 1024);
@@ -125,6 +165,8 @@ public class ApiOriginTest {
                 Collections.synchronizedList(new java.util.ArrayList<>());
         private final Map<String, String> redirects = new HashMap<>();
         private final Map<String, String> bodies = new HashMap<>();
+        private final Map<String, byte[]> responses =
+                Collections.synchronizedMap(new HashMap<>());
         final String url;
 
         TlsOrigin(SSLContext ssl) throws IOException {
@@ -142,6 +184,19 @@ public class ApiOriginTest {
 
         void body(String path, String content) {
             bodies.put(path, content);
+        }
+
+        void response(String path, String status, String contentType, String content,
+                      boolean includeContentLength) {
+            byte[] body = content.getBytes(StandardCharsets.UTF_8);
+            String head = "HTTP/1.1 " + status + "\r\nContent-Type: " + contentType + "\r\n"
+                    + (includeContentLength ? "Content-Length: " + body.length + "\r\n" : "")
+                    + "Connection: close\r\n\r\n";
+            byte[] header = head.getBytes(StandardCharsets.US_ASCII);
+            byte[] wire = new byte[header.length + body.length];
+            System.arraycopy(header, 0, wire, 0, header.length);
+            System.arraycopy(body, 0, wire, header.length, body.length);
+            responses.put(path, wire);
         }
 
         /** {path, X-Session-Token or null} per received request. */
@@ -186,17 +241,22 @@ public class ApiOriginTest {
             }
             hits.add(new String[]{path, token});
             OutputStream out = sock.getOutputStream();
-            String location = redirects.get(path);
-            if (location != null) {
-                out.write(("HTTP/1.1 302 Found\r\nLocation: " + location
-                        + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-                        .getBytes(StandardCharsets.US_ASCII));
+            byte[] response = responses.get(path);
+            if (response != null) {
+                out.write(response);
             } else {
-                byte[] content = bodies.getOrDefault(path, "").getBytes(StandardCharsets.UTF_8);
-                out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
-                        + content.length + "\r\nConnection: close\r\n\r\n")
-                        .getBytes(StandardCharsets.US_ASCII));
-                out.write(content);
+                String location = redirects.get(path);
+                if (location != null) {
+                    out.write(("HTTP/1.1 302 Found\r\nLocation: " + location
+                            + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                            .getBytes(StandardCharsets.US_ASCII));
+                } else {
+                    byte[] content = bodies.getOrDefault(path, "").getBytes(StandardCharsets.UTF_8);
+                    out.write(("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
+                            + content.length + "\r\nConnection: close\r\n\r\n")
+                            .getBytes(StandardCharsets.US_ASCII));
+                    out.write(content);
+                }
             }
             out.flush();
         }

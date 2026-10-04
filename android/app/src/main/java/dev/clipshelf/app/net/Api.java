@@ -349,6 +349,10 @@ public final class Api {
      */
     public static String downloadAsset(String endpoint, String token, String assetUrlOrPath,
                                        File dest, long maxBytes) throws IOException {
+
+        if (maxBytes < 0) {
+            throw new IOException("Asset too large: " + maxBytes + " bytes");
+        }
         String url = assetUrlOrPath.startsWith("http") ? assetUrlOrPath : endpoint + assetUrlOrPath;
         // Finding A2 containment: the session token never leaves the origin it
         // was issued for; server-provided absolute asset URLs on other origins
@@ -364,12 +368,17 @@ public final class Api {
             if (len > maxBytes) {
                 throw new IOException("Asset too large: " + len + " bytes");
             }
-            try (InputStream in = bounded(c.getInputStream(), maxBytes);
-                 OutputStream out = new FileOutputStream(dest)) {
+            try (InputStream in = c.getInputStream(); OutputStream out = new FileOutputStream(dest)) {
                 byte[] buf = new byte[16 * 1024];
+                long total = 0;
                 int n;
-                while ((n = in.read(buf)) != -1) {
+                while (total < maxBytes
+                        && (n = in.read(buf, 0, (int) Math.min(buf.length, maxBytes - total))) != -1) {
                     out.write(buf, 0, n);
+                    total += n;
+                }
+                if (total == maxBytes && in.read() != -1) {
+                    throw new IOException("Response exceeds size limit");
                 }
             }
             return contentType;
@@ -387,10 +396,16 @@ public final class Api {
             byte[] raw = code >= 400 ? readAtMost(c.getErrorStream(), MAX_RESPONSE_BYTES)
                     : readAtMost(c.getInputStream(), MAX_RESPONSE_BYTES);
             String text = new String(raw, StandardCharsets.UTF_8);
+            if (code >= 400 && !text.trim().startsWith("{")) {
+                throw new ApiException(code, errorMessage(code, new byte[0]));
+            }
             JSONObject json;
             try {
                 json = text.isEmpty() ? new JSONObject() : new JSONObject(text);
             } catch (Exception e) {
+                if (code >= 400) {
+                    throw new ApiException(code, errorMessage(code, new byte[0]));
+                }
                 throw new IOException("Malformed response from server");
             }
             if (code >= 400) {
@@ -504,37 +519,6 @@ public final class Api {
         return u;
     }
 
-    private static InputStream bounded(InputStream in, long maxBytes) throws IOException {
-        if (in == null) {
-            throw new IOException("Empty response");
-        }
-        return new InputStream() {
-            long remaining = maxBytes + 1;
-
-            @Override
-            public int read() throws IOException {
-                if (remaining-- <= 0) {
-                    throw new IOException("Response exceeds size limit");
-                }
-                return in.read();
-            }
-
-            @Override
-            public int read(byte[] b, int off, int len) throws IOException {
-                if (remaining <= 0) {
-                    throw new IOException("Response exceeds size limit");
-                }
-                int n = in.read(b, off, (int) Math.min(len, remaining));
-                remaining -= Math.max(0, n);
-                return n;
-            }
-
-            @Override
-            public void close() throws IOException {
-                in.close();
-            }
-        };
-    }
 
     private static byte[] readAtMost(InputStream in, int maxBytes) throws IOException {
         if (in == null) {
