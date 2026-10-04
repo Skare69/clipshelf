@@ -175,7 +175,7 @@ function confirmDialog({ head, text, ok = "Confirm", danger = true, fields = [] 
   for (const f of fields) {
     const id = "cf_" + f.name;
     const input = el("input", { id, type: f.type || "text", name: f.name,
-      placeholder: f.placeholder || "", autocomplete: "off" });
+      placeholder: f.placeholder || "", autocomplete: "off", required: f.required || null });
     if (f.value != null) input.value = f.value;
     extra.append(el("div", { class: "field" },
       el("label", { for: id, text: f.label + (f.required ? " *" : "") }), input));
