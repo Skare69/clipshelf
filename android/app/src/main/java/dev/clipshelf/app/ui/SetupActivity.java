@@ -14,6 +14,7 @@ import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.net.Async;
 import dev.clipshelf.app.outbox.OutboxStore;
 import dev.clipshelf.app.work.WorkScheduler;
+import dev.clipshelf.app.work.DurableShare;
 
 /**
  * Server + account setup. Order matters: login -> GET /api/me pins instance,
@@ -68,13 +69,21 @@ public class SetupActivity extends Activity {
                         }
                     }
                 }
-                Creds.save(this, new Creds.Profile(endpoint, me.instanceId, me.userId, me.email,
-                        me.defaultCollectionId, collectionName), token);
-                // Durable periodic drain exists before any share is accepted.
+                Creds.Profile profile = new Creds.Profile(endpoint, me.instanceId, me.userId,
+                        me.email, me.defaultCollectionId, collectionName);
+                // Gate share-readiness: the durable periodic drain must be
+                // confirmed registered BEFORE the profile exists, so a saved
+                // profile never lacks it. A failure here fails setup with
+                // nothing saved, so the retry is clean.
                 WorkScheduler.ensurePeriodic(this);
-                // Re-login of this identity resumes its paused rows immediately.
-                new OutboxStore(this).resetAuthPaused(me.instanceId, me.userId);
-                WorkScheduler.drainNow(this);
+                Creds.save(this, profile, token);
+                // Post-save accelerators: a saved profile must never be
+                // reported as a failed login. The periodic drain resumes
+                // paused rows and delivers regardless (DeliverWorker calls
+                // resetAuthPaused on every healthy cycle).
+                DurableShare.accelerate(() ->
+                        new OutboxStore(this).resetAuthPaused(me.instanceId, me.userId));
+                DurableShare.accelerate(() -> WorkScheduler.drainNow(this));
                 return null;
             }, (result, error) -> {
                 go.setEnabled(true);

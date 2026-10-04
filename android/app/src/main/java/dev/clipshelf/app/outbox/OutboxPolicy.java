@@ -114,6 +114,16 @@ public final class OutboxPolicy {
         return n;
     }
 
+    /**
+     * EXTRA_TEXT at the share boundary: share sheets deliver a String or any
+     * CharSequence (e.g. Spannable); both are accepted as text. Anything else
+     * (or missing) is not shareable text and returns null.
+     */
+    public static String sharedText(Object extra) {
+        if (extra instanceof CharSequence cs) return cs.toString();
+        return null;
+    }
+
     private static boolean sameId(String a, String b) {
         return a != null && !a.isEmpty() && b != null && a.equalsIgnoreCase(b);
     }

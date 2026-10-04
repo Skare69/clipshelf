@@ -12,6 +12,7 @@ import android.widget.TextView;
 import dev.clipshelf.app.Creds;
 import dev.clipshelf.app.R;
 import dev.clipshelf.app.work.WorkScheduler;
+import dev.clipshelf.app.work.DurableShare;
 import dev.clipshelf.app.outbox.OutboxPolicy;
 import dev.clipshelf.app.outbox.OutboxStore;
 
@@ -25,6 +26,13 @@ import dev.clipshelf.app.outbox.OutboxStore;
 public class ShareReceiverActivity extends Activity {
 
     private static final long CONFIRM_VISIBLE_MS = 1500L;
+    private static final String KEY_COMMITTED = "share_committed";
+    private static final String KEY_DETAIL = "share_detail";
+    private static final String KEY_DESTINATION = "share_destination";
+
+    /** Set once the outbox row is committed; drives replay across recreation. */
+    private boolean committed;
+    private String savedDetail, savedDestination;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -37,8 +45,20 @@ public class ShareReceiverActivity extends Activity {
         TextView destination = findViewById(R.id.share_destination);
         Button open = findViewById(R.id.share_open);
 
+        // Recreation (rotation or process-death restore) replays the SAME
+        // share intent: re-show the committed result instead of inserting a
+        // duplicate outbox row. Uncommitted replays re-run the checks below.
+        if (savedInstanceState != null && savedInstanceState.getBoolean(KEY_COMMITTED)) {
+            showSaved(title, detail, destination, open,
+                    savedInstanceState.getString(KEY_DETAIL),
+                    savedInstanceState.getString(KEY_DESTINATION));
+            return;
+        }
+
         String type = intent == null ? null : intent.getType();
-        String text = intent == null ? null : intent.getStringExtra(Intent.EXTRA_TEXT);
+        Object rawText = intent != null && intent.getExtras() != null
+                ? intent.getExtras().get(Intent.EXTRA_TEXT) : null;
+        String text = OutboxPolicy.sharedText(rawText);
 
         // Refuse everything but the supported share shape before any persistence.
         if (!"text/plain".equals(type)) {
@@ -72,41 +92,64 @@ public class ShareReceiverActivity extends Activity {
             return;
         }
 
-        String id;
-        try {
-            id = db.insert(profile.instanceId, profile.userId, profile.email, profile.endpoint,
-                    text, profile.defaultCollectionId);
-            WorkScheduler.drainNow(this);
-        } catch (Exception e) {
+        String detailText = getString(R.string.share_saved_detail, profile.email);
+        String destinationText = profile.defaultCollectionName == null
+                || profile.defaultCollectionName.isEmpty()
+                ? "" : getString(R.string.share_default_destination, profile.defaultCollectionName);
+        if (!DurableShare.commit(() -> db.insert(profile.instanceId, profile.userId, profile.email,
+                profile.endpoint, text, profile.defaultCollectionId))) {
             reject(title, detail, open, getString(R.string.share_storage_error));
             return;
         }
 
         // Durable now: row committed with stable id + identity + destination snapshot.
+        // Prompt scheduling is an accelerator only — the periodic drain
+        // registered at setup delivers even when enqueue fails here, so a
+        // scheduling failure must never read as "could not save".
+        DurableShare.accelerate(() -> WorkScheduler.drainNow(this));
+        showSaved(title, detail, destination, open, detailText, destinationText);
+    }
+
+    /** Shows the saved confirm and remembers it for replay across recreation. */
+    private void showSaved(TextView title, TextView detail, TextView destination, Button open,
+                           String detailText, String destinationText) {
+        committed = true;
+        savedDetail = detailText;
+        savedDestination = destinationText;
         title.setText(R.string.share_saved);
-        detail.setText(getString(R.string.share_saved_detail, profile.email));
-        if (profile.defaultCollectionName != null && !profile.defaultCollectionName.isEmpty()) {
-            destination.setText(getString(R.string.share_default_destination, profile.defaultCollectionName));
+        detail.setText(detailText);
+        if (!destinationText.isEmpty()) {
+            destination.setText(destinationText);
         }
+        openApp(open);
+        new Handler(Looper.getMainLooper()).postDelayed(this::finish, CONFIRM_VISIBLE_MS);
+    }
+
+    /** The one exit back into the app, shared by saved and rejected outcomes. */
+    private void openApp(Button open) {
         open.setVisibility(View.VISIBLE);
         open.setOnClickListener(v -> {
             finish();
             startActivity(new Intent(this, MainActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         });
-        new Handler(Looper.getMainLooper()).postDelayed(this::finish, CONFIRM_VISIBLE_MS);
+    }
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (committed) {
+            outState.putBoolean(KEY_COMMITTED, true);
+            outState.putString(KEY_DETAIL, savedDetail);
+            outState.putString(KEY_DESTINATION, savedDestination);
+        }
     }
 
     private void reject(TextView title, TextView detail, Button open, String message) {
         title.setText(R.string.share_rejected_title);
         detail.setText(message);
-        open.setVisibility(View.VISIBLE);
         open.setText(R.string.share_open_app);
-        open.setOnClickListener(v -> {
-            finish();
-            startActivity(new Intent(this, MainActivity.class)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
-        });
+        openApp(open);
         // Rejected shares are not persisted; no auto-finish race — let the user read it.
     }
 }
