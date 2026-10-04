@@ -1,6 +1,7 @@
 """Worker coordinator regressions: claims, recovery, pauses, finite failures."""
 import io
 import shutil
+import threading
 import tempfile
 import uuid
 from datetime import timedelta
@@ -919,3 +920,162 @@ class StagingCleanupTests(WorkerMixin, TestCase):
         self.assertTrue(live.exists())
         self.assertTrue(live_media.exists())
         self.assertTrue(stray.exists())
+
+    def test_recovered_import_retains_previous_media_dirs(self):
+        """A crash retry must not orphan the first crash's staged directory:
+        the superseded rel moves to retained_media_staging and every named dir
+        becomes a cleanup candidate once the record is terminal and expired."""
+        old_rel, old_path = self.media_dir()
+        record = self.record(old_rel, "pending")
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch.object(worker, "_stage_items",
+                                  side_effect=ValidationError("boom")):
+            with self.assertRaises(ValidationError):
+                worker.import_items(user=self.user, collection_id=self.personal.id,
+                                    record=record,
+                                    items=[{"url": "https://example.com/a"}])
+            record.refresh_from_db()
+            mid_rel = record.manifest["media_staging"]
+            self.assertNotEqual(mid_rel, old_rel)
+            self.assertEqual(record.manifest["retained_media_staging"], [old_rel])
+            # Second crash: the mid rel is superseded the same way.
+            record.manifest = dict(record.manifest, status="pending")
+            record.save(update_fields=["manifest"])
+            with self.assertRaises(ValidationError):
+                worker.import_items(user=self.user, collection_id=self.personal.id,
+                                    record=record,
+                                    items=[{"url": "https://example.com/a"}])
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["retained_media_staging"],
+                         sorted([old_rel, mid_rel]))
+        # The finally-cleanup of the failed runs removed all named dirs;
+        # recreate the crash leftovers on disk.
+        for rel in [record.manifest["media_staging"], old_rel, mid_rel]:
+            (self.tmp / rel).mkdir(parents=True, exist_ok=True)
+            (self.tmp / rel / "video.mp4").write_bytes(b"\0" * 32)
+        paths = sorted((self.tmp / rel).resolve()
+                       for rel in [record.manifest["media_staging"], old_rel, mid_rel])
+        # Terminal + expired: all three named dirs are candidates.
+        record.manifest = dict(record.manifest, status="error",
+                               completed_at=(timezone.now() - timedelta(days=60))
+                               .isoformat())
+        record.save(update_fields=["manifest"])
+        self.assertEqual(self.candidates(3650)[1], paths)
+        # A live owner keeps every named dir ineligible.
+        record.manifest = dict(record.manifest, status="running")
+        record.save(update_fields=["manifest"])
+        self.assertEqual(self.candidates(3650)[1], [])
+
+    def test_execute_skips_paths_reactivated_after_listing(self):
+        """--execute rechecks each listed path under the exclusive lock; a job
+        requeued between listing and deletion keeps its staging directory."""
+        old_blocked = self.make_job(state="blocked")
+        self.backdate(old_blocked)
+        expired = self.job_dir(old_blocked)
+        keep = self.make_job(state="blocked")
+        self.backdate(keep)
+        kept_dir = self.job_dir(keep)
+
+        real = worker.job_staging_cleanup_candidates
+
+        def stale_listing(now=None):
+            paths = real(now=now)
+            # Reactivate after the snapshot, as a concurrent worker would.
+            models.Job.objects.filter(pk=old_blocked.pk).update(state="queued")
+            return paths
+
+        listed = io.StringIO()
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch.object(worker, "job_staging_cleanup_candidates",
+                                  stale_listing):
+            call_command("clean", "--execute", stdout=listed)
+        self.assertTrue(expired.exists())
+        self.assertFalse(kept_dir.exists())
+        self.assertIn("skipped", listed.getvalue())
+        self.assertIn(str(expired), listed.getvalue())
+
+
+class _Job:
+    def __init__(self, tag):
+        self.tag = tag
+
+
+class CoordinatorRefillTests(WorkerMixin, TransactionTestCase):
+    """The coordinator refills a worker slot as soon as any future completes;
+    once-mode keeps claiming until nothing is claimable, then drains."""
+
+    def test_refills_a_free_slot_on_first_completion(self):
+        calls = {"imports": 0}
+        lock = threading.Lock()
+        started = []
+        events = {"long": threading.Event(), "refill": threading.Event(),
+                  "short": threading.Event()}
+        release = threading.Event()
+
+        def fake_claims(limit):
+            order = [["long", "short"], ["refill"], []]
+            idx = calls.setdefault("claims", 0)
+            calls["claims"] = idx + 1
+            return [_Job(tag) for tag in order[idx]] if idx < 3 else []
+
+        def fake_process(job):
+            events[job.tag].set()
+            if job.tag == "long":
+                release.wait(10)
+            with lock:
+                started.append(job.tag)
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch.object(worker, "_concurrency", lambda: 2), \
+                mock.patch.object(worker, "_claim_imports",
+                                  side_effect=lambda: calls.__setitem__(
+                                      "imports", calls["imports"] + 1) or []), \
+                mock.patch.object(worker, "_run_import",
+                                  side_effect=AssertionError("no imports")), \
+                mock.patch.object(worker, "_claim_batch", side_effect=fake_claims), \
+                mock.patch.object(worker, "_process", side_effect=fake_process):
+            t = threading.Thread(target=worker.main, kwargs={"once": True},
+                                 daemon=True)
+            t.start()
+            # refill must start while long still holds its slot.
+            self.assertTrue(events["refill"].wait(5))
+            self.assertFalse(release.is_set())
+            release.set()
+            t.join(10)
+            self.assertFalse(t.is_alive())
+        self.assertEqual(started, ["short", "refill", "long"])
+        # Top-up rounds re-claim imports too: startup plus every refill
+        # while a slot is free, not a single startup claim.
+        self.assertGreaterEqual(calls["imports"], 2)
+
+    def test_once_mode_drains_all_claimable_work_before_breaking(self):
+        claims = {"n": 0}
+        processed = []
+        batches = [["a"], ["b"], []]
+        lock = threading.Lock()
+
+        def fake_claims(limit):
+            n = claims["n"]
+            claims["n"] = n + 1
+            return [_Job(tag) for tag in batches[n]] if n < 3 else []
+
+        def fake_process(job):
+            with lock:
+                processed.append(job.tag)
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch.object(worker, "_concurrency", lambda: 2), \
+                mock.patch.object(worker, "_claim_imports", side_effect=lambda: []), \
+                mock.patch.object(worker, "_run_import",
+                                  side_effect=AssertionError("no imports")), \
+                mock.patch.object(worker, "_claim_batch", side_effect=fake_claims), \
+                mock.patch.object(worker, "_process", side_effect=fake_process):
+            t = threading.Thread(target=worker.main, kwargs={"once": True},
+                                 daemon=True)
+            t.start()
+            t.join(10)
+            self.assertFalse(t.is_alive())
+        self.assertEqual(sorted(processed), ["a", "b"])
+        # The third, empty claim round proves it kept claiming after work
+        # remained claimable, then broke once nothing was claimable.
+        self.assertEqual(claims["n"], 3)

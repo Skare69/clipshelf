@@ -20,7 +20,7 @@ import logging
 import shutil
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import timedelta
 from pathlib import Path, PureWindowsPath
 
@@ -102,18 +102,23 @@ def main(once=False, stdout=None):
         if recovered:
             say(f"recovered {recovered} abandoned running job(s)")
         pool = ThreadPoolExecutor(max_workers=_concurrency(), thread_name_prefix="clipshelf-worker")
+        # Refill keeps a slot busy while a long import runs; --once still
+        # drains every claimable job before breaking.
+        pending = set()
         try:
             while True:
-                imports = _claim_imports()
-                jobs = _claim_batch(_concurrency())
-                if not imports and not jobs:
+                free = _concurrency() - len(pending)
+                if free > 0:
+                    pending.update(pool.submit(_run_import, r, say) for r in _claim_imports())
+                    pending.update(pool.submit(_process, job) for job in _claim_batch(free))
+                if not pending:
                     if once:
                         break
                     time.sleep(POLL_SECONDS)
                     continue
-                futures = [pool.submit(_run_import, r, say) for r in imports]
-                futures += [pool.submit(_process, job) for job in jobs]
-                for f in futures:
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                pending.difference_update(done)
+                for f in done:
                     f.result()
         except KeyboardInterrupt:
             say("interrupted: finishing in-flight jobs; remaining work stays queued")
@@ -451,14 +456,17 @@ def run_staged_import(record):
 # import_items creates a media directory staging/import-<hex>/ next to the
 # spooled upload JSON and removes it in a finally block. It records the path
 # as manifest["media_staging"] so a crash between creation and cleanup leaves
-# an owned, sweepable directory instead of an orphan. Media directories follow
+# an owned, sweepable directory instead of an orphan. A recovered import keeps
+# its previous media directory named under manifest["retained_media_staging"]
+# so it too stays owned and sweepable. Media directories follow
 # the same rule as the spooled uploads: pending/running records keep theirs at
 # any age; finished records (done/error) keep theirs for STAGING_RETENTION_DAYS
 # after completion. Nothing here deletes anything.
 def import_media_cleanup_candidates(now=None):
     """Staged import media directories an approved sweep may delete, sorted.
 
-    Walks ImportRecord manifests (manifest["media_staging"]), never the
+    Walks ImportRecord manifests (manifest["media_staging"] plus
+    manifest["retained_media_staging"]), never the
     staging directory, so an unnamed path is unreachable. A directory
     qualifies only when it is a directory directly under DATA_DIR/staging,
     every record naming it is finished (done/error), and at least one owner
@@ -471,15 +479,16 @@ def import_media_cleanup_candidates(now=None):
     claims = {}
     for record in models.ImportRecord.objects.only("manifest", "created_at").iterator():
         manifest = record.manifest or {}
-        rel = manifest.get("media_staging")
-        if not isinstance(rel, str) or not rel:
-            continue
-        path = (Path(settings.DATA_DIR) / rel).resolve()
-        if path.parent != root or path == root:
-            continue
-        claims.setdefault(path, []).append(
-            (manifest.get("status"),
-             _staging_finished_at(manifest, record.created_at)))
+        for rel in [manifest.get("media_staging"),
+                    *(manifest.get("retained_media_staging") or [])]:
+            if not isinstance(rel, str) or not rel:
+                continue
+            path = (Path(settings.DATA_DIR) / rel).resolve()
+            if path.parent != root or path == root:
+                continue
+            claims.setdefault(path, []).append(
+                (manifest.get("status"),
+                 _staging_finished_at(manifest, record.created_at)))
     return sorted(
         path for path, owners in claims.items()
         if path.is_dir()
@@ -693,8 +702,18 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     if record is not None:
         # Own the media directory before any work: a crash anywhere below
         # still leaves the path recorded for retention-based cleanup. CLI
-        # imports (record=None) own their directory only for the run.
-        _update_manifest(record, {"media_staging": f"staging/{staging.name}"})
+        # imports (record=None) own their directory only for the run. A
+        # recovered import keeps its previous directory named under
+        # retained_media_staging instead of orphaning it; cleanup stays
+        # operator-approved.
+        manifest = record.manifest or {}
+        prior = manifest.get("media_staging")
+        new_rel = f"staging/{staging.name}"
+        updates = {"media_staging": new_rel}
+        if isinstance(prior, str) and prior and prior != new_rel:
+            updates["retained_media_staging"] = sorted(
+                {*(manifest.get("retained_media_staging") or []), prior})
+        _update_manifest(record, updates)
     try:
         staged, files_record = _stage_items(items, cache_dir, staging)
         sources = []

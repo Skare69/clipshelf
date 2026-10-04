@@ -104,8 +104,11 @@ import owns its spooled upload JSON plus a `staging/import-<hex>` media
 directory for its fetched bytes. Active work is never eligible for cleanup;
 finished work is kept for 30 days after completion for audit and replay.
 `python clipshelf.py clean` lists those candidates (paths and sizes) and
-deletes nothing; `python clipshelf.py clean --execute` deletes exactly the
-listed paths. Unowned staging files are never touched by the command — inspect
+deletes nothing; `python clipshelf.py clean --execute` waits for the exclusive
+data lock (stop web/worker first — the controlled write pause), rechecks each
+candidate under the lock, and deletes only paths that are still expired,
+skipping (printing, never deleting) anything reactivated after listing.
+Unowned staging files are never touched by the command — inspect
 and remove those by hand after checking no import or job refers to them.
 
 Verification leftovers on a development machine (regression fixtures and
