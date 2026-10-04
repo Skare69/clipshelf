@@ -137,7 +137,7 @@ h3{font-size:13px;font-weight:600;margin:4px 0 10px;letter-spacing:.02em}
 .banner .grow-text{flex:1;min-width:200px}
 .prog{flex:1 1 160px;min-width:120px;max-width:340px;height:5px;border-radius:3px;overflow:hidden;
   background:var(--surface-highest)}
-.prog i,.prog>div{display:block;height:100%;width:0;background:var(--accent);transition:width .3s;border-radius:3px}
+.prog>div{display:block;height:100%;width:0;background:var(--accent);transition:width .3s;border-radius:3px}
 /* ---------- cards / rows: gapless bento sheet ---------- */
 ul.list{list-style:none;margin:0;padding:0}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));
