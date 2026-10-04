@@ -493,7 +493,20 @@ def _requested_uuid(value):
 
 
 def _extract_urls(text):
-    candidates = [match.rstrip(".,;:!?)]}\"'") for match in URL_PATTERN.findall(text)]
+    candidates = []
+    for match in URL_PATTERN.findall(text):
+        candidate = match.rstrip(".,;:!?]}\"'")
+        trailing = len(candidate) - len(candidate.rstrip(")"))
+        if trailing:
+            balance = 0
+            for char in candidate[:-trailing]:
+                if char == "(":
+                    balance += 1
+                elif char == ")" and balance:
+                    balance -= 1
+            if trailing > balance:
+                candidate = candidate[:-(trailing - balance)]
+        candidates.append(candidate)
     validated = []
     for url in candidates:
         if not url or len(url) > MAX_URL_LENGTH:

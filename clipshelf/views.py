@@ -153,10 +153,7 @@ def _import_max_bytes():
 
 
 def _data_root():
-    root = os.path.realpath(getattr(settings, "DATA_DIR", ""))
-    if not root:
-        raise ApiError(500, "unconfigured", "server data directory not configured")
-    return root
+    return os.path.realpath(getattr(settings, "DATA_DIR", ""))
 
 
 def _accessible_map(user):
@@ -189,7 +186,9 @@ def _me_payload(user):
             "is_app_admin": bool(user.is_app_admin),
         },
         "default_collection_id": (
-            str(user.default_collection_id) if user.default_collection_id else None
+            str(services.destination_for(user, None)[0].id)
+            if user.default_collection_id
+            else None
         ),
         "collections": [
             _collection_json(c, user) for c in services.accessible_collections(user)
@@ -197,7 +196,7 @@ def _me_payload(user):
     }
 
 
-def _job_json(job):
+def _job_json(job, user=None):
     return {
         "id": str(job.id),
         "url": job.url,
@@ -215,7 +214,9 @@ def _job_json(job):
         # state rules; colors and labels stay presentation.
         "active": job.active,
         "needs_attention": job.needs_attention,
-        "can_retry": job.can_retry,
+        "can_retry": job.can_retry and (
+            user is None or job.capture.user_id == user.id
+        ),
         "guardrail": job.guardrail,
         "screening_warnings": job.screening_warnings,
     }
@@ -226,6 +227,7 @@ def _capture_json(capture):
     return {
         "id": str(capture.id),
         "receipt": services.receipt(capture),
+        "text": capture.raw_text[:500],
         "jobs": [_job_json(j) for j in jobs],
     }
 
@@ -352,29 +354,28 @@ def api_collection_members(request, collection_id):
         raise ApiError(403, "forbidden", "personal collections have no members")
     if collection.owner_id != user.id:
         raise ApiError(403, "forbidden", "only the owner manages members")
-    if request.method == "POST":
-        body = _json_body(request)
-        email = str(body.get("email") or "").strip()
-        target = User.objects.filter(email__iexact=email, is_active=True).first()
-        if target is None:
-            raise ApiError(400, "invalid", "no active user with that email")
-        if target.id == collection.owner_id:
-            raise ApiError(409, "conflict", "owner is already a member")
-        try:
-            with transaction.atomic():  # keep the outer transaction usable on conflict
-                Membership.objects.create(collection=collection, user=target)
-        except IntegrityError:
-            raise ApiError(409, "conflict", "already a member")
-        return _json(
-            {
-                "member": {
-                    "id": str(target.id),
-                    "email": target.email,
-                    "is_owner": False,
-                }
-            },
-            status=201,
-        )
+    body = _json_body(request)
+    email = str(body.get("email") or "").strip()
+    target = User.objects.filter(email__iexact=email, is_active=True).first()
+    if target is None:
+        raise ApiError(400, "invalid", "no active user with that email")
+    if target.id == collection.owner_id:
+        raise ApiError(409, "conflict", "owner is already a member")
+    try:
+        with transaction.atomic():  # keep the outer transaction usable on conflict
+            Membership.objects.create(collection=collection, user=target)
+    except IntegrityError:
+        raise ApiError(409, "conflict", "already a member")
+    return _json(
+        {
+            "member": {
+                "id": str(target.id),
+                "email": target.email,
+                "is_owner": False,
+            }
+        },
+        status=201,
+    )
 
 
 @api
@@ -432,7 +433,8 @@ def _entry_filters(entries, params):
             ).lower()
             if q not in hay:
                 continue
-        if cat and str(item.get("cat") or "").lower() != cat:
+        categories = [str(category).lower() for category in (item.get("cat") or [])]
+        if cat and cat not in categories and not (cat == "other" and not categories):
             continue
         if tag and tag not in [str(t).lower() for t in (item.get("tags") or [])]:
             continue
@@ -469,13 +471,7 @@ def api_entries(request):
         pairs.sort(key=lambda p: str(p[1].get("title") or p[1].get("url") or "").lower())
     else:
         pairs.sort(key=lambda p: p[0].created_at, reverse=True)
-    filtered = [
-        item
-        for item in _entry_filters([item for _, item in pairs], request.GET)
-    ]
-    # preserve sorted order after filtering
-    keep = {id(item) for item in filtered}
-    filtered = [item for _, item in pairs if id(item) in keep]
+    filtered = list(_entry_filters((item for _, item in pairs), request.GET))
     try:
         offset = max(0, int(request.GET.get("offset", "0")))
         limit = int(request.GET.get("limit", str(DEFAULT_PAGE)))
@@ -496,7 +492,7 @@ def api_entry(request, entry_id):
         services.remove_entry(user, entry)
         return _json({"removed": True})
     job_ids = entry.contributions.exclude(job=None).values_list("job_id", flat=True)
-    jobs = list(Job.objects.filter(id__in=list(job_ids)))
+    jobs = list(Job.objects.filter(id__in=list(job_ids)).select_related("capture"))
     assets = Asset.objects.filter(collection=entry.collection, job__in=jobs).order_by(
         "position", "id"
     )
@@ -513,7 +509,7 @@ def api_entry(request, entry_id):
                 }
                 for a in assets
             ],
-            "jobs": [_job_json(j) for j in jobs],
+            "jobs": [_job_json(j, user) for j in jobs],
         }
     )
 
@@ -703,6 +699,10 @@ def api_import(request):
         if clash:
             raise ApiError(409, "conflict", "request id reused with a different payload")
         if existing is not None:
+            if (existing.manifest or {}).get("collection_id") != str(collection.id):
+                raise ApiError(
+                    409, "conflict", "file was already imported to a different collection"
+                )
             os.remove(spooled)
             return _json(
                 {
@@ -757,6 +757,10 @@ def api_import(request):
                 # different payload. Outer handler removes the staged file.
                 raise ApiError(
                     409, "conflict", "request id reused with a different payload"
+                )
+            if (record.manifest or {}).get("collection_id") != str(collection.id):
+                raise ApiError(
+                    409, "conflict", "file was already imported to a different collection"
                 )
             os.remove(spooled)
             return _json(

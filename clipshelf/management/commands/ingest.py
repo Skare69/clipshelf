@@ -15,7 +15,7 @@ MAX_TEXT_BYTES = 32768  # same boundary the capture API enforces
 class Command(BaseCommand):
     help = ("Ingest a text dump of URLs for an explicit user/collection, "
             "through the same validated acceptance path as the API. Re-ingesting "
-            "the identical file returns the existing receipt instead of duplicating.")
+            "the same file to the same destination returns its existing receipt.")
 
     def add_arguments(self, parser):
         parser.add_argument("--user", required=True)
@@ -29,14 +29,21 @@ class Command(BaseCommand):
         path = Path(options["file"])
         if not path.is_file():
             raise CommandError(f"file not found: {path}")
-        text = path.read_text(encoding="utf-8")
-        if len(text.encode("utf-8")) > MAX_TEXT_BYTES:
+        with path.open("rb") as source:
+            raw_text = source.read(MAX_TEXT_BYTES + 1)
+        if len(raw_text) > MAX_TEXT_BYTES:
             raise CommandError(f"file exceeds {MAX_TEXT_BYTES} UTF-8 bytes (capture limit)")
-
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        client_request_id = str(uuid.uuid5(
-            uuid.NAMESPACE_URL, f"clipshelf-ingest:{user.id}:{digest}"))
         try:
+            text = raw_text.decode("utf-8")
+        except UnicodeDecodeError:
+            raise CommandError("file must contain valid UTF-8 text") from None
+
+        digest = hashlib.sha256(raw_text).hexdigest()
+        try:
+            destination, _ = services.destination_for(user, options["collection"])
+            client_request_id = str(uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"clipshelf-ingest:{user.id}:{destination.id}:{digest}"))
             capture, created = services.accept_capture(
                 user, client_request_id, text, options["collection"])
         except ValidationError as exc:

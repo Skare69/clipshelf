@@ -68,20 +68,30 @@ def _safe_name(name, fallback="file"):
     return (name or fallback)[:80]
 
 
-def _target_path(directory, filename, source):
-    target = os.path.join(directory, f"{len(source['assets']):02d}_{_safe_name(filename)}")
-    if os.path.exists(target):  # per-job dirs are fresh; this is belt for reuse
-        stem, ext = os.path.splitext(target)
-        target = f"{stem}_{abs(hash(source['original_url'])) % 99999:05d}{ext}"
+def _target_path(directory, filename, source, counter):
+    stem, ext = os.path.splitext(_safe_name(filename))
+    suffix = f"_{counter}" if counter else ""
+    target = os.path.join(
+        directory, f"{len(source['assets']):02d}_{stem}{suffix}{ext}")
     if os.path.realpath(directory) != os.path.commonpath(
             [os.path.realpath(directory), os.path.realpath(target)]):
         raise AcquisitionError("asset path escaped directory")
     return target
 
 
+def _open_target(directory, filename, source):
+    counter = 0
+    while True:
+        target = _target_path(directory, filename, source, counter)
+        try:
+            return target, open(target, "xb")
+        except FileExistsError:
+            counter += 1
+
+
 def store_bytes(source, directory, filename, data, kind, content_type):
-    target = _target_path(directory, filename, source)
-    with open(target, "wb") as fh:
+    target, fh = _open_target(directory, filename, source)
+    with fh:
         fh.write(data)
     source["assets"].append({"path": target, "kind": kind,
                              "content_type": content_type, "position": len(source["assets"])})
@@ -89,22 +99,24 @@ def store_bytes(source, directory, filename, data, kind, content_type):
 
 
 def adopt_file(source, src_path, directory, kind, content_type):
-    target = _target_path(directory, os.path.basename(src_path), source)
-    shutil.move(src_path, target)
+    with open(src_path, "rb") as src:
+        target, fh = _open_target(directory, os.path.basename(src_path), source)
+        with fh:
+            shutil.copyfileobj(src, fh)
     source["assets"].append({"path": target, "kind": kind,
                              "content_type": content_type, "position": len(source["assets"])})
     return target
+
 
 # -------------------------------------------------------------- validators
 
 def validate_image(data):
     """Full decode bounds check; returns content type or raises ValueError."""
     with Image.open(io.BytesIO(data)) as im:
-        im.load()
         if max(im.size) > IMAGE_MAX_PIXELS:
             raise ValueError(f"image dimensions {im.size} exceed bound")
+        im.load()
         return _IMAGE_FORMAT_TYPE.get(im.format, f"image/{(im.format or 'unknown').lower()}")
-
 
 def _which(basename):
     return shutil.which(basename)
@@ -358,6 +370,7 @@ def _media_summary(source):
 
 
 def _acquire_tiktok(url, directory, source):
+    source["metadata"]["captions"] = "none"
     canonical = _resolve_shortlink(url, source)
     source["url"] = norm(canonical) or canonical
     oem = _oembed(canonical, source)
@@ -389,11 +402,13 @@ def _acquire_tiktok(url, directory, source):
                                "tier": "server"})
     source["title"] = source["title"] or oem["title"] or (
         f"@{oem['author']}" if oem["author"] else "")
+    cover_only = False
     if media == "none" and oem["thumbnail_url"]:
         try:  # cache the signed thumbnail bytes; never store the expiring URL
             thumb = network.fetch_public(oem["thumbnail_url"], max_bytes=16 << 20)
             store_bytes(source, directory, "cover.img", thumb["body"], "image",
                         thumb["content_type"] or "image/jpeg")
+            cover_only = True
         except network.NetworkError as exc:
             _warn(source, f"thumbnail fetch failed: {exc}")
     media = _media_summary(source)
@@ -404,14 +419,21 @@ def _acquire_tiktok(url, directory, source):
         _warn(source, "audio only; primary media (slides/video) missing — "
                       "retry or browser export")
     elif media != "none":
-        source["acquisition"] = ("partial" if "video failed validation"
-                                 in source["warnings"] else "complete")
+        video_validation_failed = any(
+            warning.startswith("video failed validation")
+            for warning in source["warnings"])
+        source["acquisition"] = ("partial" if cover_only or video_validation_failed
+                                 else "complete")
         if media == "video" and source["metadata"].get("captions") == "none":
             _warn(source, "no captions available; spoken content was not acquired")
     else:
         failure = _tiktok_failure(stderr_log)
         source["metadata"]["failure"] = failure
-        if source["metadata"].get("metadata") == "oembed" or source["assets"]:
+        video_validation_failed = any(
+            warning.startswith("video failed validation")
+            for warning in source["warnings"])
+        if (source["metadata"].get("metadata") == "oembed" or source["assets"]
+                or video_validation_failed):
             source["acquisition"] = "partial"
             _warn(source, f"metadata only; media acquisition failed ({failure})")
         else:
@@ -554,8 +576,11 @@ def _import_item(item, directory):
     source["metadata"].update({"media": media, "metadata": "none" if media == "none" else "export",
                                "captions": "none", "tier": "browser-export",
                                "failure": "none" if media != "none" else "unavailable"})
-    source["acquisition"] = "complete" if media != "none" else (
-        "partial" if (source["title"] or source["desc"]) else "blocked")
+    video_validation_failed = any(
+        warning.startswith("video failed validation") for warning in source["warnings"])
+    source["acquisition"] = "partial" if video_validation_failed else (
+        "complete" if media != "none" else (
+            "partial" if (source["title"] or source["desc"]) else "blocked"))
     if media == "none":
         _warn(source, "browser export contained no usable media; "
                       "URL/metadata retained for retry or re-export")

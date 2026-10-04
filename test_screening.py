@@ -244,6 +244,19 @@ class ScreeningApiTests(TestCase):
         self.assertEqual(response.json(), {"ok": True, "message": "screening ok (p=0.98)"})
         self.assertEqual(ask.call_args.kwargs["api_key"], "sekrit")
 
+    def test_check_uses_typed_key_without_changing_stored_key(self):
+        self.set_row_key("stored-key")
+        with mock.patch.object(judgment, "available", return_value=True), \
+                mock.patch.object(judgment, "ask",
+                                  return_value={"ai_tool": mock.Mock(noul=0.98)}) as ask:
+            response = self.admin_post(
+                "/admin/screening/check", {"api_key": "typed-key"}, reauth=True
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["ok"])
+        self.assertEqual(ask.call_args.kwargs["api_key"], "typed-key")
+        self.assertEqual(services.get_settings().typesafe_api_key, "stored-key")
+
     def test_check_redacts_key_from_error_message(self):
         self.set_row_key("sekrit")
         with mock.patch.object(judgment, "available", return_value=True), \

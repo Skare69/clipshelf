@@ -211,18 +211,18 @@ def invitations(request, user):
         raise ApiError(400, detail="A valid email address is required.")
     if _USER.objects.filter(email=email).exists():
         raise ApiError(400, detail="That email is already registered.")
-    live = Invitation.objects.filter(
-        email__iexact=email, used_by__isnull=True, expires_at__gt=timezone.now()
-    )
-    if live.exists():
-        raise ApiError(409, detail="An unused invitation for that email already exists.")
-    token = secrets.token_urlsafe(32)
-    invitation = Invitation.objects.create(
-        email=email,
-        token_hash=invitation_token_hash(token),
-        created_by=user,
-        expires_at=timezone.now() + INVITATION_TTL,
-    )
+    now = timezone.now()
+    with transaction.atomic():
+        Invitation.objects.filter(
+            email__iexact=email, used_by__isnull=True, expires_at__gt=now
+        ).update(expires_at=now)
+        token = secrets.token_urlsafe(32)
+        invitation = Invitation.objects.create(
+            email=email,
+            token_hash=invitation_token_hash(token),
+            created_by=user,
+            expires_at=now + INVITATION_TTL,
+        )
     data = _invitation_dict(invitation)
     # The copyable link exists exactly once: raw tokens are never stored.
     # Host headers are untrusted: prefer the approved canonical origin.
@@ -289,8 +289,11 @@ def collection_transfer(request, user, collection_id):
         raise ApiError(
             400, detail="Recipient must be an existing member of the collection."
         )
-    collection.owner = recipient
-    collection.save(update_fields=["owner"])
+    with transaction.atomic():
+        Membership.objects.get_or_create(collection=collection, user=collection.owner)
+        Membership.objects.filter(collection=collection, user=recipient).delete()
+        collection.owner = recipient
+        collection.save(update_fields=["owner"])
     return JsonResponse(
         {
             "collection": {
@@ -409,10 +412,10 @@ def screening(request, user):
 
 @admin_endpoint("POST")
 def screening_check(request, user):
-    """One tiny real noul round-trip with the stored (or env) key."""
+    """One tiny real noul round-trip with the typed, stored, or env key."""
     body = _json_body(request)
     _require_reauth(request, body)
-    key = screening_key()
+    key = str(body["api_key"] or "").strip() if "api_key" in body else screening_key()
     if not judgment.available(key):
         return JsonResponse(
             {"ok": False, "message": "screening unavailable: no API key set"})

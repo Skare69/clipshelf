@@ -1,7 +1,7 @@
 /* clipshelf web app — vanilla JS, no framework, no CDN, no third-party requests.
    All model/source text enters the DOM via textContent; URLs only http(s); private
    state lives in memory only. localStorage holds the two layout prefs, nothing else. */
-import { S, el, onAuthLoss, out, redirecting, refreshMe, setView } from "./core.js";
+import { S, el, out, refreshMe, setView } from "./core.js";
 import { initLayoutButtons, refreshInboxCount } from "./panels.js";
 import "./admin.js";
 

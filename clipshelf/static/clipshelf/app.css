@@ -111,12 +111,7 @@ h2:first-of-type,h1+h2{margin-top:22px}
 :is(h1,h2) .sub{font-family:var(--sans);font-size:13px;font-weight:400;
   color:var(--on-muted);margin-left:10px;letter-spacing:.01em}
 h3{font-size:13px;font-weight:600;margin:4px 0 10px;letter-spacing:.02em}
-.pcat{font-size:11.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;
-  color:var(--on-muted);margin:32px 0 8px;scroll-margin-top:calc(var(--topH) + 16px)}
-/* ---------- chips, tags, badges ---------- */
-.chip{display:inline-flex;align-items:center;gap:5px;padding:3px 11px;border-radius:99px;
-  font-size:12px;font-weight:500;white-space:nowrap;
-  background:var(--surface-high);color:var(--on-surface)}
+/* ---------- tags, badges ---------- */
 .tag{display:inline-block;color:var(--on-muted);font-size:11.5px;font-weight:500;
   border:1px solid var(--line);border-radius:99px;padding:2px 10px;margin-left:6px}
 .pend{display:inline-block;background:var(--warn-container);color:var(--warn);
@@ -167,7 +162,6 @@ ul.list{list-style:none;margin:0;padding:0}
 .meta{margin-top:auto;font-size:12px;color:var(--on-muted);display:flex;align-items:center;
   flex-wrap:wrap;gap:6px 10px;padding-top:6px}
 .meta .date{font-family:var(--mono);margin-left:auto}
-.stars{font-family:var(--mono);font-size:12px}
 pre{white-space:pre-wrap;word-break:break-word;background:var(--surface-cont);border-radius:10px;
   padding:13px 16px;margin:6px 0 0;font:13px/1.55 var(--mono);max-height:220px;overflow:auto}
 .term{max-height:45vh;background:var(--surface-high)}
@@ -332,6 +326,6 @@ dialog::backdrop{background:rgba(12,10,6,.5);backdrop-filter:blur(3px)}
   .fabs{right:14px;bottom:14px}
   .acct-card{padding:22px}
 }
-@media (max-width:600px){.brand span{display:none}.selwrap select{max-width:110px}}
+@media (max-width:600px){.selwrap select{max-width:110px}}
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}
   html{scroll-behavior:auto}}

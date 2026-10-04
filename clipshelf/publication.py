@@ -1,5 +1,5 @@
-"""Publication policy: one owner for Entry identity, tombstones, account
-rechecks, and the capture-route contribution merge.
+"""Publication policy: one owner for Entry identity, tombstones, and the
+capture-route contribution merge.
 
 Every findings producer (worker store_source/store_findings, import commit,
 extracted merge) routes identity and tombstone decisions through here so a
@@ -14,8 +14,6 @@ hash-only tombstones are reused in place; new prompts always get SHA-256.
 """
 import hashlib
 from urllib.parse import urlsplit, urlunsplit
-
-from django.core.exceptions import PermissionDenied
 
 from clipshelf import lib
 from clipshelf.models import Contribution, Entry, History
@@ -60,9 +58,17 @@ def prompt_digest(text):
 
 
 def tombstoned(collection_id, user_id, *keys):
-    """True when this user removed any of these identities in this collection."""
-    keys = [key for key in keys if key]
-    return bool(keys) and History.objects.filter(
+    """True when this user removed any identity or alias in this collection."""
+    keys = {key for key in keys if key}
+    if not keys:
+        return False
+    alias_rows = History.objects.filter(
+        collection_id=collection_id, user_id=user_id, kind=History.Kind.ALIAS)
+    keys.update(set(alias_rows.filter(
+        url__in=keys).values_list("target_url", flat=True)))
+    keys.update(set(alias_rows.filter(
+        target_url__in=keys).values_list("url", flat=True)))
+    return History.objects.filter(
         collection_id=collection_id, user_id=user_id,
         kind=History.Kind.REMOVED, url__in=keys
     ).exists()
@@ -78,12 +84,22 @@ def record_removal(*, collection, user_ids, key):
             kind=History.Kind.REMOVED, url=key, defaults={"data": {}})
 
 
-def job_account(job):
-    """Recheck the account inside the write transaction: active or no write."""
-    user = job.capture.user
-    if not user.is_active:
-        raise PermissionDenied("Account is disabled.")
-    return user
+def record_import_history(*, collection, user, seen, removed):
+    """Persist each legacy URL and its canonical alias in scoped history."""
+    rows = {}
+    for kind, urls in ((History.Kind.SEEN, seen), (History.Kind.REMOVED, removed)):
+        for url in urls:
+            key = link_key(url)
+            if not key:
+                continue
+            for identity in {url, key}:
+                rows[(kind, identity)] = History(
+                    collection=collection, user=user, kind=kind, url=identity)
+            if url != key:
+                rows[(History.Kind.ALIAS, url)] = History(
+                    collection=collection, user=user, kind=History.Kind.ALIAS,
+                    url=url, target_url=key)
+    History.objects.bulk_create(rows.values(), ignore_conflicts=True)
 
 
 def prompt_entry(collection, user, text):

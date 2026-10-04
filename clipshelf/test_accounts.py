@@ -248,6 +248,33 @@ class InvitationFlowTests(AccountTestCase):
         response = client.get("/probe")
         self.assertEqual(response.status_code, 200)
 
+    def test_pending_invitation_can_be_renewed_when_link_is_lost(self):
+        email = "lost-link@clipshelf.test"
+        old_token, old_invitation = make_invitation(email, self.admin)
+        self.client.force_login(self.admin)
+
+        response = self.admin_post(
+            "/admin/invitations", {"email": email}, reauth=True
+        )
+
+        self.assertEqual(response.status_code, 201)
+        old_invitation.refresh_from_db()
+        self.assertLessEqual(old_invitation.expires_at, timezone.now())
+        new_token = response.json()["invitation"]["url"].rsplit("/", 1)[-1]
+        self.assertNotEqual(new_token, old_token)
+        new_invitation = Invitation.objects.get(
+            token_hash=invitation_token_hash(new_token)
+        )
+        self.assertGreater(new_invitation.expires_at, timezone.now())
+        self.assertEqual(
+            self.client.get(f"/invite/{old_token}").url, reverse("account_login")
+        )
+        self.assertRedirects(
+            self.client.get(f"/invite/{new_token}"),
+            f"{reverse('account_signup')}?email=lost-link%40clipshelf.test",
+            fetch_redirect_response=False,
+        )
+
 
 class NativeTokenTests(AccountTestCase):
     def test_invalid_token_header_never_falls_back_to_cookie(self):
@@ -442,6 +469,36 @@ class AdminBoundaryTests(AccountTestCase):
         self.admin_post(f"/admin/users/{owner.pk}/status", {"active": True})
         shared.refresh_from_db()
         self.assertEqual(shared.owner, member)
+
+    def test_transfer_keeps_old_owner_and_clears_new_owner_membership(self):
+        owner = make_user("former-owner@clipshelf.test", is_active=False)
+        member = make_user("new-owner@clipshelf.test")
+        shared = Collection(name="House", kind="shared", owner=owner)
+        shared.save()
+        Membership(collection=shared, user=member).save()
+        self.client.force_login(self.admin)
+
+        response = self.admin_post(
+            f"/admin/collections/{shared.pk}/transfer",
+            {"owner_id": str(member.pk)},
+            reauth=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        owner.is_active = True
+        owner.save(update_fields=["is_active"])
+        self.assertTrue(
+            Membership.objects.filter(collection=shared, user=owner).exists()
+        )
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=member).exists()
+        )
+        self.assertTrue(
+            accessible_collections(owner).filter(pk=shared.pk).exists()
+        )
+        self.assertTrue(
+            accessible_collections(member).filter(pk=shared.pk).exists()
+        )
 
 
 class LlmModelPickerTests(AccountTestCase):

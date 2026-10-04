@@ -6,7 +6,6 @@ No I/O, no network: persistence and fetching live in the Django app
 from html.parser import HTMLParser
 from urllib.parse import urlsplit, urlunsplit
 
-URL_RE = r"https?://[^\s\"'<>)\]]+"
 
 # terminal hosts: catalogued with metadata, never sent for AI interpretation
 TERMINAL = ("github.com", "gist.github.com", "huggingface.co", "arxiv.org",
@@ -28,6 +27,7 @@ SHORT_HOSTS = ("share.google", "goo.gl", "g.co", "bit.ly", "tinyurl.com",
 def norm(url):
     """Canonical URL or None: strips fragment, tracking params, trailing slash.
 
+    GitHub owner/repo path segments are lowercased; later path case stays intact.
     Rejects non-http(s) schemes, credentials, malformed/oversized ports, and
     unbalanced IPv6 brackets so a hostile string can never become a stored
     entry key. IPv6 hosts stay bracketed so equivalent forms dedup.
@@ -47,7 +47,9 @@ def norm(url):
                          if p and not p.lower().startswith(TRACKING))
         path = s.path.rstrip("/")
         if host in ("github.com", "gist.github.com"):
-            path = path.lower()  # github paths are case-insensitive; dedup on one form
+            parts = path.split("/", 3)
+            parts[1:3] = [part.lower() for part in parts[1:3]]
+            path = "/".join(parts)
         return urlunsplit((s.scheme, netloc, path, query, ""))
     except ValueError:
         return None

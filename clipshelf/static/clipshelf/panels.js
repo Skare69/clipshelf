@@ -12,7 +12,8 @@ function skeleton() {
 }
 async function loadEntries(reset) {
   if (!S.me) return;
-  if (reset) { S.offset = 0; S.entries = []; catsFresh(); }
+  const unfiltered = !S.q && !S.cat && !S.tag && !S.kind;
+  if (reset) { S.offset = 0; S.entries = []; if (unfiltered) catsFresh(); }
   const seq = ++S.seq;
   if (!S.entries.length) skeleton();
   try {
@@ -26,10 +27,12 @@ async function loadEntries(reset) {
     if (seq !== S.seq) return;
     S.entries = S.entries.concat(j.entries || []);
     S.count = j.count || 0;
-    if (!S.q && !S.cat && !S.tag && !S.kind) S.total = S.count;
+    if (unfiltered) S.total = S.count;
     for (const e of j.entries || []) {
-      const c = note(e) || "Other";
-      S.cats.set(c, (S.cats.get(c) || 0) + 1);
+      if (unfiltered) {
+        const c = note(e) || "Other";
+        S.cats.set(c, (S.cats.get(c) || 0) + 1);
+      }
       for (const t of e.tags || []) S.tags.add(t);
     }
     $("#nLib").textContent = S.total || "";

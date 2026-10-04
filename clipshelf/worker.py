@@ -190,12 +190,12 @@ def _process_job(job):
         job.defer(timedelta(seconds=POLL_SECONDS),
                   error="paused: account or collection access changed")
         return
-    if job.acquisition in ("blocked", "error"):
-        # re-claimed imported job: upstream refused, interpretation needs a
-        # usable source; keep blocked for manual retry/import, never hang in running
+    if job.acquisition == "blocked" or (
+            job.acquisition == "error" and job.attempts == 0):
+        # Imported or deterministic upstream refusal: no usable source to retry.
         job.mark_blocked()
         return
-    if job.acquisition == "pending":
+    if job.acquisition in ("pending", "error"):
         if not _acquire_phase(job):
             return
     if job.interpretation == "pending" and job.acquisition in ("complete", "partial"):
@@ -220,8 +220,12 @@ def _acquire_phase(job):
     status = source.get("acquisition") or "error"
     # store_source owns every source fact: final_url, acquisition and warnings.
     services.store_source(job, source)
-    if status in ("blocked", "error"):
-        job.mark_blocked()  # honest: saved, needs manual retry/import
+    if status == "blocked":
+        job.mark_blocked()  # deterministic refusal: no automatic retry
+        return False
+    if status == "error":
+        error = "; ".join(job.source.get("warnings") or ["acquisition failed"])
+        _fail(job, acquisition.AcquisitionError(error))
         return False
     return True
 
@@ -612,8 +616,13 @@ def legacy_payload(data):
     """Translate a legacy library.json object into import_items arguments."""
     if not isinstance(data, dict):
         raise ValidationError("library.json must be a JSON object")
+    links = data.get("links", {})
+    if not isinstance(links, dict):
+        raise ValidationError("library.json links must be a JSON object")
     items = []
-    for url, entry in data.get("links", {}).items():
+    for url, entry in links.items():
+        if not isinstance(entry, dict):
+            raise ValidationError("legacy link entries must be JSON objects")
         item = {"url": url}
         item.update({k: entry[k] for k in LEGACY_FIELDS if entry.get(k) not in (None, "", [])})
         for k in ("images", "video", "cache"):
@@ -642,12 +651,22 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
         raise ValidationError(f"too many items ({len(items)} > {MAX_IMPORT_ITEMS})")
     collection, notice = services.destination_for(user, collection_id)
 
-    seen = dict(seen or {})
-    removed_keys = {lib.norm(u) or u for u in (removed or {})}
+    seen = {} if seen is None else seen
+    removed = {} if removed is None else removed
+    if not isinstance(seen, dict) or not isinstance(removed, dict):
+        raise ValidationError("legacy seen and removed must be JSON objects")
+    for urls in (seen, removed):
+        if any(not isinstance(url, str) or not url.strip() or len(url) > 2048
+               for url in urls):
+            raise ValidationError(
+                "legacy history URLs must be non-empty strings up to "
+                "2048 characters")
+    removed_urls = list(removed)
+    removed_keys = {lib.norm(url) or url for url in removed_urls}
     items = _dedupe(items, removed_keys)
     prompts = list(prompts or [])
 
-    digest = _input_digest(items, prompts, cache_dir)
+    digest = _input_digest(items, prompts, seen, removed, cache_dir)
     existing = (None if dry_run else
                 models.ImportRecord.objects.filter(user=user, input_digest=digest).first())
     if existing is not None:
@@ -687,7 +706,8 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
         prompt_plans = _prompt_plans(prompts)
         result = _commit_import(user, collection, plans, prompt_plans, digest, origin,
                                 client_request_id, record, notice, staging, files_record,
-                                seen_map=seen, removed_keys=removed_keys)
+                                seen_map=seen, removed_keys=removed_keys,
+                                removed_urls=removed_urls)
     finally:
         shutil.rmtree(staging, ignore_errors=True)
     return result
@@ -709,13 +729,28 @@ def _dedupe(items, removed_keys):
     return out
 
 
-def _input_digest(items, prompts, cache_dir):
-    """Content digest of the input plus the bytes of referenced cache files,
-    so identical input with mutated cache is (honestly) a different import."""
+def _input_digest(items, prompts, seen, removed, cache_dir):
+    """Digest import data and referenced cache bytes for stable deduplication."""
     h = hashlib.sha256()
-    h.update(b"clipshelf-import-v1\n")
-    h.update(_canonical(items).encode())
-    h.update(_canonical(prompts).encode())
+    h.update(b"clipshelf-import-v2\n")
+    for value in (items, prompts, seen, removed):
+        h.update(_canonical(value).encode())
+        h.update(b"\n")
+    for item in items:
+        images = item.get("images")
+        values = [*(images if isinstance(images, list) else []),
+                  item.get("video"), item.get("cache")]
+        for value in values:
+            path = value.get("path") if isinstance(value, dict) else value
+            if (not isinstance(path, str) or not path
+                    or path.startswith(("http://", "https://"))):
+                continue
+            source = _legacy_media_path(path.replace("\\", "/"), cache_dir)
+            h.update(_canonical({
+                "path": path,
+                "sha256": _sha256_file(source) if source else None,
+            }).encode())
+            h.update(b"\n")
     h.update((str(cache_dir) if cache_dir else "-").encode())
     return h.hexdigest()
 
@@ -801,7 +836,7 @@ def _prompt_plans(prompts):
 
 def _commit_import(user, collection, plans, prompt_plans, digest, origin,
                    client_request_id, record, notice, staging, files_record,
-                   seen_map=None, removed_keys=()):
+                   seen_map=None, removed_keys=(), removed_urls=()):
     """Publish all files, then create every row in one transaction."""
     # Publish job files first: complete bytes at final paths before any reference.
     for plan in plans:
@@ -825,6 +860,9 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
         if capture.request_hash != digest:
             raise ValidationError(
                 "client_request_id was already used for a different import payload")
+        publication.record_import_history(
+            collection=collection, user=user,
+            seen=seen_map or {}, removed=removed_urls)
         for plan in plans:
             key = publication.link_key(plan["url"])
             # ponytail: a removed entry never comes back through an import; the
@@ -906,10 +944,11 @@ def merge_findings(user, findings, origin="extracted"):
             if url and (base is None or base in lib.KEYWORDS):
                 candidates.append((fi, li, url, title))
     tag_map = {}
-    if candidates and judgment.available():
+    key = services.screening_key() if candidates else None
+    if candidates and judgment.available(key):
         try:
             results = judgment.tag_links(
-                [{"url": u, "title": t} for _, _, u, t in candidates])
+                [{"url": u, "title": t} for _, _, u, t in candidates], api_key=key)
         except judgment.JudgmentError:
             results = None  # fail-open: keep today's lib.tag_for behavior
         if results:

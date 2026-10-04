@@ -126,11 +126,31 @@ class PublishTests(CustodyMixin, SimpleTestCase):
         self.assertEqual(published[0]["position"], 3)
         self.assertNotEqual(published[0]["path"], str(staging / "0-page.html"))
 
+    def test_relative_data_dir_publish_then_prepare(self):
+        original_cwd = Path.cwd()
+        os.chdir(self.tmp)
+        self.addCleanup(os.chdir, original_cwd)
+        staging = self.stage("0-page.html", b"relative data dir")
+        source = {"assets": [{"path": str(staging / "0-page.html"), "kind": "page"}]}
+        with override_settings(DATA_DIR="relative-data"):
+            published = asset_files.publish(source, staging, move=True)
+            prepared = asset_files.prepare(published)
+        data_dir = self.tmp / "relative-data"
+        destination = data_dir / prepared[0]["path"]
+        self.assertEqual(
+            prepared[0]["path"],
+            Path(published[0]["path"]).relative_to(data_dir).as_posix(),
+        )
+        self.assertEqual(destination.read_bytes(), b"relative data dir")
+
     def test_escape_from_staging_and_missing_file_are_rejected(self):
         staging = self.stage("0-page.html", b"hi")
-        escape = {"assets": [{"path": str(self.tmp / "outside.bin"), "kind": "page"}]}
+        outside = self.tmp / "outside.bin"
+        outside.write_bytes(b"outside")
+        escape = {"assets": [{"path": str(outside), "kind": "page"}]}
         with self.assertRaises(ValidationError):
             asset_files.publish(escape, staging, move=True)
+        self.assertEqual(outside.read_bytes(), b"outside")
         missing = {"assets": [{"path": str(staging / "gone.bin"), "kind": "page"}]}
         with self.assertRaises(ValidationError):
             asset_files.publish(missing, staging, move=False)

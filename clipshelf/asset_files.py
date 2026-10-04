@@ -82,7 +82,7 @@ def publish(source, staging, *, move):
                 f"staged asset is missing: {src.name}", code="invalid"
             )
         staged.append((asset, src))
-    root = Path(settings.DATA_DIR) / "assets" / uuid.uuid4().hex
+    root = Path(settings.DATA_DIR).resolve() / "assets" / uuid.uuid4().hex
     root.mkdir(parents=True, exist_ok=True)
     published = []
     for index, (asset, src) in enumerate(staged):

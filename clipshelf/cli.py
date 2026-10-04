@@ -37,18 +37,20 @@ def _migrate():
     """
     from django.core.management import call_command
     from django.db import OperationalError
+    from clipshelf.management.locks import data_lock
 
-    # ponytail: web and worker may start at the same moment against one
-    # SQLite file; the one that loses the write lock retries instead of
-    # coordinating. Five tries covers two local processes — if a deployment
-    # ever starts more, take an flock in DATA_DIR instead.
-    for attempt in range(5):
-        try:
-            return call_command("migrate", verbosity=0)
-        except OperationalError:
-            if attempt == 4:
-                raise
-            time.sleep(2)
+    with data_lock():
+        # ponytail: web and worker may start at the same moment against one
+        # SQLite file; the one that loses the write lock retries instead of
+        # coordinating. Five tries covers two local processes — if a deployment
+        # ever starts more, take an flock in DATA_DIR instead.
+        for attempt in range(5):
+            try:
+                return call_command("migrate", verbosity=0)
+            except OperationalError:
+                if attempt == 4:
+                    raise
+                time.sleep(2)
 
 
 def _serve(host, port):

@@ -293,12 +293,14 @@ class Job(models.Model):
         self.save()
 
     def requeue(self):
-        """Operator reprocess; refuses while a run is in flight so the rule
-        cannot drift from the mutation."""
+        """Operator reprocess; reset finished stages, but refuse in-flight work."""
         if not self.can_retry:
             raise ValueError("job is already queued or running")
         self.state = self.State.QUEUED
         self.retry_at = None
+        if self.acquisition in {self.AcquisitionStatus.BLOCKED, self.AcquisitionStatus.ERROR}:
+            self.acquisition = self.AcquisitionStatus.PENDING
+        self.interpretation = self.InterpretationStatus.PENDING
         self.save()
 
     def __str__(self):

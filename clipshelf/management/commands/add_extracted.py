@@ -31,7 +31,19 @@ class Command(BaseCommand):
         findings = payload if isinstance(payload, list) else [payload]
         if not findings or not all(isinstance(f, dict) for f in findings):
             raise CommandError("findings file must be a JSON object or list of objects")
+        for finding in findings:
+            for field in ("links", "prompts"):
+                values = finding.get(field, [])
+                fields = (("url", "title") if field == "links"
+                          else ("text", "title", "cat"))
+                if (not isinstance(values, list)
+                        or not all(isinstance(item, dict) for item in values)
+                        or any(not isinstance(item.get(key, ""), str)
+                               for item in values for key in fields)):
+                    raise CommandError(
+                        f"finding {field} must be a list of objects with string fields")
         stats = worker.merge_findings(user, findings)
         self.stdout.write(self.style.SUCCESS(
-            f"merged: {stats['links']} new link(s), {stats['prompts']} new prompt(s), "
+            f"merged: {stats['links']} link change(s), "
+            f"{stats['prompts']} prompt change(s), "
             f"{stats['updated']} updated for {user.email}"))

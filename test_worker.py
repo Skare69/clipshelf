@@ -10,7 +10,7 @@ from urllib.error import HTTPError, URLError
 
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
-from django.core.exceptions import ValidationError
+from django.core.management.base import CommandError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -176,6 +176,23 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.run_worker()
         self.assertEqual(self.refresh(job).state, "done")
 
+    def test_done_requeue_reinterprets(self):
+        job = self.make_job()
+        self.run_worker()
+        calls = []
+
+        def updated(source, config, cats, **kw):
+            calls.append(source["url"])
+            return {**FINDINGS, "source": source["url"], "summary": "fresh findings"}
+
+        job = self.refresh(job)
+        job.requeue()
+        self.run_worker(interpret=updated)
+        self.refresh(job)
+        self.assertEqual(calls, [job.url])
+        self.assertEqual((job.state, job.interpretation), ("done", "complete"))
+        self.assertEqual(job.findings["summary"], "fresh findings")
+
     def test_interpretation_failure_preserves_last_good_findings(self):
         job = self.make_job()
         self.run_worker()
@@ -253,6 +270,75 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.assertEqual(self.refresh(job).attempts, 1)
         self.assertEqual(worker._claim_batch(1), [])
 
+    def test_requeued_acquisition_failures_reacquire(self):
+        jobs = [
+            self.make_job(url=f"https://example.com/{status}", state="blocked",
+                          acquisition=status)
+            for status in ("blocked", "error")
+        ]
+        for job in jobs:
+            job.requeue()
+        acquired = []
+
+        def reacquire(url, directory):
+            acquired.append(url)
+            return fake_acquire(url, directory)
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.acquire", side_effect=reacquire), \
+                mock.patch("clipshelf.interpretation.interpret",
+                           side_effect=lambda source, config, cats, **kw: {
+                               **FINDINGS, "source": source.get("url")}):
+            for job in jobs:
+                claimed = worker._claim(job.pk)
+                self.assertIsNotNone(claimed)
+                worker._process(claimed)
+        for job in jobs:
+            self.refresh(job)
+            self.assertEqual((job.state, job.acquisition, job.interpretation),
+                             ("done", "complete", "complete"))
+        self.assertCountEqual(acquired, [job.url for job in jobs])
+
+    def test_transient_acquisition_error_uses_finite_backoff(self):
+        job = self.make_job()
+
+        def temporary_failure(url, directory):
+            source = fake_acquire(url, directory, "error")
+            source["warnings"] = ["temporary upstream failure"]
+            return source
+
+        self.run_worker(acquire=temporary_failure)
+        self.refresh(job)
+        self.assertEqual((job.state, job.acquisition, job.attempts),
+                         ("retry", "error", 1))
+        self.assertEqual(job.error, "temporary upstream failure")
+        self.assertGreater(job.retry_at, timezone.now())
+        self.assertEqual(worker._claim_batch(1), [])
+
+        job.retry_at = timezone.now() - timedelta(seconds=1)
+        job.save(update_fields=["retry_at"])
+        acquired = []
+
+        def recovered(url, directory):
+            acquired.append(url)
+            return fake_acquire(url, directory)
+
+        self.run_worker(acquire=recovered)
+        self.refresh(job)
+        self.assertEqual(acquired, [job.url])
+        self.assertEqual((job.state, job.acquisition, job.interpretation),
+                         ("done", "complete", "complete"))
+        self.assertEqual(job.findings["summary"], "good findings")
+
+    def test_deterministic_acquisition_block_stays_terminal(self):
+        job = self.make_job()
+        self.run_worker(acquire=lambda url, directory: fake_acquire(
+            url, directory, "blocked"))
+        self.refresh(job)
+        self.assertEqual((job.state, job.acquisition, job.attempts),
+                         ("blocked", "blocked", 0))
+        self.assertIsNone(job.retry_at)
+
     def test_invalid_settings_do_not_enter_the_configuration_resume_loop(self):
         cfg = services.get_settings()
         cfg.llm_base_url = "not-a-url"
@@ -274,11 +360,6 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         job = self.make_job()
         self.assertIsNotNone(worker._claim(job.id))
         self.assertIsNone(worker._claim(job.id))  # already running
-
-
-def settings_path(rel):
-    from django.conf import settings
-    return Path(settings.DATA_DIR) / rel
 
 
 class ImportQueueTests(WorkerMixin, TransactionTestCase):
@@ -342,6 +423,40 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
         self.run_worker(acquire=blocked_acquire)
         self.assertEqual((models.Job.objects.count(), models.Contribution.objects.count(),
                           models.Entry.objects.count()), before)
+
+
+class AddExtractedCommandTests(WorkerMixin, TestCase):
+    def test_rejects_malformed_nested_links_and_prompts_before_merge(self):
+        path = self.tmp / "findings.json"
+        malformed = (
+            ("links", "null"), ("links", "[null]"), ("links", '[{"url": 1}]'),
+            ("prompts", "null"), ("prompts", "[null]"), ("prompts", '[{"text": 1}]'),
+        )
+        for field, value in malformed:
+            with self.subTest(field=field, value=value):
+                path.write_text(f'{{"{field}": {value}}}', encoding="utf-8")
+                with mock.patch(
+                        "clipshelf.management.commands.add_extracted.worker.merge_findings"
+                ) as merge_findings:
+                    with self.assertRaisesMessage(CommandError, f"finding {field}"):
+                        call_command("add_extracted", "--user", self.user.email, str(path))
+                    merge_findings.assert_not_called()
+
+    def test_reports_changes_without_calling_them_new_items(self):
+        path = self.tmp / "findings.json"
+        path.write_text("{}", encoding="utf-8")
+        output = io.StringIO()
+        with mock.patch(
+                "clipshelf.management.commands.add_extracted.worker.merge_findings",
+                return_value={"links": 2, "prompts": 3, "updated": 4},
+        ) as merge_findings:
+            call_command("add_extracted", "--user", self.user.email, str(path), stdout=output)
+        merge_findings.assert_called_once()
+        self.assertIn("2 link change(s)", output.getvalue())
+        self.assertIn("3 prompt change(s)", output.getvalue())
+        self.assertIn("4 updated", output.getvalue())
+        self.assertNotIn("new link", output.getvalue())
+        self.assertNotIn("new prompt", output.getvalue())
 
 
 class IngestCommandTests(WorkerMixin, TestCase):
@@ -408,10 +523,12 @@ class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
         models.History.objects.create(
             collection=self.personal, user=self.user,
             kind=models.History.Kind.REMOVED, url=url)
-        with override_settings(DATA_DIR=str(self.tmp)):
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire):
             result = worker.import_items(
                 user=self.user, collection_id=self.personal.id,
                 items=[{"url": url, "title": "legacy"}])
+
         self.assertTrue(result["created"])
         self.assertFalse(models.Entry.objects.filter(key=url).exists())
 
@@ -432,6 +549,28 @@ class GuardrailBlockedTests(WorkerMixin, TransactionTestCase):
         self.assertIn("page steers the interpreter", job.error)
         self.assertEqual(job.attempts, 0)
         self.assertEqual(worker._claim_batch(1), [])  # blocked is terminal
+
+    def test_guardrail_retry_reruns_interpretation(self):
+        def blocked(source, config, cats, **kw):
+            from clipshelf import interpretation
+            raise interpretation.GuardrailBlocked("page steers the interpreter")
+
+        job = self.make_job()
+        self.run_worker(interpret=blocked)
+        job = self.refresh(job)
+        job.requeue()
+        calls = []
+
+        def allowed(source, config, cats, **kw):
+            calls.append(source["url"])
+            return {**FINDINGS, "source": source["url"]}
+
+        self.run_worker(interpret=allowed)
+        self.refresh(job)
+        self.assertEqual(calls, [job.url])
+        self.assertEqual((job.state, job.interpretation), ("done", "complete"))
+        self.assertEqual(job.findings["summary"], "good findings")
+
 
     def test_dangerous_findings_blocked_at_the_gate(self):
         job = self.make_job()
@@ -456,6 +595,18 @@ class MergeTaggingTests(WorkerMixin, TransactionTestCase):
     def tags(self, url):
         entry = models.Entry.objects.get(collection=self.personal, key=url)
         return models.Contribution.objects.get(entry=entry, user=self.user).data["tags"]
+
+    def test_screening_key_reaches_judgment(self):
+        key = mock.sentinel.screening_key
+        links = [{"url": "https://example.com/tut-1", "title": "Nice Thing"}]
+        with mock.patch("clipshelf.services.screening_key", return_value=key), \
+                mock.patch("clipshelf.judgment.available", return_value=True) as available, \
+                mock.patch("clipshelf.judgment.tag_links",
+                           return_value=[{"keep": 0.9, "tag": "guide"}]) as tag_links:
+            self.merge(links)
+        available.assert_called_once_with(key)
+        tag_links.assert_called_once()
+        self.assertIs(tag_links.call_args.kwargs["api_key"], key)
 
     def test_screened_tags_replace_heuristics(self):
         links = [{"url": "https://example.com/tut-1", "title": "Nice Thing"},

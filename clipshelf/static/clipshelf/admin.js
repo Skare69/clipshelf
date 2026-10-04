@@ -1,9 +1,10 @@
 /* clipshelf web app — admin panel: users, invitations, collections, LLM, screening. */
 "use strict";
 
-import { $, S, api, banner, confirmDialog, el, fmtDate, note, onEnter, out, sensitive, toast } from "./core.js";
+import { S, api, banner, confirmDialog, el, fmtDate, onEnter, out, sensitive, toast } from "./core.js";
 import { renderToc } from "./panels.js";
 
+const errNode = e => el("p", { class: "err", text: e.message });
 /* ---------- admin ---------- */
 async function renderAdmin() {
   if (!S.me?.user.is_app_admin) return;
@@ -17,7 +18,6 @@ async function renderAdmin() {
     api("/api/admin/users"), api("/api/admin/invitations"),
     api("/api/admin/collections"), api("/api/admin/llm"), api("/api/admin/screening")
   ]);
-  const errNode = e => el("p", { class: "err", text: e.message });
   wrap.replaceChildren();
   wrap.append(adminUsers(users.status === "fulfilled" ? users.value.users : null,
     users.status === "rejected" ? users.reason : null));

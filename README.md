@@ -170,8 +170,8 @@ python clipshelf.py import_library --user you@example.com --input library.json -
 python clipshelf.py import_library --user you@example.com --input library.json --cache cache
 ```
 
-The dry run writes a manifest (counts, per-entry field hashes, media digests) and
-imports nothing. The real run imports into that account's Personal collection
+The dry run reports a manifest digest and counts, and imports nothing.
+The real run imports into that account's Personal collection
 only; the original files are never modified and a repeated import is a no-op.
 
 ## Layout

@@ -1,13 +1,16 @@
 """Legacy migration regressions: manifest counts/digests, idempotency, scope,
 settings recording, and backup/restore roundtrip."""
 import base64
+import contextlib
 import hashlib
 import io
 import json
 import shutil
 import sqlite3
 import tempfile
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 
@@ -17,7 +20,8 @@ from django.core.management.base import CommandError
 from django.test import TestCase, TransactionTestCase, override_settings
 from PIL import Image
 
-from clipshelf import models, services, worker
+from clipshelf import models, publication, services, worker
+from clipshelf.management.commands.backup import Command as BackupCommand
 
 CACHE_BYTES = b"<html>cached page</html>"
 CACHE_NAME = "cache/" + hashlib.sha1(CACHE_BYTES).hexdigest() + ".html"
@@ -109,13 +113,13 @@ class MigrationMixin:
         prompts = prompts if prompts is not None else list(self.library["prompts"].values())
         kw.setdefault("cache_dir", str(self.cache_dir))
         kw.setdefault("dry_run", dry_run)
+        kw.setdefault("seen", self.library["seen"])
+        kw.setdefault("removed", self.library["removed"])
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("clipshelf.acquisition.import_export",
                            side_effect=fake_import_export):
             return worker.import_items(user=self.user, collection_id=None,
-                                       items=items, prompts=prompts,
-                                       seen=self.library["seen"],
-                                       removed=self.library["removed"], **kw)
+                                       items=items, prompts=prompts, **kw)
 
 
 class ManifestTests(MigrationMixin, TestCase):
@@ -145,6 +149,34 @@ class ManifestTests(MigrationMixin, TestCase):
         self.assertEqual(first["links"], second["links"])
         self.assertEqual(first["prompts"], second["prompts"])
         self.assertEqual(first["media_files"], second["media_files"])
+
+    def test_digest_changes_when_history_changes(self):
+        baseline = self.direct_import(dry_run=True)["digest"]
+        changed_seen = self.direct_import(
+            dry_run=True, seen={"https://seen.example/1": "2024-02-01"})["digest"]
+        changed_removed = self.direct_import(
+            dry_run=True, removed={"https://removed.example/x": "2024-02-01"})["digest"]
+        self.assertNotEqual(baseline, changed_seen)
+        self.assertNotEqual(baseline, changed_removed)
+
+    def test_changed_media_bytes_make_a_new_import(self):
+        first = self.direct_import()
+        media_path = self.cache_dir / Path(CACHE_NAME).name
+        media_path.write_bytes(CACHE_BYTES + b" changed")
+        second = self.direct_import()
+        self.assertNotEqual(first["digest"], second["digest"])
+        self.assertTrue(second["created"])
+        self.assertEqual(models.ImportRecord.objects.filter(user=self.user).count(), 2)
+
+    def test_legacy_links_shapes_raise_validation_error(self):
+        for links, message in (
+                ([], "library.json links must be a JSON object"),
+                ({"https://example.com": []},
+                 "legacy link entries must be JSON objects")):
+            with self.subTest(links=links), \
+                    self.assertRaises(ValidationError) as raised:
+                worker.legacy_payload({"links": links})
+            self.assertEqual(raised.exception.messages, [message])
 
 
 class ImportTests(MigrationMixin, TestCase):
@@ -199,6 +231,73 @@ class ImportTests(MigrationMixin, TestCase):
         self.run_import_command()
         self.assertFalse(models.Entry.objects.filter(
             collection=self.personal, key="https://removed.example/x").exists())
+
+    def test_import_history_is_scoped_alias_aware_and_idempotent(self):
+        seen_alias = "https://seen.example/1/?utm_source=legacy#old"
+        removed_alias = "https://removed.example/x/?utm_source=legacy#old"
+        args = {
+            "items": [{"url": removed_alias}],
+            "prompts": [],
+            "seen": {seen_alias: "2024-01-01"},
+            "removed": {removed_alias: "2024-01-05"},
+        }
+        self.direct_import(**args)
+        history = models.History.objects.filter(user=self.user)
+        self.assertTrue(history.filter(
+            collection=self.personal, kind=models.History.Kind.SEEN,
+            url="https://seen.example/1").exists())
+        self.assertTrue(history.filter(
+            collection=self.personal, kind=models.History.Kind.SEEN,
+            url=seen_alias).exists())
+        self.assertTrue(history.filter(
+            collection=self.personal, kind=models.History.Kind.ALIAS,
+            url=seen_alias, target_url="https://seen.example/1").exists())
+        self.assertTrue(history.filter(
+            collection=self.personal, kind=models.History.Kind.REMOVED,
+            url="https://removed.example/x").exists())
+        self.assertTrue(history.filter(
+            collection=self.personal, kind=models.History.Kind.REMOVED,
+            url=removed_alias).exists())
+        self.assertTrue(history.filter(
+            collection=self.personal, kind=models.History.Kind.ALIAS,
+            url=removed_alias, target_url="https://removed.example/x").exists())
+        self.assertFalse(models.Entry.objects.filter(
+            collection=self.personal, key="https://removed.example/x").exists())
+        other = models.User.objects.create_user(username="history-other",
+                                                email="history-other@example.com")
+        self.assertFalse(models.History.objects.filter(
+            collection=services.personal_collection(other)).exists())
+        count = history.count()
+        self.direct_import(**args)
+        self.assertEqual(history.count(), count)
+
+        self.direct_import(items=[{"url": "https://removed.example/x"}],
+                           prompts=[], seen={}, removed={})
+        self.assertFalse(models.Entry.objects.filter(
+            collection=self.personal, key="https://removed.example/x").exists())
+
+    def test_removed_alias_blocks_canonical_and_alias_urls(self):
+        alias = "https://short.example/item"
+        target = "https://target.example/item"
+        models.History.objects.create(
+            collection=self.personal, user=self.user,
+            kind=models.History.Kind.ALIAS, url=alias, target_url=target)
+        models.History.objects.create(
+            collection=self.personal, user=self.user,
+            kind=models.History.Kind.REMOVED, url=alias)
+        self.assertTrue(publication.tombstoned(
+            self.personal.id, self.user.id, target))
+
+        alias2 = "https://short.example/other"
+        target2 = "https://target.example/other"
+        models.History.objects.create(
+            collection=self.personal, user=self.user,
+            kind=models.History.Kind.ALIAS, url=alias2, target_url=target2)
+        models.History.objects.create(
+            collection=self.personal, user=self.user,
+            kind=models.History.Kind.REMOVED, url=target2)
+        self.assertTrue(publication.tombstoned(
+            self.personal.id, self.user.id, alias2))
 
     def test_conflicting_request_id_rejected(self):
         crid = str(uuid.uuid4())
@@ -285,6 +384,80 @@ class ImportTests(MigrationMixin, TestCase):
 
 
 class BackupRestoreTests(MigrationMixin, TransactionTestCase):
+    def test_backup_rejects_assets_destinations_before_creating_files(self):
+        data_dir = self.tmp / "backup-data"
+        assets = data_dir / "assets"
+        assets.mkdir(parents=True)
+        rejected = []
+        with override_settings(DATA_DIR=str(data_dir)):
+            for destination in (assets, assets / "nested"):
+                with mock.patch.object(BackupCommand, "_snapshot") as snapshot:
+                    try:
+                        call_command("backup", "--output", str(destination),
+                                     stdout=io.StringIO())
+                    except CommandError:
+                        rejected.append(True)
+                    else:
+                        rejected.append(False)
+                    snapshot.assert_not_called()
+
+        self.assertEqual(rejected, [True, True])
+        self.assertEqual(list(assets.iterdir()), [])
+        self.assertFalse((data_dir / "data.lock").exists())
+
+    def test_backup_rejects_existing_empty_destination(self):
+        data_dir = self.tmp / "backup-data"
+        data_dir.mkdir()
+        target = self.tmp / "empty-backup"
+        target.mkdir()
+        with override_settings(DATA_DIR=str(data_dir)), \
+                mock.patch.object(BackupCommand, "_snapshot") as snapshot:
+            with self.assertRaises(CommandError):
+                call_command("backup", "--output", str(target), stdout=io.StringIO())
+            snapshot.assert_not_called()
+        self.assertEqual(list(target.iterdir()), [])
+        self.assertFalse((data_dir / "data.lock").exists())
+
+    def test_concurrent_backups_publish_one_complete_generation(self):
+        data_dir = self.tmp / "backup-data"
+        data_dir.mkdir()
+        target = self.tmp / "shared-backup"
+        barrier = threading.Barrier(2)
+        generation_lock = threading.Lock()
+        generations = iter(("first", "second"))
+        snapshot_calls = []
+
+        def snapshot(_command, _db_path, destination):
+            try:
+                barrier.wait(timeout=1)
+            except threading.BrokenBarrierError:
+                pass
+            with generation_lock:
+                generation = next(generations)
+                snapshot_calls.append(generation)
+            (destination / f"{generation}.txt").write_text(generation, encoding="utf-8")
+
+        def run_backup():
+            command = BackupCommand(stdout=io.StringIO())
+            try:
+                command.handle(output=str(target), wait=5)
+            except CommandError as exc:
+                return exc
+            return None
+
+        with override_settings(DATA_DIR=str(data_dir)), \
+                mock.patch("clipshelf.management.commands.backup.data_lock",
+                           side_effect=lambda **kwargs: contextlib.nullcontext()), \
+                mock.patch.object(BackupCommand, "_snapshot", new=snapshot):
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(lambda _: run_backup(), range(2)))
+
+        self.assertEqual(sum(result is None for result in results), 1)
+        self.assertEqual(sum(isinstance(result, CommandError) for result in results), 1)
+        self.assertEqual(len(snapshot_calls), 1)
+        published = list(target.iterdir())
+        self.assertEqual([path.name for path in published], [f"{snapshot_calls[0]}.txt"])
+
     def test_backup_restore_roundtrip_isolated(self):
         self.run_import_command()
         instance_id = str(services.get_settings().instance_id)

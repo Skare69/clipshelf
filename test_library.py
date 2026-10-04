@@ -354,6 +354,27 @@ class CollectionMembershipTests(ApiTestCase):
             response.json()["default_collection_id"], str(self.alice_personal.id)
         )
 
+    def test_me_default_falls_back_after_membership_removal(self):
+        shared = self._shared()
+        Membership.objects.create(collection=shared, user=self.bob)
+        response = self.bob_client.post(
+            "/api/settings",
+            data=json.dumps({"default_collection_id": str(shared.id)}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            self.alice_client.delete(
+                f"/api/collections/{shared.id}/members/{self.bob.id}"
+            ).status_code,
+            200,
+        )
+        response = self.bob_client.get("/api/me")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["default_collection_id"], str(self.bob_personal.id)
+        )
+
 
 class RemovalTests(ApiTestCase):
     def test_contributor_removal_preserves_others(self):
@@ -552,6 +573,17 @@ class CaptureTests(ApiTestCase):
         )
         self.assertEqual(conflict.status_code, 409)
 
+    def test_capture_keeps_balanced_url_parentheses_and_trims_punctuation(self):
+        alice = self._login(self.alice)
+        url = "https://en.wikipedia.org/wiki/Python_(programming_language)"
+        response = self._post_capture(
+            alice, self._capture_body(self.alice, text=f"Read {url}. More prose.")
+        )
+        self.assertEqual(response.status_code, 201)
+        capture_id = response.json()["receipt"]["id"]
+        detail = alice.get(f"/api/captures/{capture_id}").json()
+        self.assertEqual([job["url"] for job in detail["jobs"]], [url])
+
     def test_unavailable_destination_falls_back_with_notice(self):
         shared = Collection.objects.create(
             name="Not mine", kind="shared", owner=self.alice
@@ -584,6 +616,17 @@ class CaptureTests(ApiTestCase):
             "/api/captures", {"collection_id": str(self.bob_personal.id)}
         )
         self.assertEqual(response.status_code, 404)
+
+    def test_inbox_returns_a_bounded_raw_text_preview(self):
+        alice = self._login(self.alice)
+        text = "https://example.com/widget " + "x" * 600
+        response = self._post_capture(
+            alice, self._capture_body(self.alice, text=text)
+        )
+        self.assertEqual(response.status_code, 201)
+        captures = alice.get("/api/captures").json()["captures"]
+        self.assertEqual(len(captures), 1)
+        self.assertEqual(captures[0]["text"], text[:500])
 
     def test_job_retry_rules(self):
         alice = self._login(self.alice)
@@ -632,20 +675,29 @@ class CaptureTests(ApiTestCase):
             self.assertEqual(detail["id"], str(job_id))
             return detail
 
-        # In-flight: active, no attention, no retry offered or accepted.
-        for state in ("queued", "running", "retry"):
+        # In-flight jobs cannot be requeued.
+        for state in ("queued", "running"):
             Job.objects.filter(id=job_id).update(state=state)
             detail = alice.get(f"/api/captures/{capture_id}").json()["jobs"][0]
             self.assertEqual(detail["state"], state)
-            # state "retry" is a scheduled backoff wait, still active.
-            if state != "retry":
-                self.assertTrue(detail["active"])
-                self.assertFalse(detail["can_retry"])
-                self.assertEqual(
-                    alice.post(f"/api/jobs/{job_id}/retry").status_code, 409
-                )
-        # Scheduled-backoff job: active and the server accepts an immediate requeue.
-        self.assertTrue(projected("retry")["active"])
+            self.assertTrue(detail["active"])
+            self.assertFalse(detail["can_retry"])
+            self.assertEqual(
+                alice.post(f"/api/jobs/{job_id}/retry").status_code, 409
+            )
+
+        # Scheduled-backoff jobs remain active and refuse immediate requeue.
+        detail = projected("retry")
+        self.assertTrue(detail["active"])
+        self.assertFalse(detail["can_retry"])
+        retry_job = Job.objects.get(id=job_id)
+        self.assertTrue(retry_job.active)
+        self.assertFalse(retry_job.can_retry)
+        self.assertEqual(
+            alice.post(f"/api/jobs/{job_id}/retry").status_code, 409
+        )
+        retry_job.refresh_from_db()
+        self.assertEqual(retry_job.state, "retry")
 
         # Blocked: attention projected, retry accepted, history kept.
         detail = projected("blocked", error="upstream blocked", acquisition="blocked")
@@ -726,6 +778,46 @@ class EntryApiTests(ApiTestCase):
         ).json()
         self.assertEqual(listing["count"], 1)
 
+    def test_category_filter_matches_members_case_insensitively(self):
+        entry, _ = self._contribute(self.alice, self.alice_personal)
+        Contribution.objects.filter(entry=entry, user=self.alice).update(
+            data={"categories": ["Review", "Reading"]}
+        )
+        response = self._login(self.alice).get("/api/entries", {"cat": "rEvIeW"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 1)
+        self.assertEqual(response.json()["entries"][0]["id"], str(entry.id))
+
+    def test_other_filter_matches_uncategorized_and_real_category(self):
+        uncategorized, _ = self._contribute(
+            self.alice, self.alice_personal, "https://example.com/uncategorized"
+        )
+        categorized, _ = self._contribute(
+            self.alice, self.alice_personal, "https://example.com/other"
+        )
+        Contribution.objects.filter(entry=categorized, user=self.alice).update(
+            data={"categories": ["Other"]}
+        )
+        response = self._login(self.alice).get("/api/entries", {"cat": "Other"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["count"], 2)
+        self.assertEqual(
+            {item["id"] for item in response.json()["entries"]},
+            {str(uncategorized.id), str(categorized.id)},
+        )
+
+    def test_shared_member_cannot_retry_another_users_entry_job(self):
+        shared = Collection.objects.create(
+            name="Shared", kind="shared", owner=self.alice
+        )
+        Membership.objects.create(collection=shared, user=self.bob)
+        entry, _ = self._contribute(self.alice, shared)
+        path = f"/api/entries/{entry.id}"
+        owner_job = self._login(self.alice).get(path).json()["jobs"][0]
+        member_job = self._login(self.bob).get(path).json()["jobs"][0]
+        self.assertTrue(owner_job["can_retry"])
+        self.assertFalse(member_job["can_retry"])
+
     def test_interpretation_status_tracks_retained_results(self):
         shared = Collection.objects.create(name="Shared", kind="shared", owner=self.alice)
         Membership.objects.create(collection=shared, user=self.bob)
@@ -802,6 +894,22 @@ class ImportTests(ApiTestCase):
             os.listdir(os.path.join(os.path.realpath(self._data_dir()), "staging")),
             staged,
         )
+
+    def test_same_import_cannot_target_a_different_collection(self):
+        alice = self._login(self.alice)
+        other = Collection.objects.create(
+            name="Other", kind="shared", owner=self.alice
+        )
+        content = json.dumps([{"id": "1", "desc": "clip one"}]).encode()
+        first = self._post_import(alice, content, collection=self.alice_personal)
+        self.assertEqual(first.status_code, 201)
+        staging = os.path.join(os.path.realpath(self._data_dir()), "staging")
+        staged = os.listdir(staging)
+        response = self._post_import(alice, content, collection=other)
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["code"], "conflict")
+        self.assertEqual(ImportRecord.objects.filter(user=self.alice).count(), 1)
+        self.assertEqual(os.listdir(staging), staged)
 
     def test_import_request_id_unique_across_payloads(self):
         # The database constraint is the race backstop: the pre-insert check
@@ -918,7 +1026,7 @@ class ShellAndHealthTests(ApiTestCase):
         self.assertTrue(b"".join(response.streaming_content).strip())
 
     def test_static_refuses_to_escape_its_directory(self):
-        response = Client().get("/static/../db.sqlite3")
+        response = Client().get("/static/../views.py")
         self.assertNotEqual(response.status_code, 200)
 
     def test_pinned_hosts_still_answer_the_container_probe(self):

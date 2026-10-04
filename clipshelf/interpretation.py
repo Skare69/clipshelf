@@ -60,7 +60,7 @@ LLM_RESPONSE_MAX = 16 << 20
 OUTPUT_TOKENS_MAX = 2000
 REPOS_MAX, LINKS_MAX, PROMPTS_MAX, INSTALLS_MAX, WARNINGS_MAX, CATEGORIES_MAX = \
     10, 20, 20, 20, 10, 10
-VERIFY_URLS_MAX = 20
+VERIFY_URLS_MAX, VERIFY_URL_BYTES_MAX = 20, 64 << 10
 
 _SYSTEM_PROMPT = (
     "You are a precise library cataloging assistant. You receive ONE capture's "
@@ -208,7 +208,7 @@ def _image_parts(source, warnings, budget):
                 raise ValueError("source file exceeds size bound")
             with open(asset["path"], "rb") as fh:
                 data = fh.read()
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             warnings.append(f"image asset unreadable: {exc}"[:300])
             continue
         url = _data_url(data, warnings, os.path.basename(asset["path"])[:60])
@@ -373,14 +373,16 @@ def _verify_urls(findings, warnings):
             urls.append(url)
     for url in urls[:VERIFY_URLS_MAX]:
         try:
-            network.fetch_public(url, max_bytes=64 << 10, timeout=20)
-        except Exception:
+            network.fetch_public(url, max_bytes=VERIFY_URL_BYTES_MAX, timeout=20)
+        except Exception as exc:
+            if (isinstance(exc, network.NetworkError)
+                    and str(exc) == f"response exceeds {VERIFY_URL_BYTES_MAX} byte bound"):
+                continue
             flag = f"unverified: {url}"[:300]
             if flag not in findings["warnings"]:
                 findings["warnings"].append(flag)
     if len(urls) > VERIFY_URLS_MAX:
         warnings.append(f"{len(urls) - VERIFY_URLS_MAX} URLs not re-verified")
-
 
 # ------------------------------------------------------------------ API
 
@@ -415,7 +417,7 @@ def interpret(source, config, categories, screening_key=None):
             raise GuardrailBlocked(
                 "interpreter-directed content detected; findings withheld")
     elif screened and steer >= judgment.REVIEW_STEER:
-        warnings.append("suspicious content flagged by screening; proceeding")
+        warnings.append("screening: suspicious content flagged; proceeding")
 
     reason = None
     for attempt in range(2):  # exactly one malformed-output retry
@@ -434,11 +436,12 @@ def interpret(source, config, categories, screening_key=None):
                 findings["repos"] = []
                 findings["installs"] = []
                 warnings.append(
-                    "suspicious interpreter-directed content; repos and installs withheld")
+                    "screening: suspicious interpreter-directed content; "
+                    "repos and installs withheld")
             # runtime diagnostics (skipped images, dropped categories, ...) are
             # evidence too: keep them beside the model's own warnings
             findings["warnings"] = list(dict.fromkeys(
-                [*findings["warnings"], *warnings]))[:WARNINGS_MAX]
+                [*findings["warnings"], *warnings]))[:100]
             return findings
         except (ValueError, json.JSONDecodeError) as exc:
             reason = str(exc)[:300]
