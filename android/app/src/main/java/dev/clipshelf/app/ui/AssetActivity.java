@@ -74,7 +74,10 @@ public class AssetActivity extends Activity {
         Async.goUi(this, () -> {
             File dest = File.createTempFile("asset", ".bin", getCacheDir());
             try {
-                Api.downloadAsset(session.profile.endpoint, session.token, url, dest, Api.MAX_ASSET_BYTES);
+                String type = Api.downloadAsset(session.profile.endpoint, session.token, url, dest, Api.MAX_ASSET_BYTES);
+                if (type != null && !type.startsWith("image/")) {
+                    throw new java.io.IOException("Server returned " + type + " for an image");
+                }
                 return decode(dest);
             } finally {
                 // Owned staging file: deleted on success, decode failure, or download error
@@ -125,7 +128,10 @@ public class AssetActivity extends Activity {
         Async.goUi(this, () -> {
             File dest = File.createTempFile("asset", ".txt", getCacheDir());
             try {
-                Api.downloadAsset(session.profile.endpoint, session.token, url, dest, TEXT_PREVIEW_BYTES);
+                String type = Api.downloadAsset(session.profile.endpoint, session.token, url, dest, TEXT_PREVIEW_BYTES);
+                if (type != null && !(type.startsWith("text/") || type.contains("json"))) {
+                    throw new java.io.IOException("Server returned " + type + " for text");
+                }
                 byte[] all = new byte[(int) dest.length()];
                 try (FileInputStream in = new FileInputStream(dest)) {
                     int read = in.read(all);
