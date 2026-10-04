@@ -62,11 +62,11 @@ public class CollectionsActivity extends Activity {
         status.setVisibility(View.VISIBLE);
         status.setText(R.string.loading);
         Async.goUi(this, () -> Api.me(session.profile.endpoint, session.token), (me, error) -> {
-            status.setVisibility(View.GONE);
             if (error != null) {
                 status.setText(Ui.message(this, error));
                 return;
             }
+            status.setVisibility(View.GONE);
             collections = me.collections;
             defaultCollectionId = me.defaultCollectionId;
             adapter.notifyDataSetChanged();

@@ -76,11 +76,11 @@ public class CollectionDetailActivity extends Activity {
         status.setText(R.string.loading);
         Async.goUi(this, () -> Api.members(session.profile.endpoint, session.token, collectionId),
                 (result, error) -> {
-                    status.setVisibility(View.GONE);
                     if (error != null) {
                         status.setText(Ui.message(this, error));
                         return;
                     }
+                    status.setVisibility(View.GONE);
                     members = result;
                     adapter.notifyDataSetChanged();
                 });

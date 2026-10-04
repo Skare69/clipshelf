@@ -51,9 +51,6 @@ public class EntryActivity extends Activity {
                     if (error != null) {
                         String m = Ui.message(this, error);
                         status.setText(m);
-                        if (!(error instanceof Api.ApiException)) {
-                            status.setVisibility(View.GONE);
-                        }
                         return;
                     }
                     status.setVisibility(View.GONE);
