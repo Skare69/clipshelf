@@ -105,6 +105,9 @@ public class MainActivity extends Activity {
         String text = getString(R.string.outbox_summary,
                 counts[OutboxStore.STATE_QUEUED], paused,
                 counts[OutboxStore.STATE_DELIVERED]);
+        if (counts[OutboxStore.STATE_REJECTED] > 0) {
+            text += "  ·  " + getString(R.string.outbox_rejected_note, counts[OutboxStore.STATE_REJECTED]);
+        }
         if (others > 0) {
             text += "  (+" + others + ")";
         }

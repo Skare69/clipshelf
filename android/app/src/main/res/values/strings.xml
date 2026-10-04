@@ -23,6 +23,7 @@
     <string name="not_signed_in">Not signed in</string>
     <string name="action_setup">Set up server and account</string>
     <string name="outbox_summary">Outbox: %1$d pending, %2$d paused, %3$d delivered</string>
+    <string name="outbox_rejected_note">%1$d rejected</string>
     <string name="action_share_hint">Share any page from your browser or other apps with “Save to Clipshelf”. Shares are kept on this phone and delivered automatically.</string>
     <string name="action_logout">Sign out</string>
     <string name="logout_confirm_title">Sign out?</string>
