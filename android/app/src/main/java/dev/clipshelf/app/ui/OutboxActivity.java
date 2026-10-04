@@ -33,7 +33,6 @@ public class OutboxActivity extends Activity {
     private List<OutboxStore.Row> rows;
     private Adapter adapter;
     private Button loadOlder;
-    private boolean haveMore;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -79,8 +78,8 @@ public class OutboxActivity extends Activity {
 
     private void reload() {
         rows = db.listNewest(PAGE_SIZE);
-        haveMore = rows.size() == PAGE_SIZE;
-        loadOlder.setVisibility(haveMore ? View.VISIBLE : View.GONE);
+        boolean more = !rows.isEmpty() && rows.size() % PAGE_SIZE == 0;
+        loadOlder.setVisibility(more ? View.VISIBLE : View.GONE);
         adapter.notifyDataSetChanged();
         TextView empty = findViewById(R.id.outbox_empty);
         empty.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);
@@ -94,8 +93,8 @@ public class OutboxActivity extends Activity {
         OutboxStore.Row last = rows.get(rows.size() - 1);
         List<OutboxStore.Row> older = db.listOlderThan(last.createdAt, last.id, PAGE_SIZE);
         rows.addAll(older);
-        haveMore = older.size() == PAGE_SIZE;
-        loadOlder.setVisibility(haveMore ? View.VISIBLE : View.GONE);
+        boolean more = older.size() == PAGE_SIZE;
+        loadOlder.setVisibility(more ? View.VISIBLE : View.GONE);
         adapter.notifyDataSetChanged();
     }
 
