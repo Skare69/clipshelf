@@ -41,7 +41,7 @@ public final class Creds {
         public final Profile profile;
         public final String token;
 
-        Session(Profile profile, String token) {
+        public Session(Profile profile, String token) {
             this.profile = profile;
             this.token = token;
         }

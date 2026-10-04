@@ -23,7 +23,9 @@ import dev.clipshelf.app.outbox.OutboxStore;
  *  2. GET /api/me must confirm the same instance and account before any POST.
  *  3. A receipt counts only when its ids match the row exactly.
  *  4. Auth failures pause the profile's queued rows and keep them; they resume
- *     on successful re-login of the same identity.
+ *     on successful re-login of the same identity. A receipt mismatch pauses
+ *     only that row and never auto-resumes; only an explicit user requeue
+ *     clears it.
  *  5. Transport failures and 5xx retry with WorkManager exponential backoff;
  *     the server dedupes via client_request_id, so a lost response cannot
  *     create a second contribution or reroute an accepted receipt.
@@ -92,7 +94,8 @@ public class DeliverWorker extends Worker {
         return Result.success();
     }
 
-    private int deliverOne(Context ctx, OutboxStore db, Creds.Session session, OutboxStore.Row row) {
+    /** Package-private static: JVM-testable without constructing a Worker. */
+    static int deliverOne(Context ctx, OutboxStore db, Creds.Session session, OutboxStore.Row row) {
         try {
             Api.Receipt receipt = Api.capture(session.profile.endpoint, session.token,
                     row.id, row.text, row.requestedCollectionId, row.instanceId, row.userId);
