@@ -6,6 +6,7 @@ Invitation replay, native token login and session revocation, admin boundary
 
 import io
 import json
+import re
 import secrets
 from datetime import timedelta
 from unittest.mock import patch
@@ -62,22 +63,8 @@ def _probe(request):
 
 urlpatterns = [
     path("probe", _probe),
-    path("admin/users", admin_views.user_list),
-    path("admin/users/<uuid:user_id>/status", admin_views.user_status),
-    path("admin/users/<uuid:user_id>/recover", admin_views.user_recover),
-    path("admin/invitations", admin_views.invitations),
-    path("admin/collections", admin_views.collection_list),
-    path(
-        "admin/collections/<uuid:collection_id>/transfer",
-        admin_views.collection_transfer,
-    ),
-    path("admin/llm/models", admin_views.llm_models),
-    path("admin/llm/check", admin_views.llm_check),
-    path("admin/llm", admin_views.llm_config),
-    path("admin/invitations", admin_views.invitations),
-    path("invite/<str:token>", accounts.invite_view, name="clipshelf_invite"),
-    path("accounts/", include("allauth.account.urls")),
-    path("_allauth/", include("allauth.headless.urls")),
+    *accounts.account_urlpatterns,
+    path("api/", include((admin_views.admin_urlpatterns, "clipshelf_accounts_admin"))),
 ]
 
 
@@ -295,13 +282,13 @@ class NativeTokenTests(AccountTestCase):
 
         self.client.force_login(self.admin)
         response = self.admin_post(
-            f"/admin/users/{member.pk}/status", {"active": False}
+            f"/api/admin/users/{member.pk}/status", {"active": False}
         )
         self.assertEqual(response.status_code, 403)
         self.assertEqual(response.json()["detail"], "reauthentication_required")
 
         response = self.admin_post(
-            f"/admin/users/{member.pk}/status", {"active": False}, reauth=True
+            f"/api/admin/users/{member.pk}/status", {"active": False}, reauth=True
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
@@ -311,7 +298,7 @@ class NativeTokenTests(AccountTestCase):
 
         # Re-enabling must not revive the revoked session; the recent
         # reauthentication from above means no password needed now.
-        response = self.admin_post(f"/admin/users/{member.pk}/status", {"active": True})
+        response = self.admin_post(f"/api/admin/users/{member.pk}/status", {"active": True})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
             self.client.get("/probe", headers={"x-session-token": token}).status_code,
@@ -333,11 +320,11 @@ class NativeTokenTests(AccountTestCase):
         token = self.headless_login(target.email).json()["meta"]["session_token"]
         self.client.force_login(self.admin)
 
-        response = self.admin_post(f"/admin/users/{target.pk}/recover", {})
+        response = self.admin_post(f"/api/admin/users/{target.pk}/recover", {})
         self.assertEqual(response.status_code, 403)
 
         response = self.admin_post(
-            f"/admin/users/{target.pk}/recover", {}, reauth=True
+            f"/api/admin/users/{target.pk}/recover", {}, reauth=True
         )
         self.assertEqual(response.status_code, 200)
         reset_url = response.json()["reset_url"]
@@ -356,20 +343,20 @@ class NativeTokenTests(AccountTestCase):
 
         # Recent reauthentication now suffices.
         target2 = make_user("lost2@clipshelf.test")
-        response = self.admin_post(f"/admin/users/{target2.pk}/recover", {})
+        response = self.admin_post(f"/api/admin/users/{target2.pk}/recover", {})
         self.assertEqual(response.status_code, 200)
 
 
 class AdminBoundaryTests(AccountTestCase):
     def test_admin_endpoints_reject_anonymous_and_non_admins(self):
-        self.assertEqual(self.client.get("/admin/users").status_code, 401)
+        self.assertEqual(self.client.get("/api/admin/users").status_code, 401)
         member = make_user("plain@clipshelf.test")
         client = Client()
         client.force_login(member)
-        response = client.get("/admin/users")
+        response = client.get("/api/admin/users")
         self.assertEqual(response.status_code, 403)
         response = client.post(
-            f"/admin/users/{member.pk}/status", data={"active": True},
+            f"/api/admin/users/{member.pk}/status", data={"active": True},
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 403)
@@ -377,19 +364,19 @@ class AdminBoundaryTests(AccountTestCase):
     def test_admin_responses_are_no_store(self):
         # Finding D2: users, invitation links and reset links must never land
         # in private browser caches — success and failure paths alike.
-        self.assertEqual(self.client.get("/admin/users")["Cache-Control"], "no-store")
+        self.assertEqual(self.client.get("/api/admin/users")["Cache-Control"], "no-store")
         self.client.force_login(self.admin)
         target = make_user("cache-target@clipshelf.test")
         responses = [
-            self.admin_post(f"/admin/users/{target.pk}/recover", {}),
-            self.client.get("/admin/users"),
+            self.admin_post(f"/api/admin/users/{target.pk}/recover", {}),
+            self.client.get("/api/admin/users"),
             self.admin_post(
-                "/admin/invitations",
+                "/api/admin/invitations",
                 {"email": "invited@clipshelf.test"},
                 reauth=True,
             ),
-            self.admin_post(f"/admin/users/{target.pk}/recover", {}, reauth=True),
-            self.admin_post("/admin/invitations", {"email": "not-an-email"}),
+            self.admin_post(f"/api/admin/users/{target.pk}/recover", {}, reauth=True),
+            self.admin_post("/api/admin/invitations", {"email": "not-an-email"}),
         ]
         self.assertEqual(
             [r.status_code for r in responses], [403, 200, 201, 200, 400]
@@ -403,7 +390,7 @@ class AdminBoundaryTests(AccountTestCase):
         shared.save()
         Membership(collection=shared, user=other).save()
         self.client.force_login(self.admin)
-        response = self.client.get("/admin/collections")
+        response = self.client.get("/api/admin/collections")
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(len(payload["collections"]), 1)
@@ -421,13 +408,13 @@ class AdminBoundaryTests(AccountTestCase):
         for user in (owner, member, inactive):
             Membership(collection=shared, user=user).save()
         personal = Collection.objects.get(owner=owner, kind="personal")
-        url = f"/admin/collections/{shared.pk}/transfer"
+        url = f"/api/admin/collections/{shared.pk}/transfer"
 
         self.client.force_login(self.admin)
         # Personal collections never transfer.
         self.assertEqual(
             self.admin_post(
-                f"/admin/collections/{personal.pk}/transfer",
+                f"/api/admin/collections/{personal.pk}/transfer",
                 {"owner_id": str(member.pk)},
                 reauth=True,
             ).status_code,
@@ -441,7 +428,7 @@ class AdminBoundaryTests(AccountTestCase):
             400,
         )
 
-        self.admin_post(f"/admin/users/{owner.pk}/status", {"active": False})
+        self.admin_post(f"/api/admin/users/{owner.pk}/status", {"active": False})
 
         self.assertEqual(
             self.admin_post(
@@ -466,7 +453,7 @@ class AdminBoundaryTests(AccountTestCase):
         self.assertEqual(accessible_collections(self.admin).count(), 1)
 
         # Re-enabling the old owner does not undo the transfer.
-        self.admin_post(f"/admin/users/{owner.pk}/status", {"active": True})
+        self.admin_post(f"/api/admin/users/{owner.pk}/status", {"active": True})
         shared.refresh_from_db()
         self.assertEqual(shared.owner, member)
 
@@ -517,9 +504,9 @@ class LlmModelPickerTests(AccountTestCase):
 
     def test_keys_stay_with_their_endpoint_and_explicit_clear_wins(self):
         saved, other = "http://saved/v1", "http://other/v1"
-        self.admin_post("/admin/llm", {"base_url": saved, "api_key": "stored"}, reauth=True)
+        self.admin_post("/api/admin/llm", {"base_url": saved, "api_key": "stored"}, reauth=True)
         # A trailing slash is the same endpoint: the saved key still applies.
-        response = self.admin_post("/admin/llm/models", {"base_url": saved + "/"})
+        response = self.admin_post("/api/admin/llm/models", {"base_url": saved + "/"})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.requests[-1][1], "Bearer stored")
         for body, expected in (
@@ -528,67 +515,67 @@ class LlmModelPickerTests(AccountTestCase):
             ({"base_url": other, "api_key": "typed"}, (other + "/models", "Bearer typed")),
             ({"api_key": ""}, (saved + "/models", None)),
         ):
-            response = self.admin_post("/admin/llm/models", body)
+            response = self.admin_post("/api/admin/llm/models", body)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json()["models"], ["vision-a"])
             self.assertEqual(self.requests[-1], expected)
             self.assertNotIn("stored", response.content.decode())
 
-        response = self.admin_post("/admin/llm", {"base_url": other, "model": "m"})
+        response = self.admin_post("/api/admin/llm", {"base_url": other, "model": "m"})
         self.assertFalse(response.json()["llm"]["has_api_key"])
-        self.admin_post("/admin/llm/models", {})
+        self.admin_post("/api/admin/llm/models", {})
         self.assertEqual(self.requests[-1], (other + "/models", None))
 
-        self.admin_post("/admin/llm", {"api_key": "replacement"})
-        response = self.admin_post("/admin/llm", {"base_url": other, "model": "new"})
+        self.admin_post("/api/admin/llm", {"api_key": "replacement"})
+        response = self.admin_post("/api/admin/llm", {"base_url": other, "model": "new"})
         self.assertTrue(response.json()["llm"]["has_api_key"])
-        self.admin_post("/admin/llm/models", {})
+        self.admin_post("/api/admin/llm/models", {})
         self.assertEqual(self.requests[-1], (other + "/models", "Bearer replacement"))
-        response = self.admin_post("/admin/llm", {"api_key": ""})
+        response = self.admin_post("/api/admin/llm", {"api_key": ""})
         self.assertFalse(response.json()["llm"]["has_api_key"])
-        self.admin_post("/admin/llm/models", {})
+        self.admin_post("/api/admin/llm/models", {})
         self.assertEqual(self.requests[-1], (other + "/models", None))
 
     def test_previews_never_persist_and_never_invalidate_verification(self):
-        self.admin_post("/admin/llm", {"base_url": "http://saved/v1", "model": "m",
+        self.admin_post("/api/admin/llm", {"base_url": "http://saved/v1", "model": "m",
                                        "api_key": "stored"}, reauth=True)
         s = ServerSettings.objects.get(pk=1)
         s.llm_verified_at = timezone.now()
         s.save()
-        self.admin_post("/admin/llm/check",
+        self.admin_post("/api/admin/llm/check",
                         {"base_url": "http://typed/v1", "model": "x", "api_key": "typed"})
-        self.admin_post("/admin/llm/models", {"base_url": "http://typed/v1", "api_key": "typed"})
+        self.admin_post("/api/admin/llm/models", {"base_url": "http://typed/v1", "api_key": "typed"})
         s.refresh_from_db()
         self.assertEqual(s.llm_base_url, "http://saved/v1")
         self.assertEqual(s.llm_model, "m")
         self.assertEqual(s.llm_api_key, "stored")
         self.assertIsNotNone(s.llm_verified_at)
-        self.admin_post("/admin/llm/models", {})
+        self.admin_post("/api/admin/llm/models", {})
         self.assertEqual(self.requests[-1], ("http://saved/v1/models", "Bearer stored"))
 
     def test_verification_resets_only_on_actual_capability_changes(self):
-        self.admin_post("/admin/llm", {"base_url": "http://saved/v1", "model": "m",
+        self.admin_post("/api/admin/llm", {"base_url": "http://saved/v1", "model": "m",
                                        "api_key": "stored"}, reauth=True)
         s = ServerSettings.objects.get(pk=1)
         s.llm_verified_at = timezone.now()
         s.save()
         # Re-posting identical values (trailing slash aside) keeps verification.
-        self.admin_post("/admin/llm", {"base_url": "http://saved/v1/", "model": "m",
+        self.admin_post("/api/admin/llm", {"base_url": "http://saved/v1/", "model": "m",
                                        "api_key": "stored"}, reauth=True)
         s.refresh_from_db()
         self.assertIsNotNone(s.llm_verified_at)
         # Concurrency-only changes never invalidate.
-        self.admin_post("/admin/llm", {"concurrency": 6}, reauth=True)
+        self.admin_post("/api/admin/llm", {"concurrency": 6}, reauth=True)
         s.refresh_from_db()
         self.assertEqual(s.llm_concurrency, 6)
         self.assertIsNotNone(s.llm_verified_at)
         # A model change does.
-        self.admin_post("/admin/llm", {"model": "new"}, reauth=True)
+        self.admin_post("/api/admin/llm", {"model": "new"}, reauth=True)
         s.refresh_from_db()
         self.assertIsNone(s.llm_verified_at)
 
     def test_direct_model_save_never_carries_a_key_to_a_new_host(self):
-        self.admin_post("/admin/llm", {"base_url": "http://saved/v1", "api_key": "stored"},
+        self.admin_post("/api/admin/llm", {"base_url": "http://saved/v1", "api_key": "stored"},
                         reauth=True)
         s = ServerSettings.objects.get(pk=1)
         s.llm_base_url = "http://moved/v1"
@@ -599,7 +586,7 @@ class LlmModelPickerTests(AccountTestCase):
 
     def test_check_probes_the_typed_values_not_stale_saved_ones(self):
         saved = "http://saved/v1"
-        self.admin_post("/admin/llm", {"base_url": saved, "model": "old",
+        self.admin_post("/api/admin/llm", {"base_url": saved, "model": "old",
                                        "api_key": "stored"}, reauth=True)
         for body, expected in (
             ({}, (saved + "/chat/completions", "Bearer stored")),
@@ -608,12 +595,12 @@ class LlmModelPickerTests(AccountTestCase):
             ({"api_key": "typed"}, (saved + "/chat/completions", "Bearer typed")),
             ({"api_key": ""}, (saved + "/chat/completions", None)),
         ):
-            response = self.admin_post("/admin/llm/check", body)
+            response = self.admin_post("/api/admin/llm/check", body)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(self.requests[-1], expected)
 
     def test_check_with_no_config_reports_inline_without_a_request(self):
-        response = self.admin_post("/admin/llm/check", {}, reauth=True)
+        response = self.admin_post("/api/admin/llm/check", {}, reauth=True)
         self.assertEqual(response.status_code, 200)
         check = response.json()["check"]
         self.assertFalse(check["ok"])
@@ -621,18 +608,18 @@ class LlmModelPickerTests(AccountTestCase):
         self.assertEqual(self.requests, [])
 
     def test_no_endpoint_is_a_request_error_and_an_unreachable_one_is_a_gateway_error(self):
-        self.assertEqual(self.admin_post("/admin/llm/models", {}, reauth=True).status_code, 400)
+        self.assertEqual(self.admin_post("/api/admin/llm/models", {}, reauth=True).status_code, 400)
         with patch("urllib.request.urlopen", side_effect=URLError("connection refused")):
-            response = self.admin_post("/admin/llm/models", {"base_url": "http://dead/v1"})
+            response = self.admin_post("/api/admin/llm/models", {"base_url": "http://dead/v1"})
         self.assertEqual(response.status_code, 502)
 
     def test_listing_requires_admin_reauthentication_before_any_request(self):
         body = {"base_url": "http://endpoint/v1"}
-        self.assertEqual(self.admin_post("/admin/llm/models", body).status_code, 403)
+        self.assertEqual(self.admin_post("/api/admin/llm/models", body).status_code, 403)
         self.client.logout()
-        self.assertEqual(self.admin_post("/admin/llm/models", body).status_code, 401)
+        self.assertEqual(self.admin_post("/api/admin/llm/models", body).status_code, 401)
         self.client.force_login(make_user("member@clipshelf.test"))
-        self.assertEqual(self.admin_post("/admin/llm/models", body, reauth=True).status_code, 403)
+        self.assertEqual(self.admin_post("/api/admin/llm/models", body, reauth=True).status_code, 403)
         self.assertEqual(self.requests, [])
 
 
@@ -642,7 +629,7 @@ class InvitationUrlOriginTests(AccountTestCase):
 
     def _admin_post_invitation(self, **client_kwargs):
         return self.client.post(
-            "/admin/invitations",
+            "/api/admin/invitations",
             data=json.dumps(
                 {"email": "newbie@clipshelf.test", "reauth_password": PASSWORD}
             ),
@@ -667,6 +654,34 @@ class InvitationUrlOriginTests(AccountTestCase):
                 "http://testserver/invite/"
             )
         )
+
+
+@override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
+class ProductionAdminMountTests(TestCase):
+    def test_production_mount_serves_every_admin_route(self):
+        admin = make_user("mount-admin@clipshelf.test", is_app_admin=True)
+        names = [route.name for route in admin_views.admin_urlpatterns]
+        self.assertEqual(len(names), len(set(names)))
+        urls = []
+        for route in admin_views.admin_urlpatterns:
+            kwargs = {
+                kwarg: str(uuid4())
+                for kwarg in re.findall(r"<[^:>]+:(\w+)>", str(route.pattern))
+            }
+            url = reverse(f"clipshelf_accounts_admin:{route.name}", kwargs=kwargs)
+            self.assertTrue(url.startswith("/api/admin/"), url)
+            urls.append(url)
+        self.assertIn("/api/admin/screening", urls)
+        self.assertIn("/api/admin/screening/check", urls)
+        client = Client()
+        for url in urls:
+            response = client.get(url)
+            self.assertIn(response.status_code, (401, 405), url)
+            self.assertEqual(response["Cache-Control"], "no-store")
+        client.force_login(admin)
+        response = client.get("/api/admin/users")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(admin.email, json.dumps(response.json()))
 
 
 class JobPolicyTests(SimpleTestCase):

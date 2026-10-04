@@ -5,12 +5,11 @@ import uuid
 from types import SimpleNamespace
 from unittest import mock
 
-from django.test import SimpleTestCase, TestCase, override_settings
-from django.urls import path
+from django.test import SimpleTestCase, TestCase
 from django.utils import timezone
 from allauth.account.models import EmailAddress
 
-from clipshelf import admin_views, judgment, models, services, interpretation
+from clipshelf import judgment, models, services, interpretation
 from clipshelf.interpretation import GuardrailBlocked
 
 PASSWORD = "correct horse battery staple 42!"
@@ -249,13 +248,6 @@ class StoreFindingsKeyTests(ScreeningMixin, TestCase):
 
 # -------------------------------------------------------------- admin API
 
-urlpatterns = [
-    path("admin/screening", admin_views.screening),
-    path("admin/screening/check", admin_views.screening_check),
-]
-
-
-@override_settings(ROOT_URLCONF="test_screening")
 class ScreeningApiTests(TestCase):
     def setUp(self):
         self.admin = models.User.objects.create_user(
@@ -280,25 +272,25 @@ class ScreeningApiTests(TestCase):
 
     def test_post_saves_key_only_with_reauth(self):
         self.assertEqual(
-            self.admin_post("/admin/screening", {"api_key": "sekrit"}).status_code, 403)
+            self.admin_post("/api/admin/screening", {"api_key": "sekrit"}).status_code, 403)
         self.assertEqual(services.get_settings().typesafe_api_key, "")
-        response = self.admin_post("/admin/screening", {"api_key": "sekrit"}, reauth=True)
+        response = self.admin_post("/api/admin/screening", {"api_key": "sekrit"}, reauth=True)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(services.get_settings().typesafe_api_key, "sekrit")
 
     def test_post_clears_key_and_rejects_missing_api_key(self):
         self.set_row_key("sekrit")
-        response = self.admin_post("/admin/screening", {"api_key": ""}, reauth=True)
+        response = self.admin_post("/api/admin/screening", {"api_key": ""}, reauth=True)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(services.get_settings().typesafe_api_key, "")
-        response = self.admin_post("/admin/screening", {}, reauth=True)
+        response = self.admin_post("/api/admin/screening", {}, reauth=True)
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "api_key is required")
 
     def test_get_never_echoes_the_key(self):
         self.set_row_key("sekrit")
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": ""}):
-            response = self.client.get("/admin/screening")
+            response = self.client.get("/api/admin/screening")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("sekrit", response.content.decode())
         self.assertEqual(response.json(), {"screening": {"has_api_key": True,
@@ -308,16 +300,16 @@ class ScreeningApiTests(TestCase):
         """The admin field says where the key comes from; an env-keyed server
         must not read as unguarded."""
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "env-key"}):
-            response = self.client.get("/admin/screening")
+            response = self.client.get("/api/admin/screening")
         self.assertEqual(response.json(), {"screening": {"has_api_key": False,
                                                          "env_fallback": True}})
 
     def test_check_requires_reauth(self):
-        self.assertEqual(self.admin_post("/admin/screening/check", {}).status_code, 403)
+        self.assertEqual(self.admin_post("/api/admin/screening/check", {}).status_code, 403)
 
     def test_check_unavailable_without_any_key(self):
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": ""}):
-            response = self.admin_post("/admin/screening/check", {}, reauth=True)
+            response = self.admin_post("/api/admin/screening/check", {}, reauth=True)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(),
                          {"ok": False, "message": "screening unavailable: no API key set"})
@@ -327,7 +319,7 @@ class ScreeningApiTests(TestCase):
         with mock.patch.object(judgment, "available", return_value=True), \
                 mock.patch.object(judgment, "ask",
                                   return_value={"ai_tool": mock.Mock(noul=0.98)}) as ask:
-            response = self.admin_post("/admin/screening/check", {}, reauth=True)
+            response = self.admin_post("/api/admin/screening/check", {}, reauth=True)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True, "message": "screening ok (p=0.98)"})
         self.assertEqual(ask.call_args.kwargs["api_key"], "sekrit")
@@ -351,7 +343,7 @@ class ScreeningApiTests(TestCase):
                 mock.patch.object(judgment, "ask",
                                   side_effect=judgment.JudgmentError(
                                       "request failed with sekrit inside")):
-            response = self.admin_post("/admin/screening/check", {}, reauth=True)
+            response = self.admin_post("/api/admin/screening/check", {}, reauth=True)
         message = response.json()["message"]
         self.assertFalse(response.json()["ok"])
         self.assertNotIn("sekrit", message)
