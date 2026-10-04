@@ -26,6 +26,16 @@ function videoMirrors(item, multiSlide) {
   return [...new Set([...ranked, ...urls(item?.video?.playAddr), ...urls(item?.video?.downloadAddr)])];
 }
 
+function isTikTokUrl(value) {
+  try {
+    const { protocol, hostname } = new URL(value);
+    return (protocol === "http:" || protocol === "https:") &&
+      (hostname === "tiktok.com" || hostname.endsWith(".tiktok.com"));
+  } catch {
+    return false;
+  }
+}
+
 async function tiktokExtract(urls, onProgress) {
   const toB64 = async (blob) => {
     const buf = new Uint8Array(await blob.arrayBuffer());
@@ -34,16 +44,19 @@ async function tiktokExtract(urls, onProgress) {
       s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
     return btoa(s);
   };
-  const worker = window.open("about:blank", "cs_worker", "width=1000,height=800");
-  if (!worker) {
-    alert("Pop-up blocked — allow pop-ups for tiktok.com and click extract again.");
-    return [];
-  }
+  tiktokExtract.lastFile = null;
+  const needsWorker = urls.some(isTikTokUrl);
+  const worker = needsWorker
+    ? window.open("about:blank", "cs_worker", "width=1000,height=800")
+    : null;
+  if (needsWorker && !worker)
+    throw new Error("Pop-up blocked — allow pop-ups for tiktok.com and click extract again.");
+  if (worker) worker.opener = null;
   const out = [];
   let i = 0;
   for (const url of urls) {
     onProgress?.(++i, urls.length, url);
-    if (!/tiktok\.com/.test(url)) {
+    if (!isTikTokUrl(url)) {
       out.push({ url, passthrough: true }); // clipshelf ingests it directly
       continue;
     }
@@ -150,7 +163,7 @@ async function tiktokExtract(urls, onProgress) {
     }
     await new Promise((r) => setTimeout(r, 500)); // courtesy gap
   }
-  worker.close();
+  worker?.close();
   // browsers never expose the real save path; a timestamped name makes the
   // file findable and the clipshelf UI resolves bare names against Downloads
   const name = `tiktok-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-")}.json`;
@@ -191,21 +204,28 @@ if (typeof document !== "undefined") (() => {
     const urls =
       box.querySelector("#cs-urls").value.match(/https?:\/\/\S+/g) || [];
     if (!urls.length) return status("no links found");
-    box.querySelector("#cs-go").disabled = true;
-    const out = await tiktokExtract(urls, (i, n, u) =>
-      status(`${i}/${n} ${u.slice(0, 44)}`)
-    );
-    const ok = out.filter((o) => !o.error).length;
-    status(`done: ${ok} ok, ${out.length - ok} failed. saved by your browser as:`);
+    const go = box.querySelector("#cs-go");
     const f = box.querySelector("#cs-file");
-    box.querySelector("#cs-name").value = tiktokExtract.lastFile;
-    f.style.display = "flex";
-    box.querySelector("#cs-copy").onclick = async () => {
-      await navigator.clipboard.writeText(tiktokExtract.lastFile);
-      box.querySelector("#cs-copy").textContent = "copied";
-      setTimeout(() => (box.querySelector("#cs-copy").textContent = "copy"), 1200);
-    };
-    box.querySelector("#cs-go").disabled = false;
+    go.disabled = true;
+    f.style.display = "none";
+    try {
+      const out = await tiktokExtract(urls, (i, n, u) =>
+        status(`${i}/${n} ${u.slice(0, 44)}`)
+      );
+      const ok = out.filter((o) => !o.error).length;
+      status(`done: ${ok} ok, ${out.length - ok} failed. saved by your browser as:`);
+      box.querySelector("#cs-name").value = tiktokExtract.lastFile;
+      f.style.display = "flex";
+      box.querySelector("#cs-copy").onclick = async () => {
+        await navigator.clipboard.writeText(tiktokExtract.lastFile);
+        box.querySelector("#cs-copy").textContent = "copied";
+        setTimeout(() => (box.querySelector("#cs-copy").textContent = "copy"), 1200);
+      };
+    } catch (e) {
+      status(`error: ${String(e)}`);
+    } finally {
+      go.disabled = false;
+    }
   };
 })();
 
@@ -229,5 +249,88 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
   assert.deepStrictEqual(videoMirrors({ imagePost: {} }, false), []);
   assert.deepStrictEqual(videoMirrors(vid, true), []);
   assert.deepStrictEqual(videoMirrors(null, false), []);
-  console.log("tiktok-extract self-test ok");
+  assert.strictEqual(isTikTokUrl("https://tiktok.com/video/1"), true);
+  assert.strictEqual(isTikTokUrl("http://www.tiktok.com/video/1"), true);
+  assert.strictEqual(isTikTokUrl("https://vm.tiktok.com/a"), true);
+  assert.strictEqual(isTikTokUrl("https://evil.example/?next=tiktok.com"), false);
+  assert.strictEqual(isTikTokUrl("https://tiktok.com.evil.example/video/1"), false);
+  assert.strictEqual(isTikTokUrl("ftp://tiktok.com/video/1"), false);
+  (async () => {
+    const previousWindow = global.window;
+    let popupCalls = 0;
+    global.window = { open: () => { popupCalls++; return null; } };
+    try {
+      await assert.rejects(
+        tiktokExtract(["https://www.tiktok.com/@test/video/1"]),
+        /Pop-up blocked/
+      );
+      assert.strictEqual(popupCalls, 1);
+      assert.strictEqual(tiktokExtract.lastFile, null);
+    } finally {
+      if (previousWindow === undefined) delete global.window;
+      else global.window = previousWindow;
+    }
+    const previousDocument = global.document;
+    const previousTimeout = global.setTimeout;
+    const previousCreateObjectURL = URL.createObjectURL;
+    let openerWasCleared = false;
+    let locationHref = "about:blank";
+    const worker = {
+      opener: {},
+      location: {
+        set href(value) {
+          openerWasCleared = worker.opener === null;
+          locationHref = value;
+        },
+        get href() {
+          return locationHref;
+        },
+      },
+      document: {
+        querySelector: (selector) =>
+          selector === "#__UNIVERSAL_DATA_FOR_REHYDRATION__"
+            ? {
+                textContent: JSON.stringify({
+                  __DEFAULT_SCOPE__: {
+                    "webapp.video-detail": { itemInfo: { itemStruct: {} } },
+                  },
+                }),
+              }
+            : null,
+        querySelectorAll: () => [],
+      },
+      close() {},
+    };
+    global.window = { open: () => { popupCalls++; return worker; } };
+    global.document = {
+      createElement: () => ({ click() {} }),
+    };
+    global.setTimeout = (callback) => {
+      callback();
+      return 0;
+    };
+    URL.createObjectURL = () => "blob:self-test";
+    try {
+      const passthroughUrl = "https://evil.example/?next=tiktok.com";
+      assert.deepStrictEqual(await tiktokExtract([passthroughUrl]), [
+        { url: passthroughUrl, passthrough: true },
+      ]);
+      assert.strictEqual(popupCalls, 1);
+      await tiktokExtract(["https://www.tiktok.com/@test/video/1"]);
+      assert.strictEqual(popupCalls, 2);
+      assert.strictEqual(openerWasCleared, true);
+    } finally {
+      if (previousWindow === undefined) delete global.window;
+      else global.window = previousWindow;
+      if (previousDocument === undefined) delete global.document;
+      else global.document = previousDocument;
+      global.setTimeout = previousTimeout;
+      if (previousCreateObjectURL === undefined) delete URL.createObjectURL;
+      else URL.createObjectURL = previousCreateObjectURL;
+    }
+    console.log("tiktok-extract self-test ok");
+  })().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

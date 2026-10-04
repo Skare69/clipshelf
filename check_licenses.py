@@ -126,10 +126,22 @@ def check_image() -> None:
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     img = INV["image"]
 
-    base = re.search(r"^FROM\s+(\S+)", text, re.M)
-    if not base or base.group(1) != img["base"]:
-        fail(f"image: base image is {base.group(1) if base else 'missing'}, "
-             f"inventory pins {img['base']}")
+    stage_aliases = set()
+    bases = []
+    for match in re.finditer(
+            r"^[ \t]*FROM[ \t]+(?:(?:--\S+)[ \t]+)*(\S+)(?:[ \t]+AS[ \t]+(\S+))?",
+            text, re.M | re.I):
+        image, alias = match.groups()
+        if image.casefold() not in stage_aliases:
+            bases.append(image)
+        if alias:
+            stage_aliases.add(alias.casefold())
+
+    if not bases:
+        fail(f"image: base image is missing, inventory pins {img['base']}")
+    for base in bases:
+        if base != img["base"]:
+            fail(f"image: base image is {base}, inventory pins {img['base']}")
 
     stages = [sorted(m.group(1).split())
               for m in re.finditer(r"apt-get install -y --no-install-recommends ([^\\]+)", text)]
