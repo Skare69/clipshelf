@@ -104,12 +104,7 @@ public final class Creds {
                 .apply();
     }
 
-    /** Hostname/origin change under the same instance: routing only, identity untouched.
-     *  Queued outbox rows keep delivering through the updated endpoint after its
-     *  identity check (review A10 decision: identity binds rows, not the hostname). */
-    public static void updateEndpoint(Context ctx, String endpoint) {
-        prefs(ctx).edit().putString(K_ENDPOINT, endpoint).apply();
-    }
+    /** Hostname/origin changes adopt a fresh session via Api.adoptCandidate. */
 
     public static void updateDefaultCollection(Context ctx, String id, String name) {
         prefs(ctx).edit().putString(K_DEFAULT_COL, id).putString(K_DEFAULT_COL_NAME, name).apply();

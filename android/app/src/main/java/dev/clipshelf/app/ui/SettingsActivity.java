@@ -3,6 +3,7 @@ package dev.clipshelf.app.ui;
 import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -28,12 +29,13 @@ import dev.clipshelf.app.outbox.OutboxPolicy;
 /**
  * Profile settings. Endpoint changes are verified in two phases first: an
  * unauthenticated GET /api/instance must prove the candidate serves this
- * instance, then GET /api/me confirms the account — a different instance or
- * account is refused, because queued shares must never be moved to another
- * server or identity, and the session token never reaches an unverified
- * origin. Same-instance hostname changes are routing-only and leave the
- * outbox identity untouched. Also discloses the Android background-delivery
- * limits.
+ * instance, then the user signs in fresh AT the candidate — the session
+ * token never crosses to it, because the instance id is public and an
+ * impostor host can copy it (review A2). A different instance or account is
+ * refused, because queued shares must never be moved to another server or
+ * identity. Same-instance hostname changes are routing-only and leave the
+ * outbox identity untouched; the session left on the old origin is revoked.
+ * Also discloses the Android background-delivery limits.
  */
 public class SettingsActivity extends Activity {
 
@@ -131,46 +133,85 @@ public class SettingsActivity extends Activity {
                 Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
                 return;
             }
-            update.setEnabled(false);
-            // Two-phase verification (finding A2 containment): the candidate must
-            // first prove, without any credential, that it serves this instance;
-            // only then does the session token cross to it for the account check.
-            Async.go(() -> Api.instanceId(candidate), (candidateInstanceId, probeError) -> {
-                if (probeError != null) {
-                    update.setEnabled(true);
-                    Toast.makeText(this, Ui.message(this, probeError), Toast.LENGTH_LONG).show();
-                    return;
-                }
-                if (!profile.instanceId.equals(candidateInstanceId)) {
-                    update.setEnabled(true);
-                    // Different server: refuse, outbox identity must not move.
-                    new AlertDialog.Builder(this)
-                            .setTitle(R.string.error_title)
-                            .setMessage(R.string.endpoint_mismatch_rejected)
-                            .setPositiveButton(R.string.ok, null)
-                            .show();
-                    return;
-                }
-                Async.go(() -> Api.me(candidate, session.token), (me, verifyError) -> {
-                    update.setEnabled(true);
-                    if (verifyError != null) {
-                        Toast.makeText(this, Ui.message(this, verifyError), Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    if (OutboxPolicy.identityMatches(me.instanceId, me.userId,
-                            profile.instanceId, profile.userId)) {
-                        Creds.updateEndpoint(this, candidate);
-                        Toast.makeText(this, R.string.endpoint_same_instance_ok, Toast.LENGTH_LONG).show();
-                    } else {
-                        // Different account on the same instance: refuse.
-                        new AlertDialog.Builder(this)
-                                .setTitle(R.string.error_title)
-                                .setMessage(R.string.endpoint_mismatch_rejected)
-                                .setPositiveButton(R.string.ok, null)
-                                .show();
-                    }
-                });
-            });
+            final String oldEndpoint = session.profile.endpoint;
+            final String oldEmail = profile.email;
+            final String oldToken = session.token;
+            // The candidate is proven by a fresh sign-in there: the enrolled
+            // session token never crosses to it (an impostor can copy the
+            // public instance id, but not mint a session from a stolen one).
+            final EditText password = new EditText(this);
+            password.setInputType(InputType.TYPE_CLASS_TEXT
+                    | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+            new AlertDialog.Builder(this)
+                    .setTitle(R.string.endpoint_reauth_title)
+                    .setMessage(getString(R.string.endpoint_reauth_message, candidate,
+                            profile.email))
+                    .setView(password)
+                    .setPositiveButton(R.string.sign_in, (d, w) -> {
+                        final String pass = password.getText().toString();
+                        update.setEnabled(false);
+                        Async.go(() -> Api.adoptCandidate(candidate, profile.instanceId,
+                                profile.email, pass), (adopted, verifyError) -> {
+                            update.setEnabled(true);
+                            if (verifyError != null) {
+                                if (verifyError instanceof Api.ApiException
+                                        && ((Api.ApiException) verifyError).code == 403) {
+                                    // Different server: refuse, outbox identity must not move.
+                                    new AlertDialog.Builder(this)
+                                            .setTitle(R.string.error_title)
+                                            .setMessage(R.string.endpoint_mismatch_rejected)
+                                            .setPositiveButton(R.string.ok, null)
+                                            .show();
+                                } else {
+                                    Toast.makeText(this, Ui.message(this, verifyError), Toast.LENGTH_LONG).show();
+                                }
+                                return;
+                            }
+                            if (!OutboxPolicy.identityMatches(adopted.me.instanceId, adopted.me.userId,
+                                    profile.instanceId, profile.userId)) {
+                                // Different account on the same instance: refuse.
+                                new AlertDialog.Builder(this)
+                                        .setTitle(R.string.error_title)
+                                        .setMessage(R.string.endpoint_mismatch_rejected)
+                                        .setPositiveButton(R.string.ok, null)
+                                        .show();
+                                return;
+                            }
+                            // Persist the adopted session and rebuild the in-memory session
+                            // and profile so later calls (default destination, sign-out)
+                            // target the adopted origin and token, not a stale pair.
+                            String collectionName = "";
+                            if (adopted.me.defaultCollectionId != null) {
+                                for (Api.Collection c : adopted.me.collections) {
+                                    if (adopted.me.defaultCollectionId.equals(c.id)) {
+                                        collectionName = c.name;
+                                        break;
+                                    }
+                                }
+                            }
+                            Creds.save(this, new Creds.Profile(adopted.endpoint, adopted.me.instanceId,
+                                    adopted.me.userId, adopted.me.email, adopted.me.defaultCollectionId,
+                                    collectionName), adopted.token);
+                            session = Creds.session(this);
+                            profile = Creds.profile(this);
+                            if (session == null || profile == null) {
+                                Ui.sessionExpired(this);
+                                finish();
+                                return;
+                            }
+                            endpoint.setText(adopted.endpoint);
+                            // Best effort: revoke the session left behind on the old origin.
+                            Async.go(() -> PendingLogout.signOut(this, oldEndpoint, oldEmail, oldToken),
+                                    (notice, e) -> {
+                                        if (notice != null) {
+                                            Toast.makeText(this, notice, Toast.LENGTH_LONG).show();
+                                        }
+                                    });
+                            Toast.makeText(this, R.string.endpoint_same_instance_ok, Toast.LENGTH_LONG).show();
+                        });
+                    })
+                    .setNegativeButton(R.string.cancel, null)
+                    .show();
         });
 
         // Sign out

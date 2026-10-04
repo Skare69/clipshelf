@@ -137,6 +137,8 @@
     <string name="endpoint_section">Server address</string>
     <string name="endpoint_hint">New server address (https://…)</string>
     <string name="endpoint_update">Update address</string>
+    <string name="endpoint_reauth_title">Sign in to the new address</string>
+    <string name="endpoint_reauth_message">To move your session to %1$s, sign in there again as %2$s. Your current session token is never sent to the new address.</string>
     <string name="endpoint_same_instance_ok">Address updated. Your queued shares stay bound to this server and account.</string>
     <string name="endpoint_mismatch_rejected">That server or account is different. Queued shares will not be moved to it. Sign out and sign in to switch servers or accounts.</string>
     <string name="limits_section">Background delivery limits</string>

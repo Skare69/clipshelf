@@ -133,4 +133,8 @@ dependencies {
     implementation "androidx.work:work-runtime:2.9.1"
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.robolectric:robolectric:4.14.1"
+    // Real org.json for the JVM: android.jar ships a stub that throws
+    // "not mocked" under local unit tests. Test classpath only — never
+    // packaged into the APK, so the release license gate is unaffected.
+    testImplementation "org.json:json:20240303"
 }

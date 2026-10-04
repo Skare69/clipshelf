@@ -257,6 +257,36 @@ public final class Api {
         return requestJson(endpoint + "/api/instance", "GET", null, null).optString("instance_id", "");
     }
 
+    /** Result of adopting a candidate endpoint for the enrolled instance. */
+    public static final class Adopted {
+        public final String endpoint, token;
+        public final Me me;
+
+        Adopted(String endpoint, String token, Me me) {
+            this.endpoint = endpoint;
+            this.token = token;
+            this.me = me;
+        }
+    }
+
+    /**
+     * Proves a candidate endpoint serves the enrolled instance, then adopts
+     * it with a fresh login AT the candidate. The instance id is public
+     * (unauthenticated /api/instance), so an impostor host can copy it: the
+     * enrolled session token therefore never crosses to the candidate — the
+     * account is proven by re-entering the password there instead. Mismatch
+     * throws ApiException(403) before any credential leaves the phone.
+     */
+    public static Adopted adoptCandidate(String candidate, String expectedInstanceId,
+                                         String email, String password) throws IOException {
+        String instanceId = instanceId(candidate);
+        if (!expectedInstanceId.equals(instanceId)) {
+            throw new ApiException(403, "candidate serves a different instance");
+        }
+        String token = login(candidate, email, password);
+        return new Adopted(candidate, token, me(candidate, token));
+    }
+
     public static List<Collection> collections(String endpoint, String token) throws IOException {
         JSONArray a = requestJson(endpoint + "/api/collections", "GET", token, null).optJSONArray("collections");
         List<Collection> out = new ArrayList<>();

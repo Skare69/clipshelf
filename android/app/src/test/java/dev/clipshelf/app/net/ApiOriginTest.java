@@ -36,7 +36,10 @@ import static org.junit.Assert.fail;
  * sentinel session token: an authenticated cross-origin redirect is rejected
  * and the foreign origin is never contacted, while an external asset URL is
  * fetched without the token. Same-origin redirect chains keep working and
- * keep the token. The keystore is a throwaway self-signed test certificate
+ * keep the token. Endpoint-change adoption is proven the same way: a
+ * candidate that copies the public instance id only ever captures
+ * credentials it issued itself. The keystore is a throwaway self-signed test
+ * certificate
  * (SAN 127.0.0.1/localhost) protecting nothing. The origins are tiny
  * SSLServerSocket loops so the test compiles against android.jar and runs on
  * the JVM's real TLS stack.
@@ -44,13 +47,18 @@ import static org.junit.Assert.fail;
 public class ApiOriginTest {
 
     private static final String SENTINEL = "sentinel-token";
+    private static final String INSTANCE_ID = "11111111-2222-3333-4444-555555555555";
+    private static final String USER_ID = "42";
+    private static final String EMAIL = "user@example.com";
+    private static final String PASSWORD = "correct horse battery staple";
 
+    private static SSLContext ssl;
     private static TlsOrigin originA;
     private static TlsOrigin originB;
 
     @BeforeClass
     public static void startOrigins() throws Exception {
-        SSLContext ssl = sslContext();
+        ssl = sslContext();
         originA = new TlsOrigin(ssl);
         originB = new TlsOrigin(ssl);
         String urlA = originA.url;
@@ -65,6 +73,14 @@ public class ApiOriginTest {
         // Origin B: a foreign origin that must never see the token.
         originB.body("/steal", "stolen");
         originB.body("/asset", "external-asset");
+
+        // Origin B as an endpoint-change candidate: it copies the public
+        // instance id of the enrolled instance and answers a login and /api/me
+        // plausibly. Endpoint-change tests drive the adoption flow against it.
+        originB.body("/api/instance", "{\"instance_id\": \"" + INSTANCE_ID + "\"}");
+        originB.body("/_allauth/app/v1/auth/login",
+                "{\"meta\": {\"session_token\": \"fresh-token\"}}");
+        originB.body("/api/me", meBody());
     }
 
     @AfterClass
@@ -154,6 +170,64 @@ public class ApiOriginTest {
         assertEquals(SENTINEL, originA.hits().get(0)[1]);
         assertEquals(SENTINEL, originA.hits().get(1)[1]);
         assertTrue(originB.hits().isEmpty());
+    }
+
+    @Test
+    public void impostorCopyingInstanceIdNeverReceivesSessionToken() throws Exception {
+        // An impostor on a different origin copies the public instance id and
+        // answers login and /api/me plausibly. Adoption may only authenticate
+        // by what the candidate itself issues: every credential the impostor
+        // captures must be the token it minted, never an enrolled one.
+        Api.Adopted adopted = Api.adoptCandidate(originB.url, INSTANCE_ID, EMAIL, PASSWORD);
+        assertEquals("fresh-token", adopted.token);
+        for (String[] hit : originB.hits()) {
+            assertTrue("unexpected credential captured via " + hit[0],
+                    hit[1] == null || "fresh-token".equals(hit[1]));
+        }
+        assertTrue(originA.hits().isEmpty());
+    }
+
+    @Test
+    public void endpointChangeSwapsToFreshCandidateSession() throws Exception {
+        // Honest new host for the same instance. The caller persists and
+        // reloads the in-memory session from the adopted result, so the
+        // adopted pair must be the candidate's address plus the token the
+        // candidate issued — never the enrolled session (the old flow kept a
+        // stale in-memory endpoint and reused the old token).
+        Api.Adopted adopted = Api.adoptCandidate(originB.url, INSTANCE_ID, EMAIL, PASSWORD);
+        assertEquals(originB.url, adopted.endpoint);
+        assertEquals("fresh-token", adopted.token);
+        assertEquals(INSTANCE_ID, adopted.me.instanceId);
+        assertEquals(USER_ID, adopted.me.userId);
+        assertEquals(EMAIL, adopted.me.email);
+        for (String[] hit : originB.hits()) {
+            assertTrue(hit[1] == null || "fresh-token".equals(hit[1]));
+        }
+        assertTrue(originA.hits().isEmpty());
+    }
+
+    @Test
+    public void candidateForDifferentInstanceIsRefusedBeforeCredentials() throws Exception {
+        TlsOrigin impostor = new TlsOrigin(ssl);
+        try {
+            impostor.body("/api/instance", "{\"instance_id\": \"other-instance\"}");
+            Api.adoptCandidate(impostor.url, INSTANCE_ID, EMAIL, PASSWORD);
+            fail("a candidate serving a different instance must be refused");
+        } catch (IOException e) {
+            assertTrue(e.getMessage(), e.getMessage().contains("different instance"));
+        } finally {
+            impostor.close();
+        }
+        // Only the unauthenticated probe left the phone: no login attempt, no token.
+        assertEquals(1, impostor.hits().size());
+        assertNull(impostor.hits().get(0)[1]);
+    }
+
+    /** /api/me payload for the enrolled identity, as the server shapes it. */
+    private static String meBody() {
+        return "{\"instance_id\": \"" + INSTANCE_ID + "\", \"user\": {\"id\": \"" + USER_ID
+                + "\", \"email\": \"" + EMAIL + "\"}, \"default_collection_id\": null,"
+                + " \"collections\": []}";
     }
 
     // ---- harness ----
@@ -259,6 +333,18 @@ public class ApiOriginTest {
                 }
             }
             out.flush();
+            // Drain whatever the client sent after the head (a POST body).
+            // Closing with unread bytes queued would RST the connection and
+            // can kill the client's response read.
+            try {
+                sock.setSoTimeout(250);
+                InputStream rest = sock.getInputStream();
+                while (rest.read() != -1) {
+                    // discard
+                }
+            } catch (IOException ignored) {
+                // client is gone or slow; the response is already out
+            }
         }
 
         private static String readHead(InputStream in) throws IOException {
