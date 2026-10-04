@@ -385,43 +385,66 @@ def store_source(job, source):
     caller_job.refresh_from_db()
 
 
-def store_findings(job, findings):
+def screening_material(source):
+    """Bounded public material shown to the findings screener."""
+    source = source or {}
+    return {"title": str(source.get("title") or "")[:500],
+            "description": str(source.get("desc") or "")[:4000],
+            "text": str(source.get("text") or "")[:12000]}
+
+
+def screening_gate(material, findings):
+    """TypeSafe findings screening. Returns (findings, withheld): withheld is
+    the guardrail reason or None. Fail-open: a transport error appends a
+    visible warning instead of blocking. This makes a network call (up to
+    judgment.TIMEOUT): run it OUTSIDE any transaction so the SQLite write
+    lock is never held across the request."""
+    key = screening_key()
+    if not judgment.available(key):
+        return findings, None
+    entries = list(dict.fromkeys(
+        [e["url"] for e in findings.get("repos") or []]
+        + [e["url"] for e in findings.get("links") or []]))
+    entries = [u for u in entries if u.startswith(("http://", "https://"))][:judgment.ENTRIES_MAX]
+    try:
+        screen = judgment.screen_findings(
+            {"material": material, "findings": findings, "entries": entries},
+            api_key=key)
+    except judgment.JudgmentError as exc:
+        findings.setdefault("warnings", []).append(f"screening unavailable: {exc}"[:500])
+        return findings, None
+    if screen:
+        if screen["danger"] >= judgment.WITHHOLD_DANGER:
+            return findings, (
+                "findings withheld: screening flagged dangerous installs or links")
+        dropped = [u for u, p in screen["related"].items() if p < judgment.DROP_RELATED]
+        if dropped:
+            gone = set(dropped)
+            findings["repos"] = [e for e in findings.get("repos") or []
+                                 if e["url"] not in gone]
+            findings["links"] = [e for e in findings.get("links") or []
+                                 if e["url"] not in gone]
+            findings.setdefault("warnings", []).append(
+                f"screening dropped {len(dropped)} unrelated entr"
+                f"{'y' if len(dropped) == 1 else 'ies'}")
+    return findings, None
+
+
+def store_findings(job, findings, screen=True):
     """Atomically publish validated findings and job completion. Called only
     on successful interpretation; a failing reprocess never touches the last
-    good findings (the worker marks blocked/error itself)."""
+    good findings (the worker marks blocked/error itself). Callers that
+    pre-screened outside their own transaction (import) pass screen=False."""
     validated = _validate_findings(job, findings)
     caller_job = job  # the locked row below is a separate instance
 
-    # Optional TypeSafe screening gate: fail-open, runs before the atomic
-    # block so a withhold never leaves partial writes.
-    key = screening_key()
-    if judgment.available(key):
-        source = job.source or {}
-        material = {"title": str(source.get("title") or "")[:500],
-                    "description": str(source.get("desc") or "")[:4000],
-                    "text": str(source.get("text") or "")[:12000]}
-        entries = list(dict.fromkeys(
-            [e["url"] for e in validated["repos"]] + [e["url"] for e in validated["links"]]))
-        entries = [u for u in entries if u.startswith(("http://", "https://"))][:judgment.ENTRIES_MAX]
-        try:
-            screen = judgment.screen_findings(
-                {"material": material, "findings": validated, "entries": entries},
-                api_key=key)
-        except judgment.JudgmentError as exc:
-            screen = None
-            validated["warnings"].append(f"screening unavailable: {exc}"[:500])
-        if screen:
-            if screen["danger"] >= judgment.WITHHOLD_DANGER:
-                raise GuardrailBlocked(
-                    "findings withheld: screening flagged dangerous installs or links")
-            dropped = [u for u, p in screen["related"].items() if p < judgment.DROP_RELATED]
-            if dropped:
-                gone = set(dropped)
-                validated["repos"] = [e for e in validated["repos"] if e["url"] not in gone]
-                validated["links"] = [e for e in validated["links"] if e["url"] not in gone]
-                validated["warnings"].append(
-                    f"screening dropped {len(dropped)} unrelated entr"
-                    f"{'y' if len(dropped) == 1 else 'ies'}")
+    # Optional TypeSafe screening gate: fail-open, before the atomic block so
+    # a withhold never leaves partial writes and the request never holds the
+    # SQLite write lock.
+    if screen:
+        validated, withheld = screening_gate(screening_material(job.source), validated)
+        if withheld:
+            raise GuardrailBlocked(withheld)
 
     with transaction.atomic():
         job = Job.objects.select_for_update().get(pk=job.pk)

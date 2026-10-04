@@ -861,6 +861,21 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
     for plan in plans:
         plan["published"] = asset_files.publish(plan["source"], staging, move=False)
 
+    # Screen legacy findings OUTSIDE the transaction below: the judgment call
+    # can run for 60s and must never hold the SQLite write lock. A flagged
+    # item becomes one blocked (guardrail) job; the rest of the import
+    # proceeds and the flagged findings are never stored.
+    for plan in plans:
+        if not (plan["findings"] and plan["published"]):
+            continue  # no job will store these findings
+        plan["findings"], withheld = services.screening_gate(
+            services.screening_material(plan["source"]), plan["findings"])
+        if withheld:
+            plan["findings"] = None
+            plan["state"] = "blocked"
+            plan["interpretation"] = "blocked"
+            plan["error"] = withheld
+
     crid = client_request_id or str(uuid.uuid5(
         uuid.NAMESPACE_URL, f"clipshelf-import:{user.id}:{digest}"))
     manifest = _manifest([p["item"] for p in plans],
@@ -903,7 +918,14 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
                     services.store_source(job, plan["source"])
                     counts["assets"] += len(plan["published"])
                 if plan["findings"]:
-                    services.store_findings(job, plan["findings"])
+                    # Screening already ran outside this transaction.
+                    services.store_findings(job, plan["findings"], screen=False)
+                if plan.get("error"):
+                    # store_source clears errors on persist; the screening
+                    # withhold is the job's terminal message.
+                    job.mark_blocked(
+                        error=plan["error"],
+                        interpretation=models.Job.InterpretationStatus.BLOCKED)
                 counts["jobs"] += 1
             data = _legacy_contribution_data(plan["item"])
             models.Contribution.objects.get_or_create(

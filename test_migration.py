@@ -17,10 +17,11 @@ from unittest import mock
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import connection
 from django.test import TestCase, TransactionTestCase, override_settings
 from PIL import Image
 
-from clipshelf import models, publication, services, worker
+from clipshelf import judgment, models, publication, services, worker
 from clipshelf.management.commands.backup import Command as BackupCommand
 
 CACHE_BYTES = b"<html>cached page</html>"
@@ -548,3 +549,69 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
             self.assertEqual(str(uuid.UUID(str(restored_id))), instance_id,
                              "identity lost in restore")
             self.assertTrue((fresh / asset_rel).is_file(), "asset not restored")
+
+
+def _interpreted_item(url):
+    return {"url": url, "title": url, "desc": "legacy findings",
+            "interpreted": "2024-02-01", "cat": "ml", "install": "pip install x",
+            "cache": CACHE_NAME}
+
+
+CLEAN_SCREEN = {"danger": 0.1, "related": {}}
+WITHHELD_SCREEN = {"danger": 2.5, "related": {}}
+
+
+class ImportScreeningTests(MigrationMixin, TransactionTestCase):
+    """Import screening pre-flight: the judgment call runs outside the import
+    transaction (the SQLite write lock is never held across it) and a flagged
+    legacy item blocks only its own job, not the whole import."""
+
+    def screened_import(self, items, screens):
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.import_export",
+                           side_effect=fake_import_export), \
+                mock.patch.object(judgment, "available", return_value=True), \
+                mock.patch.object(judgment, "screen_findings", side_effect=screens):
+            return worker.import_items(user=self.user, collection_id=None,
+                                       items=items, prompts=[],
+                                       cache_dir=str(self.cache_dir))
+
+    def test_screening_runs_outside_import_transaction(self):
+        probes = []
+
+        def probe(state, api_key=None):
+            probes.append(connection.in_atomic_block)
+            return dict(CLEAN_SCREEN)
+
+        self.screened_import([_interpreted_item("https://github.com/a/b")], probe)
+        job = models.Job.objects.get(url="https://github.com/a/b")
+        self.assertEqual(job.state, "done")
+        self.assertEqual(probes, [False],
+                         "screening ran inside the import transaction: the "
+                         "SQLite write lock was held across the network call")
+
+    def test_flagged_item_blocks_only_its_job(self):
+        result = self.screened_import(
+            [_interpreted_item("https://github.com/a/b"),
+             _interpreted_item("https://flagged.example/x")],
+            [dict(CLEAN_SCREEN), dict(WITHHELD_SCREEN)])
+        self.assertTrue(result["created"])
+        self.assertEqual(result["counts"]["jobs"], 2)
+
+        clean = models.Job.objects.get(url="https://github.com/a/b")
+        self.assertEqual(clean.state, "done")
+        self.assertEqual(clean.interpretation, "complete")
+        self.assertFalse(clean.guardrail)
+        self.assertEqual(clean.findings["categories"], ["ml"])
+
+        flagged = models.Job.objects.get(url="https://flagged.example/x")
+        self.assertEqual(flagged.state, "blocked")
+        self.assertEqual(flagged.interpretation, "blocked")
+        self.assertTrue(flagged.error.startswith("findings withheld:"))
+        self.assertTrue(flagged.guardrail)
+        self.assertEqual(flagged.findings, {}, "flagged findings must not be stored")
+        self.assertTrue(models.Contribution.objects.filter(
+            entry__key="https://flagged.example/x", user=self.user).exists(),
+            "flagged item must not be dropped from the import")
+        # The whole import committed: the flagged job did not roll it back.
+        self.assertTrue(models.ImportRecord.objects.filter(user=self.user).exists())
