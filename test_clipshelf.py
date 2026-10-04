@@ -1,11 +1,122 @@
-"""Self-check: python test_clipshelf.py — pure URL/tag/parser helpers only."""
+"""Self-check: python test_clipshelf.py — pure helpers and CLI lock behavior."""
+import unittest
 import clipshelf.lib as cs
+
+
+def _automatic_migration_waits_for_exclusive_lock():
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+    import time
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent
+    with tempfile.TemporaryDirectory(prefix="clipshelf-lock-test-") as data_dir:
+        data = Path(data_dir)
+        ready, release = data / "ready", data / "release"
+        requested, migrated = data / "requested", data / "migrated"
+        env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("CLIPSHELF_", "DJANGO_SETTINGS_MODULE"))
+        }
+        env.update({
+            "DJANGO_SETTINGS_MODULE": "clipshelf.project.settings",
+            "CLIPSHELF_DATA_DIR": str(data),
+            "CLIPSHELF_DEBUG": "1",
+            "CLIPSHELF_TEST_LOCK_READY": str(ready),
+            "CLIPSHELF_TEST_LOCK_RELEASE": str(release),
+            "CLIPSHELF_TEST_LOCK_REQUESTED": str(requested),
+            "CLIPSHELF_TEST_MIGRATED": str(migrated),
+        })
+
+        holder_code = textwrap.dedent("""\
+            import os
+            import time
+            import django
+            from pathlib import Path
+
+            django.setup()
+            from clipshelf.management.locks import data_lock
+            with data_lock(exclusive=True):
+                Path(os.environ["CLIPSHELF_TEST_LOCK_READY"]).touch()
+                while not Path(os.environ["CLIPSHELF_TEST_LOCK_RELEASE"]).exists():
+                    time.sleep(0.01)
+        """)
+        migration_code = textwrap.dedent("""\
+            import os
+            from contextlib import contextmanager
+            from pathlib import Path
+            import django
+
+            django.setup()
+            from django.core import management
+            from clipshelf import cli
+            from clipshelf.management import locks
+
+            real_data_lock = locks.data_lock
+            @contextmanager
+            def tracked_data_lock(**kwargs):
+                Path(os.environ["CLIPSHELF_TEST_LOCK_REQUESTED"]).touch()
+                with real_data_lock(**kwargs):
+                    yield
+
+            def record_migration(*args, **kwargs):
+                Path(os.environ["CLIPSHELF_TEST_MIGRATED"]).touch()
+
+            locks.data_lock = tracked_data_lock
+            management.call_command = record_migration
+            management.execute_from_command_line = lambda *args, **kwargs: None
+            cli.main(["worker", "--once"])
+        """)
+
+        def wait_for(path, process):
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                if path.exists():
+                    return
+                if process.poll() is not None:
+                    stdout, stderr = process.communicate()
+                    raise AssertionError(
+                        f"process exited before {path.name}: {stdout}\n{stderr}"
+                    )
+                time.sleep(0.01)
+            raise AssertionError(f"timed out waiting for {path.name}")
+
+        holder = subprocess.Popen(
+            [sys.executable, "-c", holder_code], cwd=root, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        migration = None
+        try:
+            wait_for(ready, holder)
+            migration = subprocess.Popen(
+                [sys.executable, "-c", migration_code], cwd=root, env=env,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            wait_for(requested, migration)
+            assert not migrated.exists(), "migration ran under the exclusive data lock"
+            release.touch()
+            stdout, stderr = migration.communicate(timeout=15)
+            assert migration.returncode == 0, f"{stdout}\n{stderr}"
+            assert migrated.exists(), "automatic migration did not run after lock release"
+            stdout, stderr = holder.communicate(timeout=15)
+            assert holder.returncode == 0, f"{stdout}\n{stderr}"
+        finally:
+            release.touch()
+            if migration is not None and migration.poll() is None:
+                migration.communicate(timeout=15)
+            if holder.poll() is None:
+                holder.communicate(timeout=15)
 
 
 def test():
     # norm: canonicalize + dedup
     assert cs.norm("https://GitHub.com/a/b/?utm_source=x#frag") == cs.norm("https://github.com/a/b")
     assert cs.norm("https://github.com/Foo/Bar") == cs.norm("https://github.com/foo/bar")
+    assert cs.norm("https://github.com/Foo/Bar/blob/Main/SomeFile.py") == \
+        "https://github.com/foo/bar/blob/Main/SomeFile.py"
     assert cs.norm("https://Example.com/CaseMatters") != cs.norm("https://example.com/casematters")
     assert cs.repo_url("Foo/Bar") == "https://github.com/foo/bar"
     assert cs.repo_url("github.com/Foo/Bar") == "https://github.com/foo/bar"
@@ -68,7 +179,12 @@ def test():
     p.close()
     assert len(p.text) <= cs.TEXT_LIMIT
 
+    _automatic_migration_waits_for_exclusive_lock()
     print("ok")
+
+
+def load_tests(loader, tests, pattern):
+    return unittest.TestSuite([unittest.FunctionTestCase(test)])
 
 
 if __name__ == "__main__":

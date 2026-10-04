@@ -6,8 +6,8 @@ targeted modules, then runs the repo's own offline test suite once per mutant
 inside a copied workspace with a per-mutant throwaway data dir. Mutant runs
 execute nothing but the repo's tests: no network, no other commands. The real
 checkout is never modified — all writes land in a copy under
-TEMP/clipshelf-mutation/, and nothing the harness creates is ever deleted
-(operator policy: leftover run dirs are expected, not leaks).
+the system temp directory's clipshelf-mutation folder. Nothing the harness creates
+is ever deleted (operator policy: leftover run dirs are expected, not leaks).
 
 Usage:
   python mutate.py                          # default scope: DEFAULT_TARGETS
@@ -23,12 +23,13 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from copy import deepcopy
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent
-TEMP_ROOT = Path(os.environ.get("TEMP", REPO)) / "clipshelf-mutation"
+TEMP_ROOT = Path(tempfile.gettempdir()) / "clipshelf-mutation"
 
 # Scope policy: pure-logic domain modules first. Request handlers and command
 # modules join the scope per change via --diff; wiring (settings, urls,
@@ -119,9 +120,14 @@ def run_suite(ws, env, cmd, timeout):
     try:
         proc = subprocess.run(cmd, cwd=ws, env=env, capture_output=True,
                               text=True, errors="replace", timeout=timeout)
-        return proc.returncode, proc.stdout[-4000:]
-    except subprocess.TimeoutExpired:
-        return None, ""
+        return proc.returncode, f"{proc.stdout}\n{proc.stderr}"[-4000:]
+    except subprocess.TimeoutExpired as exc:
+        out, err = exc.stdout or "", exc.stderr or ""
+        if isinstance(out, bytes):
+            out = out.decode(errors="replace")
+        if isinstance(err, bytes):
+            err = err.decode(errors="replace")
+        return None, f"{out}\n{err}"[-4000:]
 
 
 def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
@@ -154,11 +160,20 @@ def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
         total += 1
         status = "SURVIVED" if code == 0 else ("TIMEOUT" if code is None else "KILLED")
         if code == 0:
-            survived.append((rel, lineno, label, source))
+            survived.append((rel, lineno, label, baseline_text[rel]))
         else:
+            if out:
+                log(f"  mutant diagnostics:\n{out}")
             killed += 1
         log(f"[{n}/{len(mutants)}] {rel}:{lineno} {label} {status} {dt:.1f}s")
     return total, killed, survived
+
+
+def report_survivors(survived, log):
+    for rel, lineno, label, source in survived:
+        lines = source.splitlines()
+        line = lines[lineno - 1].strip() if lineno <= len(lines) else ""
+        log(f"survived: {rel}:{lineno} {label}  |  {line[:120]}")
 
 
 def changed_targets(base_ref):
@@ -191,7 +206,8 @@ def run(args, log=print):
     log(f"workspace: {ws} (kept after the run; nothing is deleted)")
     shutil.copytree(REPO, ws, ignore=shutil.ignore_patterns(
         ".git", ".venv", "__pycache__", "data", "android", "node_modules",
-        ".worktrees", "htmlcov", ".pytest_cache", ".ruff_cache", "clipshelf-mutation"),
+        ".worktrees", "htmlcov", ".pytest_cache", ".ruff_cache", "clipshelf-mutation",
+        ".secrets", ".env*", "docs", "library.json", "server.log"),
         dirs_exist_ok=True)
     env = dict(os.environ)
     env["CLIPSHELF_DATA_DIR"] = str(temp_root / "data-baseline")
@@ -205,9 +221,7 @@ def run(args, log=print):
                                         args.max_mutants, log)
     score = 100.0 * killed / total if total else 0.0
     log(f"\nscore: {killed}/{total} killed = {score:.1f}% (gate: >= {args.fail_under}%)")
-    for rel, lineno, label, source in survived:
-        line = source.splitlines()[lineno - 1].strip() if lineno <= len(source.splitlines()) else ""
-        log(f"survived: {rel}:{lineno} {label}  |  {line[:120]}")
+    report_survivors(survived, log)
     log(f"kept (not deleted): {temp_root}")
     return 0 if score >= args.fail_under else 1
 
@@ -216,14 +230,28 @@ def self_check():
     """Assert the mutator produces the expected classes and that the runner
     kills a caught mutant and reports an uncaught one. Hermetic: its own
     temp workspace, plain unittest, no repo code."""
+    global run_suite
     snippet = "def f(a, b):\n    if a == b:\n        return a + b\n    return a * b\n"
     labels = [label for _, label, _ in collect_sites(ast.parse(snippet))[1]]
     for expect in ("Eq->NotEq", "Add->Sub", "Mult->Div"):
         assert expect in labels, (expect, labels)
     assert not any("str->" in label for label in labels), labels  # no docstring noise
 
+    report_source = "def sample():\n    return 1  # original formatting\n"
+
     ws = TEMP_ROOT / f"selfcheck-{time.strftime('%Y%m%d-%H%M%S')}" / "ws"
     ws.mkdir(parents=True)
+    (ws / "report.py").write_text(report_source, encoding="utf-8")
+    real_run_suite = run_suite
+    try:
+        run_suite = lambda *args: (0, "")
+        _, _, survived = score_run(["report.py"], ws, ws, 60, 1, lambda _msg: None)
+    finally:
+        run_suite = real_run_suite
+    report_lines = []
+    report_survivors(survived, report_lines.append)
+    assert "return 1  # original formatting" in report_lines[0]
+    assert "original formatting" not in ast.unparse(ast.parse(report_source))
     (ws / "module.py").write_text(
         "def limit(x):\n    return 100 if x > 100 else x\n", encoding="utf-8")
     (ws / "test_module.py").write_text(
@@ -243,6 +271,11 @@ def self_check():
     # flipped comparison is caught by the one test
     assert sorted(results) == sorted([("100->101", "SURVIVED"), ("100->101", "SURVIVED"),
                                       ("Gt->LtE", "KILLED")]), results
+    code, out = run_suite(
+        ws, dict(os.environ),
+        [sys.executable, "-c",
+         "import sys; print('stderr diagnostic', file=sys.stderr); sys.exit(1)"], 60)
+    assert code == 1 and "stderr diagnostic" in out, out
     print(f"self-check ok ({ws})")
 
 

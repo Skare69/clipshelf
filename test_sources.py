@@ -267,6 +267,161 @@ def test_import_media_bounds(tmp=None):
     print("import bounds ok")
 
 
+def test_acquisition_regressions(tmp):
+    # Repeated staged names must retain distinct files and bytes.
+    name_dir = os.path.join(tmp, "same-name")
+    os.makedirs(name_dir, exist_ok=True)
+    payloads = []
+    for color in ((10, 200, 30), (30, 10, 200), (200, 30, 10)):
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4), color).save(buf, "PNG")
+        payloads.append(buf.getvalue())
+    url = "https://www.tiktok.com/@u/photo/collision"
+    items = [{"url": url, "images": [{"b64": base64.b64encode(data).decode()}]}
+             for data in payloads]
+    sources = acq.import_export(items, name_dir)
+    paths = [source["assets"][0]["path"] for source in sources]
+    assert len(set(paths)) == len(payloads), paths
+    assert all(os.path.splitext(path)[1] == ".png" for path in paths)
+    actual = []
+    for path in paths:
+        with open(path, "rb") as fh:
+            actual.append(fh.read())
+    assert actual == payloads
+
+    # Validation failure stays partial even after the rejected video is removed.
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\0" * 64
+    with mock.patch.object(acq, "validate_video_file",
+                           side_effect=ValueError("detail")):
+        source = acq.import_export(
+            [{"url": "https://www.tiktok.com/@u/video/invalid",
+              "video": {"b64": base64.b64encode(mp4).decode()}}], tmp)[0]
+    assert source["acquisition"] == "partial"
+    assert source["assets"] == []
+    assert "video failed validation: detail" in source["warnings"]
+
+    # A cover thumbnail is not the acquired TikTok content.
+    thumbnail_url = "https://cdn.example/cover.png"
+
+    def fake_fetch(url, **kwargs):
+        if url.startswith("https://www.tiktok.com/oembed?"):
+            return {"body": json.dumps({
+                "title": "Post", "thumbnail_url": thumbnail_url}).encode()}
+        if url == thumbnail_url:
+            return {"body": payloads[0], "content_type": "image/png"}
+        raise AssertionError(f"unexpected fetch: {url}")
+
+    with mock.patch.object(net, "fetch_public", side_effect=fake_fetch), \
+         mock.patch.object(net, "extractor_egress", return_value=mock.MagicMock()), \
+         mock.patch.object(acq, "_run_extractor", return_value=(1, "no media")):
+        source = acq.acquire("https://www.tiktok.com/@u/video/cover", tmp)
+    assert source["metadata"]["metadata"] == "oembed"
+    assert source["metadata"]["media"] == "image"
+    assert source["acquisition"] == "partial"
+
+    # A video without captions remains complete but names the content gap.
+    def emit_video(argv):
+        flag = "--paths" if "--paths" in argv else "-d"
+        outdir = argv[argv.index(flag) + 1]
+        with open(os.path.join(outdir, "video.mp4"), "wb") as fh:
+            fh.write(mp4)
+        return 0, ""
+
+    with mock.patch.object(acq, "_oembed",
+                           return_value={"title": "", "author": "",
+                                         "thumbnail_url": ""}), \
+         mock.patch.object(net, "extractor_egress", return_value=mock.MagicMock()), \
+         mock.patch.object(acq, "_run_extractor", side_effect=emit_video), \
+         mock.patch.object(acq, "validate_video_file", return_value={"duration": 1.0}):
+        source = acq.acquire("https://www.tiktok.com/@u/video/no-captions", tmp)
+    assert source["acquisition"] == "complete"
+    assert source["metadata"]["captions"] == "none"
+    assert any("no captions available" in warning for warning in source["warnings"])
+
+    # Reject excessive image dimensions before decoding pixel data.
+    image = mock.MagicMock()
+    image.__enter__.return_value = image
+    image.size = (acq.IMAGE_MAX_PIXELS + 1, 1)
+    image.format = "PNG"
+    with mock.patch.object(acq.Image, "open", return_value=image):
+        try:
+            acq.validate_image(b"image")
+        except ValueError as exc:
+            assert "exceed bound" in str(exc)
+        else:
+            raise AssertionError("oversized image accepted")
+    image.load.assert_not_called()
+
+
+def test_interpretation_regressions(tmp):
+    config = {"base_url": "http://h/v1", "model": "m"}
+    source = {"url": "https://example.com/page", "title": "", "desc": "",
+              "text": "", "links": [], "metadata": {}}
+    result = {"summary": "s", "repos": [], "prompts": [], "links": [],
+              "categories": [], "installs": [], "warnings": []}
+    calls = []
+
+    def fake_post(base, key, payload, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": json.dumps(result)}}]}
+
+    # An oversized local image is skipped, not allowed to abort interpretation.
+    image_path = os.path.join(tmp, "interpretation-oversize.img")
+    with open(image_path, "wb") as fh:
+        fh.write(b"too large")
+    source["assets"] = [{"kind": "image", "path": image_path}]
+    with mock.patch.object(interp, "IMAGE_FILE_MAX", 8), \
+         mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=fake_post):
+        findings = interp.interpret(source, config, [])
+    assert len(calls) == 1
+    assert any("size bound" in warning for warning in findings["warnings"])
+
+    # URL body overflow alone does not mean the endpoint is unverified.
+    large_url = "https://example.com/large"
+    unavailable_url = "https://example.com/unavailable"
+
+    def fetch(url, **kwargs):
+        if url == large_url:
+            raise net.NetworkError("response exceeds 65536 byte bound")
+        raise net.NetworkError("offline")
+
+    findings = {"repos": [], "links": [large_url, unavailable_url], "warnings": []}
+    with mock.patch.object(net, "fetch_public", side_effect=fetch):
+        interp._verify_urls(findings, [])
+    assert not any(large_url in warning for warning in findings["warnings"])
+    assert any(unavailable_url in warning for warning in findings["warnings"])
+
+    # Screening diagnostics survive the model's ten-warning allowance.
+    model_warnings = [f"model warning {n}" for n in range(interp.WARNINGS_MAX)]
+    result["warnings"] = model_warnings
+    calls.clear()
+    review = {"text_steer": interp.judgment.REVIEW_STEER,
+              "meta_steer": 0.0, "severity": 0.0}
+    with mock.patch.object(interp.judgment, "available", return_value=True), \
+         mock.patch.object(interp.judgment, "screen_material", return_value=review), \
+         mock.patch.object(interp, "post", side_effect=fake_post):
+        findings = interp.interpret(
+            {"url": "https://example.com/screened", "text": "body",
+             "assets": [], "links": [], "metadata": {}}, config, [])
+    assert "screening: suspicious content flagged; proceeding" in findings["warnings"]
+    assert set(model_warnings).issubset(findings["warnings"])
+    assert len(findings["warnings"]) <= 100
+
+
+def test_screening_warning_projection():
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "clipshelf.project.settings")
+    import django
+    django.setup()
+    from clipshelf.models import Job
+
+    warning = "screening: suspicious content flagged; proceeding"
+    job = Job(warnings=[warning, "unverified: https://example.com", warning,
+                        "screening unavailable: offline"])
+    assert job.screening_warnings == [
+        warning, "screening unavailable: offline"]
+
+
 def test_interpretation_bounds():
     categories = ["github", "prompts"]
     source = {"url": "https://example.com/page", "title": "T", "desc": "D",
@@ -336,6 +491,8 @@ def test_interpretation_bounds():
             interp.interpret(source, cfg, categories)
         except interp.InterpretationError as exc:
             assert "retry" in str(exc)
+        else:
+            raise AssertionError("malformed response accepted after retry")
         assert len(calls) == 2, len(calls)  # exactly one malformed retry
     finally:
         interp.post = real_post
@@ -360,7 +517,7 @@ def test_interpretation_bounds():
     def leak_post(base, key, payload, timeout):
         raise Exception(f"connect failed for key {key} at host")
 
-        interp.post = leak_post
+    interp.post = leak_post
     try:
         report = interp.check_connection({"base_url": "http://h/x", "model": "m",
                                           "api_key": "sekret"})
@@ -474,7 +631,12 @@ def test_screening_policy():
         assert findings["repos"] == ["https://github.com/owner/repo"]
         assert any("screening unavailable" in w for w in findings["warnings"])
         print("screening policy ok")
-    return unittest.FunctionTestCase(check)
+
+    def check_offline():
+        with mock.patch.object(net, "fetch_public",
+                               side_effect=net.NetworkError("offline")):
+            check()
+    return unittest.FunctionTestCase(check_offline)
 
 
 def test_list_models():
@@ -560,12 +722,19 @@ def test():
     tmp = tempfile.mkdtemp(prefix="cs-src-")
     try:
         test_import_media_bounds(tmp)
+        test_acquisition_regressions(tmp)
+        test_interpretation_regressions(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     test_interpretation_bounds()
     test_screening_policy().debug()
+    test_screening_warning_projection()
     test_list_models()
     print("ok")
+
+
+def load_tests(loader, tests, pattern):
+    return unittest.TestSuite([unittest.FunctionTestCase(test)])
 
 
 if __name__ == "__main__":
