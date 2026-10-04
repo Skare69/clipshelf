@@ -62,6 +62,16 @@ def tombstoned(collection_id, user_id, *keys):
     keys = {key for key in keys if key}
     if not keys:
         return False
+    legacy_keys = set()
+    for key in keys:
+        canonical = lib.norm(key)
+        if not canonical:
+            continue
+        parts = urlsplit(canonical)
+        if parts.hostname in ("github.com", "gist.github.com"):
+            legacy_keys.add(urlunsplit((
+                parts.scheme, parts.netloc, parts.path.lower(), parts.query, "")))
+    keys.update(legacy_keys)
     alias_rows = History.objects.filter(
         collection_id=collection_id, user_id=user_id, kind=History.Kind.ALIAS)
     keys.update(set(alias_rows.filter(

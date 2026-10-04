@@ -276,6 +276,39 @@ class ImportTests(MigrationMixin, TestCase):
         self.assertFalse(models.Entry.objects.filter(
             collection=self.personal, key="https://removed.example/x").exists())
 
+    def test_legacy_github_tombstones_match_case_preserved_paths(self):
+        other = models.User.objects.create_user(
+            username="legacy-tombstone-other", email="legacy-tombstone@example.com")
+        other_collection = services.personal_collection(other)
+        urls = (
+            ("github.com", "/owner/repo/blob/Release/ReadMe.MD",
+             "/owner/repo/blob/release/readme.md"),
+            ("gist.github.com", "/owner/0123456789abcdef/raw/Release/ReadMe.MD",
+             "/owner/0123456789abcdef/raw/release/readme.md"),
+        )
+        for host, path, legacy_path in urls:
+            with self.subTest(host=host):
+                raw_url = (
+                    f"https://{host.upper()}{path}?ref=Release"
+                    "&utm_source=legacy#Install")
+                key = publication.link_key(raw_url)
+                self.assertEqual(key, f"https://{host}{path}?ref=Release")
+                models.History.objects.create(
+                    collection=self.personal, user=self.user,
+                    kind=models.History.Kind.REMOVED,
+                    url=f"https://{host}{legacy_path}?ref=Release")
+
+                self.assertTrue(publication.tombstoned(
+                    self.personal.id, self.user.id, raw_url, key))
+                self.assertFalse(publication.tombstoned(
+                    self.personal.id, other.id, raw_url, key))
+                self.assertFalse(publication.tombstoned(
+                    other_collection.id, self.user.id, raw_url, key))
+
+        self.assertEqual(models.History.objects.filter(
+            collection=self.personal, user=self.user,
+            kind=models.History.Kind.REMOVED).count(), len(urls))
+
     def test_removed_alias_blocks_canonical_and_alias_urls(self):
         alias = "https://short.example/item"
         target = "https://target.example/item"
