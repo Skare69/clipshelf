@@ -3,6 +3,7 @@ cutover, in-lock recheck, and preserved (never deleted, never merged)
 pre-existing assets. Uses a real temporary filesystem (Django test runner
 discovers this file at the project root)."""
 import contextlib
+import io
 import json
 import shutil
 import sqlite3
@@ -27,8 +28,9 @@ class RestoreMixin:
         (self.backup / "assets" / "xyz.bin").write_text("blob", encoding="utf-8")
         con = sqlite3.connect(str(self.backup / "db.sqlite3"))
         try:
-            con.execute("CREATE TABLE serversettings (id INTEGER PRIMARY KEY, instance_id CHAR(32))")
-            con.execute("INSERT INTO serversettings (instance_id) VALUES ('test-instance')")
+            for table in ("django_migrations", "clipshelf_user", "clipshelf_serversettings"):
+                con.execute(f'CREATE TABLE "{table}" (id TEXT PRIMARY KEY)')
+            con.execute("INSERT INTO clipshelf_serversettings (id) VALUES ('test-instance')")
             con.commit()
         finally:
             con.close()
@@ -38,8 +40,6 @@ class RestoreMixin:
         self.fresh = self.tmp / "fresh"
         self.fresh.mkdir()
         self.fresh_db = self.fresh / "restored.db"
-        # An existing empty file keeps _tables on the direct sqlite3 path.
-        self.fresh_db.touch()
         override = override_settings(
             DATA_DIR=str(self.fresh),
             DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3",
@@ -65,12 +65,48 @@ class RestoreMixin:
 
 class RestorePublicationTests(RestoreMixin, SimpleTestCase):
     def test_happy_path_publishes_assets_then_db_without_leftovers(self):
+        self.assertFalse(self.fresh_db.exists())
         self.restore()
         self.assertGreater(self.db_tables(), 0)
         self.assertEqual(self.page(), "page")
         leftovers = sorted(self.fresh.glob("restore-staging-*")) + \
             sorted(self.fresh.glob(self.fresh_db.name + ".restore-*"))
         self.assertEqual(leftovers, [], "staged bytes must be renamed, not copied")
+
+    def test_empty_backup_database_is_rejected_without_publication(self):
+        (self.backup / "db.sqlite3").write_bytes(b"")
+        previous = self.fresh / "assets"
+        previous.mkdir()
+        (previous / "keep.txt").write_text("keep", encoding="utf-8")
+
+        with self.assertRaisesMessage(CommandError, "required table"):
+            self.restore()
+
+        self.assertFalse(self.fresh_db.exists())
+        self.assertEqual((previous / "keep.txt").read_text(encoding="utf-8"), "keep")
+
+    def test_damaged_backup_database_is_rejected_without_publication(self):
+        source = self.backup / "db.sqlite3"
+        con = sqlite3.connect(str(source))
+        try:
+            page_size = con.execute("PRAGMA page_size").fetchone()[0]
+            root_page = con.execute(
+                "SELECT rootpage FROM sqlite_master "
+                "WHERE name='clipshelf_serversettings'").fetchone()[0]
+        finally:
+            con.close()
+        with source.open("r+b") as database:
+            database.seek((root_page - 1) * page_size)
+            database.write(b"\x00")
+        previous = self.fresh / "assets"
+        previous.mkdir()
+        (previous / "keep.txt").write_text("keep", encoding="utf-8")
+
+        with self.assertRaisesMessage(CommandError, "db.sqlite3"):
+            self.restore()
+
+        self.assertFalse(self.fresh_db.exists())
+        self.assertEqual((previous / "keep.txt").read_text(encoding="utf-8"), "keep")
 
     def test_staging_failure_leaves_target_untouched_and_retry_succeeds(self):
         with mock.patch.object(restore_cmd.shutil, "copytree", side_effect=OSError("disk full")):
@@ -139,3 +175,32 @@ class RestorePublicationTests(RestoreMixin, SimpleTestCase):
             self.restore()
         self.assertEqual(self.db_tables(), 0)
         self.assertFalse((self.fresh / "assets").exists())
+
+    def test_manifest_must_be_a_json_object_before_publication(self):
+        (self.backup / "manifest.json").write_text("[]", encoding="utf-8")
+
+        with self.assertRaisesMessage(CommandError, "manifest.json"):
+            self.restore()
+
+        self.assertFalse(self.fresh_db.exists())
+        self.assertFalse((self.fresh / "assets").exists())
+
+    def test_malformed_secrets_are_rejected_before_publication_without_printing_values(self):
+        sensitive_value = "restore-test-value"
+        cases = (
+            ("invalid JSON", "{broken"),
+            ("non-object", json.dumps([sensitive_value])),
+            ("non-string value", json.dumps({"SECRET_KEY": [sensitive_value]})),
+        )
+        output = io.StringIO()
+        for name, content in cases:
+            with self.subTest(name=name):
+                (self.backup / "SECRETS.json").write_text(content, encoding="utf-8")
+                with self.assertRaisesMessage(CommandError, "SECRETS.json") as raised:
+                    call_command(
+                        restore_cmd.Command(), "--input", str(self.backup), stdout=output)
+
+                self.assertNotIn(sensitive_value, str(raised.exception))
+                self.assertNotIn(sensitive_value, output.getvalue())
+                self.assertFalse(self.fresh_db.exists())
+                self.assertFalse((self.fresh / "assets").exists())

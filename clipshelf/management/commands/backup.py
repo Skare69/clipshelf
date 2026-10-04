@@ -30,13 +30,29 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         target = Path(options["output"])
-        if target.exists() and any(target.iterdir()):
-            raise CommandError(f"refusing to write into a non-empty directory: {target}")
-        target.mkdir(parents=True, exist_ok=True)
+        resolved_target = target.resolve()
+        assets = (Path(settings.DATA_DIR) / "assets").resolve()
+        if resolved_target == assets or assets in resolved_target.parents:
+            raise CommandError(f"refusing to back up inside retained assets: {target}")
+        target = target.absolute()
         db_path = Path(str(settings.DATABASES["default"]["NAME"]))
 
+        def reject_existing_target():
+            if target.exists() or target.is_symlink():
+                raise CommandError(f"refusing to use an existing backup destination: {target}")
+
+        # ponytail: keep failed snapshots for manual review; atomic path claims prevent mixing.
+        reject_existing_target()
         try:
             with data_lock(exclusive=True, timeout=options["wait"]):
+                reject_existing_target()
+                target.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    target.mkdir()
+                except FileExistsError as exc:
+                    raise CommandError(
+                        f"refusing to use an existing backup destination: {target}"
+                    ) from exc
                 self._snapshot(db_path, target)
         except TimeoutError as exc:
             raise CommandError(str(exc))

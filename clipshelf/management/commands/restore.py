@@ -20,10 +20,14 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
+from django.db import connections
 
 from clipshelf.management.locks import data_lock
 
 ASSETS = "assets"
+
+REQUIRED_SOURCE_TABLES = frozenset(
+    {"django_migrations", "clipshelf_serversettings", "clipshelf_user"})
 
 
 class Command(BaseCommand):
@@ -46,6 +50,24 @@ class Command(BaseCommand):
         except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise CommandError(
                 f"not a clipshelf backup: unreadable manifest.json: {exc}") from exc
+        if not isinstance(manifest, dict):
+            raise CommandError(
+                "not a clipshelf backup: manifest.json must contain a JSON object")
+
+        secrets_needed = []
+        secrets_path = backup / "SECRETS.json"
+        if secrets_path.is_file():
+            try:
+                secrets = json.loads(secrets_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+                raise CommandError(
+                    "not a clipshelf backup: unreadable SECRETS.json") from exc
+            if not isinstance(secrets, dict) or any(
+                    not isinstance(value, str) for value in secrets.values()):
+                raise CommandError(
+                    "not a clipshelf backup: SECRETS.json must contain an object "
+                    "with string values")
+            secrets_needed = list(secrets)
 
         target_db = Path(str(settings.DATABASES["default"]["NAME"]))
         data_dir = Path(settings.DATA_DIR)
@@ -67,7 +89,16 @@ class Command(BaseCommand):
             shutil.copy2(db_src, staged_db)
             con = sqlite3.connect(str(staged_db))
             try:
-                con.execute("SELECT count(*) FROM sqlite_master").fetchone()
+                if con.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
+                    raise CommandError(
+                        "not a clipshelf backup: db.sqlite3 failed SQLite quick_check")
+                tables = {row[0] for row in con.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                missing = REQUIRED_SOURCE_TABLES - tables
+                if missing:
+                    raise CommandError(
+                        "not a clipshelf backup: db.sqlite3 is missing required "
+                        f"table(s): {', '.join(sorted(missing))}")
             finally:
                 con.close()
             if has_assets:
@@ -99,6 +130,7 @@ class Command(BaseCommand):
                     os.rename(existing, data_dir / f"assets.gen-{token}")
                 if has_assets:
                     os.rename(staged_assets, data_dir / ASSETS)
+                connections.close_all()
                 os.replace(staged_db, target_db)  # atomic commit: database appears last
         except TimeoutError as exc:
             raise CommandError(str(exc))
@@ -112,39 +144,21 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(
             f"restored backup from {manifest.get('created_at', '?')} "
             f"(instance_id={instance_id}, counts={manifest.get('counts', {})})"))
-        secrets_needed = []
-        secrets_path = backup / "SECRETS.json"
-        if secrets_path.is_file():
-            secrets_needed = list(json.loads(secrets_path.read_text(encoding="utf-8")).keys())
         self.stdout.write(
             "set these environment/config values before serving if not already: "
             + (", ".join(secrets_needed) if secrets_needed else "(none recorded)"))
 
     def _tables(self, target_db):
-        """Count user tables of the restore target; 0 when absent, empty, or
-        unreadable (a crash-truncated file is debris, not a live instance)."""
-        if target_db.exists():
-            con = sqlite3.connect(str(target_db))
-            try:
-                return con.execute(
-                    "SELECT count(*) FROM sqlite_master WHERE type='table' "
-                    "AND name NOT LIKE 'sqlite_%'").fetchone()[0]
-            except sqlite3.DatabaseError:
-                return 0
-            finally:
-                con.close()
-        # The configured database may not be a plain file: ask the live
-        # connection, but only when it really is the restore target.
-        from django.db import connection
-
-        if str(connection.settings_dict.get("NAME")) == str(target_db):
-            try:
-                connection.ensure_connection()
-                with connection.cursor() as cursor:
-                    cursor.execute(
-                        "SELECT count(*) FROM sqlite_master WHERE type='table' "
-                        "AND name NOT LIKE 'sqlite_%'")
-                    return cursor.fetchone()[0]
-            except Exception:  # unreachable database: nothing live to protect
-                return 0
-        return 0
+        """Count target user tables; an absent, empty, or unreadable file is
+        debris, not a live instance."""
+        if not target_db.exists():
+            return 0
+        con = sqlite3.connect(str(target_db))
+        try:
+            return con.execute(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'").fetchone()[0]
+        except sqlite3.DatabaseError:
+            return 0
+        finally:
+            con.close()
