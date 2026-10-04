@@ -42,7 +42,7 @@ public class LibraryActivity extends Activity {
     private String q = "";
     private String sort = "new";
     private String kind = "";
-    private int offset;
+    private final PageTracker pages = new PageTracker();
     private int count;
     private String collectionId;
 
@@ -95,10 +95,11 @@ public class LibraryActivity extends Activity {
     }
 
     private void reload() {
-        offset = 0;
+        final int gen = pages.reload();
         entries.clear();
         adapter.notifyDataSetChanged();
         Async.goUi(this, () -> Api.me(session.profile.endpoint, session.token), (me, error) -> {
+            if (!pages.current(gen)) return;
             if (error != null) {
                 fail(error);
                 return;
@@ -149,14 +150,22 @@ public class LibraryActivity extends Activity {
         if (collectionId == null) {
             return;
         }
+        final int gen = pages.generation();
+        final int from = pages.offset();
+        final String fCollection = collectionId;
+        final String fq = q;
+        final String fSort = sort;
+        final String fKind = kind;
         setStatus(getString(R.string.loading));
-        Async.goUi(this, () -> Api.entries(session.profile.endpoint, session.token, collectionId,
-                        q, sort, kind, offset, PAGE),
+        Async.goUi(this, () -> Api.entries(session.profile.endpoint, session.token, fCollection,
+                        fq, fSort, fKind, from, PAGE),
                 (page, error) -> {
+                    if (!pages.current(gen)) return;
                     if (error != null) {
                         fail(error);
                         return;
                     }
+                    if (!pages.commit(gen, from, page.entries.size())) return;
                     setStatus("");
                     entries.addAll(page.entries);
                     count = page.count;
@@ -166,7 +175,6 @@ public class LibraryActivity extends Activity {
                     TextView empty = findViewById(R.id.library_empty);
                     empty.setVisibility(entries.isEmpty() ? View.VISIBLE : View.GONE);
                 });
-        offset += PAGE;
     }
 
     private void fail(Exception error) {
