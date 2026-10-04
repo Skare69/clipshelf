@@ -78,36 +78,21 @@ public class DeliverWorker extends Worker {
         }
         db.resetAuthPaused(me.instanceId, me.userId); // session healthy: resume paused rows
 
-        boolean retryLater = false;
-        int processed = 0;
-        List<OutboxStore.Row> batch = db.listQueuedFor(me.instanceId, me.userId, BATCH);
-        while (!batch.isEmpty() && processed < MAX_ROWS_PER_RUN) {
-            boolean stop = false;
-            for (OutboxStore.Row row : batch) {
-                processed++;
-                int outcome = deliverOne(ctx, db, session, me, row);
-                if (outcome == OUTCOME_STOP_TRANSIENT) {
-                    retryLater = true;
-                    stop = true;
-                    break;
-                }
-                if (outcome != OUTCOME_CONTINUE) {
-                    stop = true;
-                    break;
-                }
-            }
-            if (stop) {
-                break;
-            }
-            batch = db.listQueuedFor(me.instanceId, me.userId, BATCH);
+        int drained = drain(db::listQueuedFor, me.instanceId, me.userId,
+                row -> deliverOne(ctx, db, session, row));
+        if (drained == DRAIN_RETRY) {
+            return Result.retry();
         }
-        if (!db.listQueuedFor(me.instanceId, me.userId, 1).isEmpty()) {
-            retryLater = true;
+        if (drained == DRAIN_BACKLOG) {
+            // Clean run hit the per-run cap with rows left: chain the next batch
+            // immediately instead of burning exponential backoff. Rows keep their
+            // idempotent client_request_id (row.id) across continuations.
+            WorkScheduler.drainNow(ctx);
         }
-        return retryLater ? Result.retry() : Result.success();
+        return Result.success();
     }
 
-    private int deliverOne(Context ctx, OutboxStore db, Creds.Session session, Api.Me me, OutboxStore.Row row) {
+    private int deliverOne(Context ctx, OutboxStore db, Creds.Session session, OutboxStore.Row row) {
         try {
             Api.Receipt receipt = Api.capture(session.profile.endpoint, session.token,
                     row.id, row.text, row.requestedCollectionId, row.instanceId, row.userId);
@@ -138,5 +123,52 @@ public class DeliverWorker extends Worker {
     private static boolean isAuthFailure(IOException e) {
         return e instanceof Api.ApiException
                 && (((Api.ApiException) e).code == 401 || ((Api.ApiException) e).code == 403);
+    }
+
+    /** drain() results. */
+    public static final int DRAIN_DONE = 0;    // queue empty after the run
+    public static final int DRAIN_RETRY = 1;   // transient or stop with rows left: backoff
+    public static final int DRAIN_BACKLOG = 2; // clean stop at the cap with rows left
+
+    /** Row source and deliverer seams; generic so JVM tests need no Android classes. */
+    public interface Queue<T> {
+        List<T> queued(String instanceId, String userId, int limit);
+    }
+
+    public interface Deliver<T> {
+        int one(T row);
+    }
+
+    /**
+     * Drains up to MAX_ROWS_PER_RUN queued rows in queue order. Returns
+     * DRAIN_RETRY on a transient failure or a stop with rows remaining (caller
+     * backs off), DRAIN_BACKLOG when a clean run stops at the cap with rows
+     * remaining (caller schedules an immediate continuation), DRAIN_DONE when
+     * the queue is drained.
+     */
+    public static <T> int drain(Queue<T> q, String instanceId, String userId, Deliver<T> deliver) {
+        int processed = 0;
+        List<T> batch = q.queued(instanceId, userId, BATCH);
+        while (!batch.isEmpty() && processed < MAX_ROWS_PER_RUN) {
+            boolean stopped = false;
+            for (T row : batch) {
+                processed++;
+                int outcome = deliver.one(row);
+                if (outcome == OUTCOME_STOP_TRANSIENT) {
+                    return DRAIN_RETRY; // transport/5xx: back off (server dedupes on replay)
+                }
+                if (outcome != OUTCOME_CONTINUE) {
+                    stopped = true;
+                    break;
+                }
+            }
+            if (stopped) {
+                // Auth pause empties the identity's queue; a mismatch stop can
+                // leave sibling rows — retry them on backoff as before.
+                return q.queued(instanceId, userId, 1).isEmpty() ? DRAIN_DONE : DRAIN_RETRY;
+            }
+            batch = q.queued(instanceId, userId, BATCH);
+        }
+        return batch.isEmpty() ? DRAIN_DONE : DRAIN_BACKLOG;
     }
 }
