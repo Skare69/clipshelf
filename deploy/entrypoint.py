@@ -24,6 +24,7 @@ created.
 import os
 import sqlite3
 import sys
+import tempfile
 
 MIN_SQLITE = (3, 51, 3)
 DATA_DIR = os.environ.get("CLIPSHELF_DATA_DIR", "/data")
@@ -38,9 +39,14 @@ def fail(message):
 def ensure_data_dir():
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
-        probe = os.path.join(DATA_DIR, ".entrypoint-write-probe")
-        with open(probe, "x", encoding="ascii") as fh:
-            fh.write("ok")
+        # Unique per process via mkstemp (O_EXCL): simultaneous web/worker
+        # starts never race on one fixed name, a pre-existing file is never
+        # touched, and the removal below can only delete this run's own file.
+        fd, probe = tempfile.mkstemp(prefix=".entrypoint-write-probe-", dir=DATA_DIR)
+        try:
+            os.write(fd, b"ok")
+        finally:
+            os.close(fd)
         os.remove(probe)
     except OSError as exc:
         fail(

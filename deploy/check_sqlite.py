@@ -15,6 +15,7 @@ Usage:
 import os
 import sqlite3
 import sys
+import tempfile
 
 MIN_SQLITE = (3, 51, 3)
 
@@ -24,10 +25,12 @@ def fail(message):
     sys.exit(1)
 
 
-def cleanup(path):
+def remove_own_probe(probe):
+    """Remove only files this run created; mkstemp made `probe` via O_EXCL,
+    so the -wal/-shm sidecars of that unique name can never be user files."""
     for suffix in ("", "-wal", "-shm"):
         try:
-            os.remove(path + suffix)
+            os.remove(probe + suffix)
         except FileNotFoundError:
             pass
 
@@ -48,15 +51,20 @@ def main():
         os.makedirs(data_dir, exist_ok=True)
     except OSError as exc:
         fail(f"cannot use data dir {data_dir}: {exc} (chown it to the compose UID/GID)")
-    probe = os.path.join(data_dir, "sqlite-verification.db")
-    cleanup(probe)
-
+    # Unique probe name via mkstemp (O_EXCL): it can never collide with or
+    # overwrite an existing file, and nothing pre-existing is ever removed.
     try:
-        con = sqlite3.connect(probe, timeout=10)
-    except sqlite3.Error as exc:
-        fail(f"cannot create {probe}: {exc}")
+        fd, probe = tempfile.mkstemp(
+            prefix="sqlite-verification-", suffix=".db", dir=data_dir
+        )
+        os.close(fd)
+    except OSError as exc:
+        fail(f"cannot create a unique probe file in {data_dir}: {exc}")
+
+    con = None
     try:
         try:
+            con = sqlite3.connect(probe, timeout=10)
             con.execute("PRAGMA journal_mode=WAL")
             con.execute("PRAGMA synchronous=FULL")
             con.execute("PRAGMA busy_timeout=10000")
@@ -67,33 +75,40 @@ def main():
             sync = int(con.execute("PRAGMA synchronous").fetchone()[0])
         except sqlite3.Error as exc:
             fail(f"verification queries failed on {data_dir}: {exc}")
-    finally:
-        con.close()
-    if mode != "wal":
-        fail(f"journal_mode did not stick on {data_dir} (got {mode!r})")
-    if sync != 2:
-        fail(f"synchronous=FULL not in effect (got {sync})")
+        if mode != "wal":
+            fail(f"journal_mode did not stick on {data_dir} (got {mode!r})")
+        if sync != 2:
+            fail(f"synchronous=FULL not in effect (got {sync})")
 
-    # A fresh connection must see the committed row and the persistent WAL mode.
-    try:
-        con2 = sqlite3.connect(probe, timeout=10)
-    except sqlite3.Error as exc:
-        fail(f"cannot reopen {probe}: {exc}")
-    try:
-        row = con2.execute("SELECT COUNT(*) FROM t").fetchone()[0]
-        mode2 = str(con2.execute("PRAGMA journal_mode").fetchone()[0]).lower()
-    except sqlite3.Error as exc:
-        fail(f"verification queries failed on reopen: {exc}")
+        # A fresh connection must read the committed row through the live WAL
+        # while this writer connection is still open; after the last
+        # connection closes, SQLite checkpoints and removes the WAL, so a
+        # reopen at that point would prove nothing about WAL visibility.
+        con2 = None
+        try:
+            con2 = sqlite3.connect(probe, timeout=10)
+            row = con2.execute("SELECT COUNT(*) FROM t").fetchone()[0]
+            mode2 = str(con2.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+        except sqlite3.Error as exc:
+            fail(f"fresh-connection read through the live WAL failed: {exc}")
+        finally:
+            if con2 is not None:
+                con2.close()
+        if row != 1 or mode2 != "wal":
+            fail(
+                "fresh connection did not see the committed WAL row "
+                f"(rows={row}, mode={mode2!r})"
+            )
     finally:
-        con2.close()
-    if row != 1 or mode2 != "wal":
-        fail(f"WAL data not durable/visible after reopen (rows={row}, mode={mode2!r})")
-
-    cleanup(probe)
+        if con is not None:
+            con.close()
+        remove_own_probe(probe)
     print(
-        f"PASS: SQLite {sqlite3.sqlite_version} on {data_dir}: WAL persists, "
-        "synchronous=FULL commits are visible across connections. App settings "
-        "enforce the same pragmas on every Django connection."
+        f"PASS: SQLite {sqlite3.sqlite_version} on {data_dir}: WAL journal mode "
+        "engages and persists, synchronous=FULL is in effect, and a fresh "
+        "connection read the committed row through the live WAL while the "
+        "writer connection stayed open. This probe uses raw sqlite3 "
+        "connections only; it does not exercise Django connection pragmas."
     )
 
 
