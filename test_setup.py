@@ -79,3 +79,13 @@ class SetupWizardTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "too short")
         self.assertEqual(User.objects.count(), 0)
+
+    def test_password_similar_to_email_renders_error_without_user(self):
+        # UserAttributeSimilarityValidator needs a user with the email set;
+        # without it the first admin could set their password to their email.
+        response = self._signup(
+            Client(), email="owner@example.com", password1="owner@example.com"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "similar")
+        self.assertEqual(User.objects.count(), 0)

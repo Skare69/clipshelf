@@ -59,7 +59,10 @@ def setup_view(request):
             errors.append("Passwords do not match.")
         if not errors:
             try:
-                validate_password(password1)
+                # user carries the email so UserAttributeSimilarityValidator
+                # rejects a password equal or similar to it, matching the
+                # allauth signup path.
+                validate_password(password1, user=User(email=email))
             except ValidationError as exc:
                 errors.extend(exc.messages)
         if not errors:
