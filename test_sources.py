@@ -4,6 +4,7 @@ import base64
 import gzip
 import json
 import io
+import random
 import socket
 import shutil
 import tempfile
@@ -90,6 +91,28 @@ def png_bytes():
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (10, 200, 30)).save(buf, "PNG")
     return buf.getvalue()
+
+
+def jpeg_bytes():
+    buf = io.BytesIO()
+    Image.new("RGB", (3, 3), (5, 5, 5)).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+class _Resp:
+    """urlopen stand-in: bounded read + context manager, for post()-level tests."""
+
+    def __init__(self, body):
+        self.body = body
+
+    def read(self, n):
+        return self.body[:n]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
 
 
 def test_ssrf_pinned_transport():
@@ -775,6 +798,478 @@ def test_screening_policy():
     return unittest.FunctionTestCase(check_offline)
 
 
+def test_post_transport_and_http_errors():
+    """post(): one POST to <base>/chat/completions with bearer auth; honest,
+    key-redacted HTTP errors; responses above the size bound are refused."""
+    calls = []
+
+    def fake_open(req, timeout=None):
+        calls.append((req.full_url, req.get_method(),
+                      req.get_header("Authorization")))
+        return _Resp(b'{"choices": []}')
+
+    real_open = interp.urllib.request.urlopen
+    interp.urllib.request.urlopen = fake_open
+    try:
+        assert interp.post("http://h/v1", "sk-test", {"q": 1}, 5) == {"choices": []}
+        assert calls[-1] == ("http://h/v1/chat/completions", "POST", "Bearer sk-test")
+    finally:
+        interp.urllib.request.urlopen = real_open
+
+    # HTTP 401: credentials surfaced, key never leaks; body has undecodable
+    # bytes so the detail decode actually runs its error handler
+    def denied(req, timeout=None):
+        raise interp.urllib.error.HTTPError(req.full_url, 401, "no", {},
+                                            io.BytesIO(b"bad key sk-test \xff\xfe"))
+
+    interp.urllib.request.urlopen = denied
+    try:
+        try:
+            interp.post("http://h/v1", "sk-test", {}, 5)
+            raise AssertionError("401 accepted")
+        except interp.InterpretationError as exc:
+            assert "credentials" in str(exc) and "sk-test" not in str(exc)
+    finally:
+        interp.urllib.request.urlopen = real_open
+
+    # HTTP 500: detail is redacted and truncated at its 300-char bound
+    def err500(req, timeout=None):
+        body = b"X" * 10 + b" sk-test " + b"B" * 400
+        raise interp.urllib.error.HTTPError(req.full_url, 500, "boom", {},
+                                            io.BytesIO(body))
+
+    interp.urllib.request.urlopen = err500
+    try:
+        try:
+            interp.post("http://h/v1", "sk-test", {}, 5)
+            raise AssertionError("500 accepted")
+        except interp.InterpretationError as exc:
+            msg = str(exc)
+            assert "500" in msg and "sk-test" not in msg and "***" in msg, msg
+            assert len(msg) <= len("endpoint rejected request (HTTP 500): ") + 300, msg
+    finally:
+        interp.urllib.request.urlopen = real_open
+
+    # a response above the size bound is refused, not parsed
+    def huge(req, timeout=None):
+        return _Resp(b"x" * 40)
+
+    real_max = interp.LLM_RESPONSE_MAX
+    interp.LLM_RESPONSE_MAX = 16
+    interp.urllib.request.urlopen = huge
+    try:
+        try:
+            interp.post("http://h/v1", None, {}, 5)
+            raise AssertionError("oversized response accepted")
+        except interp.InterpretationError as exc:
+            assert "size bound" in str(exc)
+    finally:
+        interp.LLM_RESPONSE_MAX = real_max
+        interp.urllib.request.urlopen = real_open
+
+    # list_models on an unreachable endpoint: transport reported, key redacted
+    def unreachable(req, timeout=None):
+        raise interp.urllib.error.URLError("refused")
+
+    interp.urllib.request.urlopen = unreachable
+    try:
+        try:
+            interp.list_models({"base_url": "http://h/v1", "api_key": "sk-test"})
+            raise AssertionError("unreachable accepted")
+        except interp.ConfigurationError as exc:
+            assert "endpoint unreachable: <" in str(exc)
+            assert "sk-test" not in str(exc)
+    finally:
+        interp.urllib.request.urlopen = real_open
+    print("post transport ok")
+
+
+def test_image_source_bounds():
+    """Source images above the 32 MiB bound are refused before decoding;
+    a file exactly at the bound still decodes to one inline part."""
+    tmp = tempfile.mkdtemp(prefix="cs-img-")
+    try:
+        warnings = []
+        big = os.path.join(tmp, "big.png")
+        with open(big, "wb") as fh:
+            fh.seek(32 << 20)  # 32 MiB + 1 byte, sparse; size independent of the constant
+            fh.write(b"\0")
+        try:
+            interp._image_parts({"assets": [{"kind": "image", "path": big}]},
+                                warnings, interp.IMAGES_MAX)
+            raise AssertionError("oversized source file accepted")
+        except ValueError as exc:
+            assert "size bound" in str(exc)
+
+        at = os.path.join(tmp, "at.png")
+        data = png_bytes()
+        with open(at, "wb") as fh:
+            fh.write(data + b"\0" * ((32 << 20) - len(data)))
+        parts = interp._image_parts({"assets": [{"kind": "image", "path": at}]},
+                                    warnings, interp.IMAGES_MAX)
+        assert len(parts) == 1
+        assert parts[0]["type"] == "image_url"
+        assert parts[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+        # beyond the 16-image budget the rest is dropped with an honest count
+        tiny = os.path.join(tmp, "tiny.png")
+        with open(tiny, "wb") as fh:
+            fh.write(data)
+        many = [{"kind": "image", "path": tiny} for _ in range(17)]
+        warnings = []
+        parts = interp._image_parts({"assets": many}, warnings, interp.IMAGES_MAX)
+        assert len(parts) == 16, len(parts)
+        assert any("1 images omitted" in w for w in warnings), warnings
+
+        # re-encode ladder: too big at (1536, 85), lands on the 1024 rung
+        rng = random.Random(0)
+        noise = Image.frombytes(
+            "RGB", (2048, 2048),
+            bytes(255 if rng.getrandbits(1) else 0
+                  for _ in range(2048 * 2048 * 3)))
+        buf = io.BytesIO()
+        noise.save(buf, "PNG")
+        url = interp._data_url(buf.getvalue(), warnings, "noise.png")
+        assert url and url.startswith("data:image/jpeg;base64,"), warnings
+        im = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
+        assert 768 < max(im.size) <= 1024, im.size
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("image bounds ok")
+
+
+def test_frame_extraction_contract():
+    """ffmpeg frame sampling: file-only whitelist, bounded window/fps/frames,
+    quality and scale pinned; budget 0 never spawns a subprocess."""
+    source = {"assets": [{"kind": "video", "path": "C:/nonexistent/v.mp4"}]}
+    runs = []
+
+    def fake_run(argv, capture_output=True, timeout=None, check=False):
+        runs.append((list(argv), capture_output, timeout, check))
+        if "ffprobe" in argv[0]:
+            out = json.dumps({"format": {"duration": "60"}}).encode()
+            return interp.subprocess.CompletedProcess(argv, 1, stdout=out, stderr=b"")
+        with open(argv[-1].replace("%02d", "00"), "wb") as fh:  # materialize a frame
+            fh.write(jpeg_bytes())
+        return interp.subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+    with mock.patch.object(interp.shutil, "which", lambda name: f"/fakebin/{name}"), \
+         mock.patch.object(interp.subprocess, "run", fake_run):
+        warnings = []
+        parts = interp._frame_parts(source, warnings, interp.FRAMES_MAX)
+        assert len(runs) == 2, runs
+        probe_argv, probe_cap, probe_t, probe_check = runs[0]
+        assert probe_argv == ["/fakebin/ffprobe", "-v", "error",
+                              "-protocol_whitelist", "file", "-show_entries",
+                              "format=duration", "-of", "json",
+                              "C:/nonexistent/v.mp4"], probe_argv
+        assert probe_cap is True and probe_t == 60 and probe_check is False
+        ffmpeg_argv, ffmpeg_cap, ffmpeg_t, ffmpeg_check = runs[1]
+        assert ffmpeg_argv[:-1] == ["/fakebin/ffmpeg", "-v", "error",
+                                    "-protocol_whitelist", "file", "-t", "60.0",
+                                    "-i", "C:/nonexistent/v.mp4", "-an", "-sn",
+                                    "-dn", "-vf",
+                                    "fps=8/60,scale=1280:1280:"
+                                    "force_original_aspect_ratio=decrease",
+                                    "-frames:v", "8", "-q:v", "5"], ffmpeg_argv
+        assert ffmpeg_argv[-1].endswith("f%02d.jpg")
+        assert ffmpeg_cap is True and ffmpeg_t == 180 and ffmpeg_check is False
+        assert warnings == [], warnings  # 60s sits under the duration bound
+        assert len(parts) == 1
+        assert parts[0]["type"] == "image_url"
+        assert parts[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+        # budget 0: frames skipped wholesale, no subprocess ever launched
+        runs.clear()
+        warnings = []
+        assert interp._frame_parts(source, warnings, 0) == []
+        assert runs == [], runs
+        assert any("video frames omitted" in w for w in warnings), warnings
+    print("frame contract ok")
+
+
+def test_material_state_shape():
+    """Only the current capture's bounded context is shipped to the model."""
+    cats = [f"cat{i}" for i in range(101)]
+    source = {"url": "https://example.com/p", "title": "tt", "desc": "d" * 4001,
+              "text": "b" * 12001,
+              "links": [{"url": "https://a/1", "title": "x" * 250}, "junk", 42,
+                        {"no": "url"}],
+              "metadata": {"media": "video", "captions": "none"}}
+    state = interp._material_state(source, cats)
+    assert state["url"] == "https://example.com/p"
+    assert state["title"] == "tt"
+    assert state["description"] == "d" * 4000
+    assert state["page_text"] == "b" * 12000
+    assert state["links"] == [{"url": "https://a/1", "title": "x" * 200}]
+    assert "no captions" in state["captions_note"]
+    assert len(state["allowed_categories"]) == 100
+
+    # captions note only for caption-less video captures
+    talking = interp._material_state(
+        {**source, "metadata": {"media": "video", "captions": "en"}}, cats)
+    assert talking["captions_note"] == ""
+    plain = interp._material_state({"url": "https://a", "metadata": {}}, cats[:2])
+    assert plain["captions_note"] == ""
+    assert plain["allowed_categories"] == ["cat0", "cat1"]
+    print("material state ok")
+
+
+def test_parse_json_content_forms():
+    """Bare, fenced, and prose-wrapped JSON objects parse; junk is rejected."""
+    assert interp._parse_json_content('{"a": 1}') == {"a": 1}
+    assert interp._parse_json_content('```json\n{"a": 2}\n```') == {"a": 2}
+    assert interp._parse_json_content('```\n{"a": 5}\n```') == {"a": 5}
+    assert interp._parse_json_content('Answer:{"a": 3}!') == {"a": 3}
+    for bad in ("no object here", "}{", ""):
+        try:
+            interp._parse_json_content(bad)
+            raise AssertionError(f"accepted {bad!r}")
+        except ValueError:
+            pass
+    print("parse forms ok")
+
+
+def test_validated_findings_caps():
+    """Findings lists are capped (repos/warnings/categories at 10), the prompt
+    entry bound is 4000 chars, and the result shape is exact."""
+    cats = [f"c{i}" for i in range(12)]
+    source_url = "https://example.com/p"
+
+    def raw(**over):
+        base = {"summary": "s", "repos": [f"o/r{i}" for i in range(11)],
+                "prompts": ["p" * 4000], "links": [],
+                "categories": [f"c{i}" for i in range(11)], "installs": [],
+                "warnings": [f"w{i}" for i in range(11)]}
+        base.update(over)
+        return base
+
+    out = interp._validated(raw(), source_url, cats, [])
+    assert out == {"source": source_url, "summary": "s",
+                   "repos": [f"https://github.com/o/r{i}" for i in range(10)],
+                   "prompts": ["p" * 4000], "links": [],
+                   "categories": [f"c{i}" for i in range(10)],
+                   "installs": [], "warnings": [f"w{i}" for i in range(10)]}
+
+    # one char past the prompt bound is fatal, and names the offending list
+    try:
+        interp._validated(raw(prompts=["p" * 4001]), source_url, cats, [])
+        raise AssertionError("over-long prompt accepted")
+    except ValueError as exc:
+        assert "prompts entry exceeds 4000 chars" in str(exc)
+
+    # an off-collection category is dropped with a bounded-name warning
+    warnings = []
+    out = interp._validated(raw(categories=["x" * 60]), source_url, cats, warnings)
+    assert out["categories"] == []
+    assert any("'" + "x" * 50 + "'" in w for w in warnings), warnings
+    print("findings caps ok")
+
+
+def test_verify_urls_policy():
+    """Emitted URLs are re-fetched once each (deduped, http(s) only); past 20
+    the rest are skipped with an honest count."""
+    fetched = []
+
+    def failing_fetch(url, **k):
+        fetched.append(url)
+        raise net.NetworkError("down")
+
+    real_fetch = net.fetch_public
+    net.fetch_public = failing_fetch
+    try:
+        warnings = []
+        findings = {"repos": ["https://a/1", "https://a/1"],
+                    "links": ["https://b/2", "owner/name"], "warnings": []}
+        interp._verify_urls(findings, warnings)
+        assert fetched == ["https://a/1", "https://b/2"], fetched
+        assert sorted(findings["warnings"]) == ["unverified: https://a/1",
+                                                "unverified: https://b/2"]
+        assert warnings == [], warnings
+
+        fetched.clear()
+        findings = {"repos": [],
+                    "links": [f"https://h/{i}" for i in range(21)],
+                    "warnings": []}
+        warnings = []
+        interp._verify_urls(findings, warnings)
+        assert len(fetched) == 20, len(fetched)
+        assert warnings == ["1 URLs not re-verified"], warnings
+
+        fetched.clear()
+        findings = {"repos": [], "links": ["https://c/1"], "warnings": []}
+        warnings = []
+        interp._verify_urls(findings, warnings)
+        assert len(fetched) == 1
+        assert not any("not re-verified" in w for w in warnings), warnings
+    finally:
+        net.fetch_public = real_fetch
+    print("verify urls ok")
+
+
+def test_interpret_pipeline_contract():
+    """One POST with the exact chat contract; unknown reply keys surface in
+    warnings; a url-less source is refused without any endpoint call."""
+    categories = ["github"]
+    source = {"url": "https://example.com/page", "title": "T", "desc": "D",
+              "text": "body", "links": [], "assets": [], "metadata": {}}
+    cfg = {"base_url": "http://127.0.0.1:11434/v1", "model": "m", "api_key": None}
+    extra_raw = ('{"summary": "s", "repos": ["owner/repo"], "prompts": [], '
+                 '"links": [], "categories": ["github"], "installs": [], '
+                 '"warnings": [], "bonus": 1}')
+    calls = []
+
+    def spy_post(base, key, payload, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": extra_raw}}]}
+
+    real_fetch = net.fetch_public
+    net.fetch_public = lambda url, **k: (_ for _ in ()).throw(net.NetworkError("down"))
+    real_post = interp.post
+    interp.post = spy_post
+    try:
+        findings = interp.interpret(source, cfg, categories)
+        assert findings["repos"] == ["https://github.com/owner/repo"]
+        assert any("ignored unexpected keys: ['bonus']" in w
+                   for w in findings["warnings"]), findings["warnings"]
+        assert len(calls) == 1
+        payload = calls[0]
+        assert payload["model"] == "m" and payload["temperature"] == 0.2
+        assert payload["max_tokens"] == interp.OUTPUT_TOKENS_MAX
+        assert [m["role"] for m in payload["messages"]] == ["system", "user"]
+        text_part = payload["messages"][1]["content"][0]
+        assert text_part["type"] == "text"
+        assert text_part["text"].startswith(
+            'Capture material (untrusted JSON data):\n'
+            '{"url": "https://example.com/page"'), text_part["text"][:80]
+        assert text_part["text"].endswith("}")
+    finally:
+        interp.post = real_post
+        net.fetch_public = real_fetch
+
+    try:
+        interp.interpret({"nope": 1}, cfg, categories)
+        raise AssertionError("url-less source accepted")
+    except interp.InterpretationError as exc:
+        assert str(exc).endswith("url is required")
+    print("pipeline contract ok")
+
+
+def test_interpret_screening_thresholds():
+    """Steer thresholds: below review passes silently, mid steer flags but
+    preserves findings, zero-steer screening changes nothing."""
+    categories = ["github"]
+    source = {"url": "https://example.com/page", "title": "T", "desc": "D",
+              "text": "body", "links": [], "assets": [], "metadata": {}}
+    cfg = {"base_url": "http://127.0.0.1:11434/v1", "model": "m", "api_key": None}
+    good_raw = ('{"summary": "s", "repos": ["owner/repo"], "prompts": [], '
+                '"links": [], "categories": ["github"], "installs": ["pip i x"], '
+                '"warnings": []}')
+
+    def ok_post(base, key, payload, timeout):
+        return {"choices": [{"message": {"content": good_raw}}]}
+
+    def screen(steer, sev=0.0, meta=None):
+        return lambda state, api_key=None: {"text_steer": steer,
+                                            "meta_steer": meta, "severity": sev}
+
+    real_fetch = net.fetch_public
+    net.fetch_public = lambda url, **k: (_ for _ in ()).throw(net.NetworkError("down"))
+    try:
+        # zero steer with a missing meta answer: findings pass through intact
+        with mock.patch.object(interp.judgment, "available", return_value=True), \
+             mock.patch.object(interp.judgment, "screen_material",
+                               screen(0.0, meta=None)), \
+             mock.patch.object(interp, "post", ok_post):
+            findings = interp.interpret(source, cfg, categories)
+        assert findings["repos"] == ["https://github.com/owner/repo"]
+        assert findings["installs"] == ["pip i x"]
+        assert not any("suspicious" in w for w in findings["warnings"]), \
+            findings["warnings"]
+
+        # steer below the review threshold: screened, but no flag
+        with mock.patch.object(interp.judgment, "available", return_value=True), \
+             mock.patch.object(interp.judgment, "screen_material",
+                               screen(0.10)), \
+             mock.patch.object(interp, "post", ok_post):
+            findings = interp.interpret(source, cfg, categories)
+        assert not any("suspicious content flagged" in w
+                       for w in findings["warnings"]), findings["warnings"]
+
+        # mid steer (review..action): flagged, findings intact
+        with mock.patch.object(interp.judgment, "available", return_value=True), \
+             mock.patch.object(interp.judgment, "screen_material",
+                               screen(0.50)), \
+             mock.patch.object(interp, "post", ok_post):
+            findings = interp.interpret(source, cfg, categories)
+        assert findings["repos"] == ["https://github.com/owner/repo"]
+        assert any("suspicious content flagged" in w
+                   for w in findings["warnings"]), findings["warnings"]
+    finally:
+        net.fetch_public = real_fetch
+    print("screening thresholds ok")
+
+
+def test_check_connection_contract():
+    """The probe ships a system contract + color question + inline PNG; the
+    report shape is honest in all outcomes and never leaks the key."""
+    cfg = {"base_url": "http://h/v1", "model": "m", "api_key": "sk-check"}
+    real_post = interp.post
+
+    def offcontract_post(base, key, payload, timeout):
+        return {"choices": [{"message": {"content": '{"ok": false, "color": "red"}'}}]}
+
+    interp.post = offcontract_post
+    try:
+        report = interp.check_connection(cfg)
+        assert report["ok"] is False
+        assert report["message"].startswith(
+            "model replied but not with the JSON contract"), report["message"]
+    finally:
+        interp.post = real_post
+
+    calls = []
+
+    def blue_post(base, key, payload, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": '{"ok": true, "color": "blue"}'}}]}
+
+    interp.post = blue_post
+    try:
+        report = interp.check_connection(cfg)
+        assert report["ok"] is True
+        assert "blue" in report["message"]
+        assert ("via " + cfg["model"]) in report["message"], report["message"]
+        assert report["message"].endswith(")"), report["message"]
+        messages = calls[0]["messages"]
+        assert messages[0]["role"] == "system"
+        assert messages[0]["content"].endswith("}")
+        assert '"color": "<dominant color' in messages[0]["content"]
+        user = messages[1]["content"]
+        assert user[0]["type"] == "text"
+        assert user[0]["text"].endswith("?")
+        assert user[1]["type"] == "image_url"
+        assert user[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    finally:
+        interp.post = real_post
+
+    def leak_post(base, key, payload, timeout):
+        raise Exception(f"connect failed for key {key}")
+
+    interp.post = leak_post
+    try:
+        report = interp.check_connection(cfg)
+        assert report["ok"] is False
+        assert "sk-check" not in report["message"] and "***" in report["message"]
+    finally:
+        interp.post = real_post
+
+    report = interp.check_connection({"model": "m"})
+    assert report["ok"] is False
+    assert isinstance(report["message"], str) and report["message"]
+    print("check connection ok")
+
+
 def test_list_models():
     """The admin picker's source of truth: what the endpoint says it has."""
     calls = []
@@ -892,6 +1387,16 @@ def test():
     test_interpretation_bounds()
     test_screening_policy().debug()
     test_screening_warning_projection()
+    test_post_transport_and_http_errors()
+    test_image_source_bounds()
+    test_frame_extraction_contract()
+    test_material_state_shape()
+    test_parse_json_content_forms()
+    test_validated_findings_caps()
+    test_verify_urls_policy()
+    test_interpret_pipeline_contract()
+    test_interpret_screening_thresholds()
+    test_check_connection_contract()
     test_list_models()
     print("ok")
 

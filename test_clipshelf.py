@@ -151,6 +151,12 @@ def test():
                   "https://github.com/features/copilot", "https://github.com/login",
                   "https://github.com/a/b/blob/main/x.ipynb", "https://docs.github.com"):
         assert cs.tag_for(noise) is None, noise
+    # every GitHub nav namespace stays non-repo even with a second path segment
+    for w in ("customer-stories", "readme", "events", "explore", "settings",
+              "notifications", "login", "join", "signup", "contact", "new",
+              "why-github", "edu", "open-source", "orgs", "enterprise", "security"):
+        assert cs.tag_for(f"https://github.com/{w}/x") is None, w
+    assert cs.is_terminal("https://gist.github.com/x/1")
     assert cs.is_terminal("https://github.com/a/b") and not cs.is_terminal("https://example.com")
     for word in ("features", "pricing", "topics", "collections", "trending", "marketplace",
                  "sponsors", "about", "site", "orgs", "enterprise", "security",
@@ -160,8 +166,23 @@ def test():
         assert not cs.github_repo(f"https://github.com/{word}/x"), word
     assert cs.github_repo("https://github.com/owner/x")
 
+    assert cs.is_terminal("https://www.arxiv.org/abs/1")
+    assert cs.tag_for("https://arxiv.org/abs/1") == "arxiv"
+    assert cs.tag_for("https://colab.research.google.com/drive/1") == "colab"
+    assert cs.tag_for("https://www.huggingface.co/x") == "huggingface"
+    # every keyword matches via url path and via anchor text
+    for k in ("prompt", "guide", "tutorial", "awesome", "cheatsheet", "workflow", "docs"):
+        assert cs.tag_for(f"https://example.com/{k}") == k, k
+        assert cs.tag_for("https://example.com/x", f"Best {k.upper()} ever") == k, k
+    assert cs.tag_for("https://example.com/zqx") is None
+    # http scheme is allowed, not just https
+    assert cs.norm("http://example.com/x") == "http://example.com/x"
+
     # shortener detection
-    for short in ("https://share.google/abc", "https://vm.tiktok.com/ZS8x",
+    for short in ("https://share.google/abc", "https://goo.gl/x", "https://g.co/x",
+                  "https://bit.ly/x", "https://tinyurl.com/x", "https://vt.tiktok.com/x",
+                  "https://redd.it/x",
+                  "https://vm.tiktok.com/ZS8x",
                   "https://vt.tiktok.com/ZS9y",
                   "https://www.reddit.com/r/x/s/TOKEN", "https://www.tiktok.com/t/ZTx"):
         assert cs.is_short(short), short
@@ -201,6 +222,48 @@ def test():
     p.feed("<p>" + "word " * (cs.TEXT_LIMIT // 4))
     p.close()
     assert len(p.text) == 100_000  # TEXT_LIMIT: the documented model-input bound
+
+    # meta description: first one wins; og:description is a fallback
+    p = cs.PageParser()
+    p.feed('<meta name="description" content="first">'
+           '<meta name="description" content="second">')
+    assert p.desc == "first"
+    p = cs.PageParser()
+    p.feed('<meta property="og:description" content="og">')
+    assert p.desc == "og"
+    # anchor without href ignored; anchor text collected across data chunks/inline tags
+    p = cs.PageParser()
+    p.feed('<a>no href</a><a href="/x">A<b>B</b> <!-- c -->C</a>')
+    assert p.links == [("/x", "AB C")], p.links
+    # title closes: body text must not leak into .title
+    p = cs.PageParser()
+    p.feed('<title>T</title><p>Body</p>')
+    p.close()
+    assert p.title == "T" and "Body" in p.text
+    # <br> splits the line
+    p = cs.PageParser()
+    p.feed('a<br>b')
+    p.close()
+    assert p.text == "a b", p.text  # newline from <br> collapses to a space
+    # nested skip tags: skip counter returns to 0 after the outer container
+    p = cs.PageParser()
+    p.feed('<script>a<style>b</style>c</script><p>vis</p>')
+    p.close()
+    assert p.text == "vis", p.text
+    # every skip tag's content is excluded
+    for tag in ("script", "style", "template", "noscript", "svg", "head"):
+        p = cs.PageParser()
+        p.feed(f'<{tag}>hidden</{tag}><p>shown</p>')
+        p.close()
+        assert p.text == "shown", (tag, p.text)
+    # block-level closes start a new line
+    for tag in ("p", "div", "li", "ul", "ol", "tr", "table", "section", "article",
+                "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "figure",
+                "header", "footer", "main", "nav", "aside", "dl", "dt", "dd"):
+        p = cs.PageParser()
+        p.feed(f'<{tag}>a</{tag}><{tag}>b</{tag}>')
+        p.close()
+        assert p.text == "a b", (tag, p.text)
 
     _automatic_migration_waits_for_exclusive_lock()
     print("ok")

@@ -246,6 +246,72 @@ class StoreFindingsKeyTests(ScreeningMixin, TestCase):
         self.assertEqual(screen.call_args.kwargs["api_key"], "row-key")
 
 
+# ------------------------------------------------- judgment module contracts
+
+class JudgmentContractTests(SimpleTestCase):
+    """Bound checks and answer mapping of clipshelf.judgment itself."""
+
+    @staticmethod
+    def _link(i):
+        return {"url": f"https://k.test/{i}", "title": f"t{i}"}
+
+    def test_tag_links_rejects_more_than_50(self):
+        links = [self._link(i) for i in range(51)]
+        with self.assertRaises(judgment.JudgmentError) as cm:
+            judgment.tag_links(links)
+        self.assertIn("too many links", str(cm.exception))
+
+    def test_tag_links_at_limit_proceeds(self):
+        links = [self._link(i) for i in range(50)]
+        answers = {}
+        for i in range(len(links)):
+            answers[f"keep_{i}"] = mock.Mock(noul=float(i % 2))
+            answers[f"tag_{i}"] = mock.Mock(choice="github")
+        with mock.patch.object(judgment, "ask", return_value=answers) as ask:
+            result = judgment.tag_links(links)
+        self.assertEqual(len(result), len(links))
+        self.assertEqual(result[0], {"keep": 0.0, "tag": "github"})
+        self.assertEqual(result[1]["keep"], 1.0)
+        state, questions = ask.call_args.args
+        self.assertEqual(state["links"], links)
+        self.assertEqual(len(questions), 2 * len(links))
+
+    def test_tag_links_missing_tag_answer_raises(self):
+        answers = {"keep_0": mock.Mock(noul=0.9)}  # tag_0 absent
+        with mock.patch.object(judgment, "ask", return_value=answers):
+            with self.assertRaises(judgment.JudgmentError) as cm:
+                judgment.tag_links([self._link(0)])
+        self.assertIn("missing answer", str(cm.exception))
+
+    def test_tag_links_choice_none_raises(self):
+        answers = {"keep_0": mock.Mock(noul=0.9),
+                   "tag_0": mock.Mock(choice=None)}
+        with mock.patch.object(judgment, "ask", return_value=answers):
+            with self.assertRaises(judgment.JudgmentError):
+                judgment.tag_links([self._link(0)])
+
+    def test_screen_findings_rejects_more_than_40_entries(self):
+        state = {"entries": [f"https://e.test/{i}" for i in range(judgment.ENTRIES_MAX + 1)],
+                 "material": {}, "findings": {}}
+        with self.assertRaises(judgment.JudgmentError) as cm:
+            judgment.screen_findings(state)
+        self.assertIn("too many entries", str(cm.exception))
+
+    def test_screen_findings_maps_related_by_url(self):
+        state = {"entries": ["https://e.test/0", "https://e.test/1"],
+                 "material": {"page_text": "x"}, "findings": {"summary": "s"}}
+        answers = {"danger": mock.Mock(noul=1.2),
+                   "rel_0": mock.Mock(noul=0.8), "rel_1": mock.Mock(noul=0.02)}
+        with mock.patch.object(judgment, "ask", return_value=answers) as ask:
+            result = judgment.screen_findings(state)
+        self.assertEqual(result, {"danger": 1.2,
+                                  "related": {"https://e.test/0": 0.8,
+                                              "https://e.test/1": 0.02}})
+        asked_state, questions = ask.call_args.args
+        self.assertEqual(asked_state["entries"], state["entries"])
+        self.assertEqual(sorted(questions), ["danger", "rel_0", "rel_1"])
+
+
 # -------------------------------------------------------------- admin API
 
 class ScreeningApiTests(TestCase):

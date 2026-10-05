@@ -9,9 +9,9 @@ import uuid
 from pathlib import Path
 
 from django.core.exceptions import ValidationError
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 
-from clipshelf import asset_files
+from clipshelf import asset_files, models, publication, services
 
 
 class CustodyMixin:
@@ -206,3 +206,86 @@ class PrepareTests(CustodyMixin, SimpleTestCase):
                                                     "position": 7}]
         )
         self.assertEqual([p["position"] for p in prepared], [0, 7])
+
+    def test_prepare_caps_at_500_assets(self):
+        folder = self.tmp / "assets" / "bulk"
+        folder.mkdir(parents=True)
+        assets = []
+        for i in range(502):
+            target = folder / f"{i}-part.bin"
+            target.write_bytes(b"x")
+            assets.append({"path": str(target), "kind": "page"})
+        prepared = asset_files.prepare(assets)
+        self.assertEqual(len(prepared), asset_files.MAX_ASSETS)
+        self.assertEqual(prepared[0]["path"], (folder / "0-part.bin").relative_to(self.tmp).as_posix())
+        self.assertEqual(prepared[-1]["path"], (folder / "499-part.bin").relative_to(self.tmp).as_posix())
+
+    def test_prepare_rejection_errors_name_the_assets_field(self):
+        with self.assertRaises(ValidationError) as ctx:
+            asset_files.prepare(["nope"])
+        self.assertIn("assets", ctx.exception.message_dict)
+        # suffix marker: the field error names the expected shape, not free text
+        self.assertTrue(ctx.exception.message_dict["assets"][0].endswith("asset objects."))
+        with self.assertRaises(ValidationError) as kind_ctx:
+            asset_files.prepare([{"path": str(self.store(b"x")), "kind": "hologram"}])
+        self.assertIn("assets", kind_ctx.exception.message_dict)
+        self.assertTrue(kind_ctx.exception.message_dict["assets"][0].endswith("asset kind."))
+
+    def test_prepare_truncates_content_type_to_255_chars(self):
+        target = self.store(b"x")
+        prepared = asset_files.prepare(
+            [{"path": str(target), "kind": "page", "content_type": "t" * 300}]
+        )
+        self.assertEqual(prepared[0]["content_type"], "t" * 255)
+
+
+class LinkKeyTests(SimpleTestCase):
+    """The urlsplit fallback only runs for URLs lib.norm rejects (credentials,
+    non-http schemes); explicit default ports collapse only there."""
+
+    def test_fallback_drops_default_ports(self):
+        self.assertEqual(publication.link_key("http://user:pass@Host:80/x"), "http://host/x")
+        self.assertEqual(publication.link_key("https://user:pass@Host:443/a"), "https://host/a")
+
+    def test_fallback_keeps_non_default_ports(self):
+        self.assertEqual(
+            publication.link_key("http://user:pass@host:8443/x"), "http://host:8443/x"
+        )
+
+    def test_fallback_defaults_empty_path_to_root(self):
+        self.assertEqual(publication.link_key("ftp://host"), "ftp://host/")
+
+
+class PromptKeyTests(SimpleTestCase):
+    def test_prompt_key_is_legacy_sha1_prefix(self):
+        self.assertEqual(
+            publication.prompt_key("Hello World"),
+            hashlib.sha1(b"hello world").hexdigest()[:16],
+        )
+        self.assertEqual(publication.prompt_key("  a   b "), publication.prompt_key("A B"))
+        self.assertEqual(len(publication.prompt_key("x")), 16)
+
+
+class PublishPromptTests(TestCase):
+    def setUp(self):
+        self.user = models.User.objects.create_user(username="pub1", email="pub1@example.com")
+        self.collection = services.personal_collection(self.user)
+
+    def test_publish_prompt_reports_published_vs_removed(self):
+        self.assertTrue(publication.publish_prompt(
+            collection=self.collection, user=self.user, text="first prompt",
+            data={"text": "first prompt"}, origin="capture"))
+        entry = models.Entry.objects.get(collection=self.collection, kind="prompt")
+        self.assertEqual(entry.key, publication.prompt_digest("first prompt"))
+        self.assertEqual(
+            models.Contribution.objects.get(entry=entry, user=self.user).data["text"],
+            "first prompt")
+        models.History.objects.create(
+            collection=self.collection, user=self.user,
+            kind=models.History.Kind.REMOVED, url=publication.prompt_digest("removed"))
+        self.assertFalse(publication.publish_prompt(
+            collection=self.collection, user=self.user, text="removed",
+            data={"text": "removed"}, origin="capture"))
+        self.assertFalse(models.Entry.objects.filter(
+            collection=self.collection, kind="prompt", key=publication.prompt_digest("removed")
+        ).exists())
