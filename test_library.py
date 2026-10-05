@@ -908,7 +908,8 @@ class ImportTests(ApiTestCase):
         response = self._post_import(alice, content, collection=other)
         self.assertEqual(response.status_code, 409)
         self.assertEqual(
-            response.json()["detail"], "request id reused with a different payload"
+            response.json()["detail"],
+            "file was already imported to a different collection",
         )
         self.assertEqual(ImportRecord.objects.filter(user=self.alice).count(), 1)
         self.assertEqual(os.listdir(staging), staged)

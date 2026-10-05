@@ -689,7 +689,7 @@ def api_import(request):
         if existing is not None:
             if (existing.manifest or {}).get("collection_id") != str(collection.id):
                 raise ApiError(
-                    409, "conflict", "file was already imported to a different collection"
+                    409, detail="file was already imported to a different collection"
                 )
             os.remove(spooled)
             return _json(
@@ -747,7 +747,7 @@ def api_import(request):
                 )
             if (record.manifest or {}).get("collection_id") != str(collection.id):
                 raise ApiError(
-                    409, "conflict", "file was already imported to a different collection"
+                    409, detail="file was already imported to a different collection"
                 )
             os.remove(spooled)
             return _json(
