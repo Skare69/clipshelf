@@ -100,22 +100,33 @@ android {
     }
 }
 
-// The android-all artifacts must match every SDK a Robolectric test touches:
-// @Config(sdk = 34) sandboxes (Robolectric 4.14.1 ids) plus the targetSdk 35
-// app-loading path. Robolectric 4.14.1 resolves these ids per SDK.
+// One configuration per version: Gradle version-conflict resolution would
+// otherwise collapse the two android-all modules to the highest version and
+// silently drop the other SDK's jar.
+def robolectricAllIds = ["14-robolectric-10818077-i7", "15-robolectric-12650502-i7"]
 configurations {
-    robolectricSeed
+    robolectricAllIds.each { id -> create("robolectricSeed$id") }
 }
 dependencies {
-    robolectricSeed "org.robolectric:android-all-instrumented:14-robolectric-10818077-i7"
-    robolectricSeed "org.robolectric:android-all-instrumented:15-robolectric-12650502-i7"
+    robolectricAllIds.each { id ->
+        add("robolectricSeed$id", "org.robolectric:android-all-instrumented:$id")
+    }
 }
 
 def robolectricDir = layout.buildDirectory.dir("robolectric-all")
 
 tasks.register("seedRobolectricRepo", Copy) {
-    from(configurations.robolectricSeed)
+    robolectricAllIds.each { id -> from(configurations.getByName("robolectricSeed$id")) }
     into robolectricDir
+    doLast {
+        def dir = robolectricDir.get().asFile
+        def missing = robolectricAllIds.findAll {
+            !new File(dir, "android-all-instrumented-${it}.jar").isFile()
+        }
+        if (!missing.isEmpty()) {
+            throw new GradleException("Robolectric seed incomplete in ${dir}: missing ${missing}")
+        }
+    }
 }
 
 dependencies {
