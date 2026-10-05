@@ -885,8 +885,8 @@ def test_post_transport_and_http_errors():
 
 
 def test_image_source_bounds():
-    """Source images above the 32 MiB bound are refused before decoding;
-    a file exactly at the bound still decodes to one inline part."""
+    """Source images above the 32 MiB bound are skipped before decoding with
+    an honest warning; a file exactly at the bound still decodes to one part."""
     tmp = tempfile.mkdtemp(prefix="cs-img-")
     try:
         warnings = []
@@ -894,12 +894,10 @@ def test_image_source_bounds():
         with open(big, "wb") as fh:
             fh.seek(32 << 20)  # 32 MiB + 1 byte, sparse; size independent of the constant
             fh.write(b"\0")
-        try:
-            interp._image_parts({"assets": [{"kind": "image", "path": big}]},
-                                warnings, interp.IMAGES_MAX)
-            raise AssertionError("oversized source file accepted")
-        except ValueError as exc:
-            assert "size bound" in str(exc)
+        parts = interp._image_parts({"assets": [{"kind": "image", "path": big}]},
+                                    warnings, interp.IMAGES_MAX)
+        assert parts == [], parts
+        assert any("size bound" in w for w in warnings), warnings
 
         at = os.path.join(tmp, "at.png")
         data = png_bytes()
