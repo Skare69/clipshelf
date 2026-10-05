@@ -69,7 +69,15 @@ class Command(BaseCommand):
                     "with string values")
             secrets_needed = list(secrets)
 
-        target_db = Path(str(settings.DATABASES["default"]["NAME"]))
+        # NAME can be a SQLite URI (":memory:" / "file:...?..." under Django's
+        # test runner). Treating it as a path stages to garbage names and the
+        # sqlite3 open creates a zero-byte "file" in the working directory.
+        name = str(settings.DATABASES["default"]["NAME"])
+        if name == ":memory:" or name.startswith("file:"):
+            raise CommandError(
+                f"refusing restore: database {name!r} is not a file-backed "
+                "SQLite path; restore swaps the instance db.sqlite3 in place")
+        target_db = Path(name)
         data_dir = Path(settings.DATA_DIR)
         tables = self._tables(target_db)
         if tables:

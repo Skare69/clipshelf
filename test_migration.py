@@ -5,6 +5,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -549,6 +550,34 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
             self.assertEqual(str(uuid.UUID(str(restored_id))), instance_id,
                              "identity lost in restore")
             self.assertTrue((fresh / asset_rel).is_file(), "asset not restored")
+
+    def test_restore_rejects_uri_database_without_littering_cwd(self):
+        """Root cause of the zero-byte 'file' exhaust that dirtied every gate
+        run: under the Django test runner DATABASES NAME is sqlite's
+        shared-cache URI (file:memorydb_default?...), not a path. Restore used
+        to treat it as a file, staged to garbage paths, and SQLite created a
+        zero-byte 'file' in the working directory."""
+        name = str(connection.settings_dict["NAME"])
+        self.assertTrue(
+            name == ":memory:" or name.startswith("file:"),
+            f"precondition lost: test DB is file-backed ({name!r}); rewrite "
+            "this test against the runner's real non-file name")
+        backup_dir = self.tmp / "bk"
+        backup_dir.mkdir()
+        con = sqlite3.connect(str(backup_dir / "db.sqlite3"))
+        try:
+            con.execute("CREATE TABLE marker (x)")
+            con.commit()
+        finally:
+            con.close()
+        (backup_dir / "manifest.json").write_text("{}", encoding="utf-8")
+
+        before = sorted(os.listdir(os.getcwd()))
+        with self.assertRaises(CommandError) as ctx:
+            call_command("restore", "--input", str(backup_dir))
+        self.assertIn("file-backed", str(ctx.exception))
+        self.assertEqual(sorted(os.listdir(os.getcwd())), before,
+                         "restore littered the working directory")
 
 
 def _interpreted_item(url):
