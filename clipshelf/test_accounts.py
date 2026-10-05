@@ -13,6 +13,7 @@ from unittest.mock import patch
 from uuid import uuid4
 from urllib.error import URLError
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied
 from django.http import JsonResponse
@@ -347,6 +348,37 @@ class NativeTokenTests(AccountTestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class TokenAdminReauthTests(AccountTestCase):
+    """Sensitive admin actions over X-Session-Token: request.user must be the
+    admin (not anonymous) and reauth bookkeeping must land in the token
+    session so the window survives follow-up token requests."""
+
+    def setUp(self):
+        super().setUp()
+        self.token = self.headless_login(self.admin.email).json()["meta"]["session_token"]
+        self.target = make_user("toktarget@clipshelf.test")
+
+    def _post(self, body):
+        return self.client.post(
+            f"/api/admin/users/{self.target.pk}/status",
+            data=json.dumps(body),
+            content_type="application/json",
+            headers={"x-session-token": self.token},
+        )
+
+    def test_reauth_password_disables_and_books_the_window(self):
+        with override_settings(ACCOUNT_REAUTHENTICATION_TIMEOUT=0):
+            response = self._post({"active": False, "reauth_password": PASSWORD})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(get_user_model().objects.get(pk=self.target.pk).is_active)
+        # A token request never mints a browser session cookie.
+        self.assertNotIn(settings.SESSION_COOKIE_NAME, response.cookies)
+        # The reauth record lives in the token session: no password needed now.
+        response = self._post({"active": True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(get_user_model().objects.get(pk=self.target.pk).is_active)
+
+
 class AdminBoundaryTests(AccountTestCase):
     def test_admin_endpoints_reject_anonymous_and_non_admins(self):
         self.assertEqual(self.client.get("/api/admin/users").status_code, 401)
@@ -486,6 +518,14 @@ class AdminBoundaryTests(AccountTestCase):
         self.assertTrue(
             accessible_collections(member).filter(pk=shared.pk).exists()
         )
+
+    def test_method_not_allowed_is_json_on_the_production_mount(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            "/api/admin/users", data="{}", content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 405)
+        self.assertEqual(response.json(), {"detail": "method_not_allowed"})
 
 
 class LlmModelPickerTests(AccountTestCase):

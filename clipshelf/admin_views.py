@@ -28,8 +28,8 @@ from allauth.account.utils import user_pk_to_url_str
 from clipshelf.accounts import (
     INVITATION_TTL,
     ApiError,
+    api_auth,
     api_csrf,
-    api_user,
     canonical_url,
     has_recent_reauthentication,
     invitation_token_hash,
@@ -80,21 +80,38 @@ def admin_endpoint(*methods):
                 response = json_error(405, detail="method_not_allowed")
             else:
                 try:
-                    user = api_user(request)
+                    user, token_session = api_auth(request)
                 except PermissionDenied:
                     response = json_error(401, detail="unauthenticated")
                 else:
                     if not user.is_app_admin:
                         response = json_error(403, detail="forbidden")
                     else:
+                        # api_auth authenticated this request; downstream
+                        # checks (reauth password) need the real user even
+                        # when a session token stood in for the cookie.
+                        request.user = user
+                        original = request.session
+                        if token_session is not None:
+                            # Run against the session the token names so
+                            # allauth reauthentication records persist for
+                            # token clients; restored below so the response
+                            # never mints a browser session cookie.
+                            request.session = token_session
                         try:
-                            response = view(request, user, *args, **kwargs)
-                        except ApiError as exc:
-                            response = exc.response
-                        except ValidationError as exc:
-                            response = json_error(
-                                400, errors=[str(m) for m in exc.messages]
-                            )
+                            try:
+                                response = view(request, user, *args, **kwargs)
+                            except ApiError as exc:
+                                response = exc.response
+                            except ValidationError as exc:
+                                response = json_error(
+                                    400, errors=[str(m) for m in exc.messages]
+                                )
+                        finally:
+                            if token_session is not None:
+                                request.session = original
+                                if token_session.modified:
+                                    token_session.save()
             # Same contract as the /api wrapper: admin responses carry user,
             # invitation and reset-link data and never enter private caches.
             response["Cache-Control"] = "no-store"

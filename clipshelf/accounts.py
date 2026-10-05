@@ -179,16 +179,23 @@ def invite_view(request, token):
     )
 
 
-def api_user(request):
-    """Return the active, email-verified User for this request.
+def api_auth(request):
+    """Return (user, token_session) for this request.
 
     Requests carrying X-Session-Token authenticate exclusively through the
     allauth session-token strategy (session-key token) plus Django's own
     session validation (auth hash incl. session_version and fallback
     secrets); a missing or invalid token never falls back to the browser
     cookie session. Raises PermissionDenied when unauthenticated.
+
+    token_session is the session the token names, or None for cookie
+    sessions. Callers that keep allauth bookkeeping for token clients
+    (admin reauthentication) run their view against it, then restore the
+    original session so SessionMiddleware never leaks the token session as
+    a Set-Cookie.
     """
     strategy = headless_settings.TOKEN_STRATEGY
+    session = None
     token = strategy.get_session_token(request)
     if token:
         session = strategy.lookup_session(token)
@@ -211,6 +218,12 @@ def api_user(request):
         user=user, email__iexact=user.email, verified=True
     ).exists():
         raise PermissionDenied
+    return user, session
+
+
+def api_user(request):
+    """Return the active, email-verified User for this request."""
+    user, _ = api_auth(request)
     return user
 
 
