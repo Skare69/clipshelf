@@ -43,14 +43,22 @@ DEFAULT_TARGETS = [
 ]
 EXCLUDED_PARTS = ("migrations/", "project/wsgi", "project/apps", "project/signals")
 
-# Per-mutant test command: unittest discovery via the Django wrapper, the same
-# suite CI runs. Tests fake all transports, so a mutant run makes no requests.
-TEST_CMD = [sys.executable, "clipshelf.py", "test", "--verbosity", "0"]
-# suite baseline ~10s; 120s absorbs pathological mutants without stalling runs
+# Per-mutant test commands: the full CI suite (ci.yml) = Django unittest
+# discovery plus the two standalone script suites it runs separately. Tests
+# fake all transports, so a mutant run makes no requests.
+SUITE_CMDS = [
+    [sys.executable, "clipshelf.py", "test", "--verbosity", "0"],
+    [sys.executable, "test_clipshelf.py"],
+    [sys.executable, "test_sources.py"],
+]
+# suite baseline ~13s; 120s absorbs pathological mutants without stalling runs
 DEFAULT_TIMEOUT = 120
-# Ratchet floor from the first measured run: 120-mutant stratified sample of
-# the default scope scored ~59% killed (bound 58.3-60.0%); gate sits ~1
-# sampling-margin (±4.5pts at n=120) below it. Raise as tests improve; the
+# Ratchet floor: first reproducible full-suite measurement (2026-10-05,
+# 116-mutant stratified sample of the default scope) killed 94/116 = 81.0%;
+# the residue is docstrings, screening prompt text, and dead branches. An
+# earlier ~59% record did not reproduce on identical inputs (the harness ran
+# only part of the CI suite then, and its concurrent full-scope run inflated
+# kills via timeout-counts-as-killed). Raise as tests improve; the
 # survived-mutant log names where. Never lower.
 DEFAULT_FAIL_UNDER = 55
 
@@ -130,6 +138,15 @@ def run_suite(ws, env, cmd, timeout):
         return None, f"{out}\n{err}"[-4000:]
 
 
+def run_suites(ws, env, timeout):
+    """Run every CI suite command; stop at the first failing one."""
+    for cmd in SUITE_CMDS:
+        code, out = run_suite(ws, env, cmd, timeout)
+        if code != 0:
+            return code, out
+    return 0, ""
+
+
 def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
     """Copy sources in, mutate one site at a time, classify, restore."""
     total = killed = 0
@@ -154,7 +171,7 @@ def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
         env["CLIPSHELF_DATA_DIR"] = str(temp_root / f"data-{n}")
         env["CLIPSHELF_DEBUG"] = "1"
         start = time.monotonic()
-        code, out = run_suite(ws, env, TEST_CMD, timeout)
+        code, out = run_suites(ws, env, timeout)
         dt = time.monotonic() - start
         (ws / rel).write_text(baseline_text[rel], encoding="utf-8")  # restore
         total += 1
@@ -212,8 +229,8 @@ def run(args, log=print):
     env = dict(os.environ)
     env["CLIPSHELF_DATA_DIR"] = str(temp_root / "data-baseline")
     env["CLIPSHELF_DEBUG"] = "1"
-    log(f"baseline: {' '.join(TEST_CMD)}")
-    code, out = run_suite(ws, env, TEST_CMD, args.timeout)
+    log(f"baseline: {SUITE_CMDS}")
+    code, out = run_suites(ws, env, args.timeout)
     if code != 0:
         log(f"baseline suite fails (exit {code}); mutation scores are meaningless:\n{out}")
         return 2
