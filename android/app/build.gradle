@@ -88,6 +88,9 @@ android {
             it.dependsOn seedRobolectricRepo
             it.systemProperty "robolectric.dependency.dir",
                     layout.buildDirectory.dir("robolectric-all").get().asFile.absolutePath
+            it.testLogging {
+                exceptionFormat "full"
+            }
         }
     }
 
