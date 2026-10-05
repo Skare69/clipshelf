@@ -287,6 +287,14 @@ class ScreeningApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.json()["detail"], "api_key is required")
 
+    def test_post_null_api_key_never_stores_the_none_literal(self):
+        """JSON null normalizes to empty: a bogus "None" value must never read
+        as a configured key."""
+        response = self.admin_post("/api/admin/screening", {"api_key": None}, reauth=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(services.get_settings().typesafe_api_key, "")
+        self.assertFalse(response.json()["screening"]["has_api_key"])
+
     def test_get_never_echoes_the_key(self):
         self.set_row_key("sekrit")
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": ""}):

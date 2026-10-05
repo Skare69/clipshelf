@@ -584,6 +584,23 @@ class LlmModelPickerTests(AccountTestCase):
         self.assertEqual(s.llm_api_key, "")
         self.assertIsNone(s.llm_verified_at)
 
+    def test_retyped_key_survives_an_endpoint_move(self):
+        """The admin re-entered the key for the new endpoint (the check preview
+        validated exactly those values): the save must keep it. A key merely
+        carried over from the old endpoint is still isolated."""
+        self.admin_post("/api/admin/llm", {"base_url": "http://saved/v1", "api_key": "stored"},
+                        reauth=True)
+        response = self.admin_post(
+            "/api/admin/llm", {"base_url": "http://moved/v1", "api_key": "stored"})
+        self.assertTrue(response.json()["llm"]["has_api_key"])
+        self.admin_post("/api/admin/llm/models", {})
+        self.assertEqual(self.requests[-1], ("http://moved/v1/models", "Bearer stored"))
+        s = ServerSettings.objects.get(pk=1)
+        self.assertEqual(s.llm_api_key, "stored")
+        self.assertIsNone(s.llm_verified_at)  # capability check reruns on the new endpoint
+        response = self.admin_post("/api/admin/llm", {"base_url": "http://third/v1"})
+        self.assertFalse(response.json()["llm"]["has_api_key"])
+
     def test_check_probes_the_typed_values_not_stale_saved_ones(self):
         saved = "http://saved/v1"
         self.admin_post("/api/admin/llm", {"base_url": saved, "model": "old",

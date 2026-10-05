@@ -351,8 +351,13 @@ def llm_config(request, user):
         if not 1 <= concurrency <= 8:
             raise ApiError(400, detail="concurrency must be between 1 and 8.")
         s.llm_concurrency = concurrency
-    base_url, model, api_key = s.resolve(**_resolve_kwargs(body))
+    kwargs = _resolve_kwargs(body)
+    base_url, model, api_key = s.resolve(**kwargs)
     s.llm_base_url, s.llm_model, s.llm_api_key = base_url, model, api_key or ""
+    # The request itself supplied the key: it belongs to the (possibly new)
+    # endpoint and survives the move the isolation policy would otherwise clear.
+    if kwargs.get("api_key"):
+        s.typed_api_key = True
     s.save()  # verification reset and endpoint key rules live on the model
     return JsonResponse({"llm": _llm_dict(s)})
 
@@ -405,7 +410,7 @@ def screening(request, user):
     _require_reauth(request, body)
     if "api_key" not in body:
         raise ApiError(400, detail="api_key is required")
-    s.typesafe_api_key = str(body["api_key"])
+    s.typesafe_api_key = str(body["api_key"] or "")
     s.save(update_fields=["typesafe_api_key"])
     return JsonResponse({"screening": _screening_dict()})
 

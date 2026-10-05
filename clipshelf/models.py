@@ -426,7 +426,11 @@ class ServerSettings(models.Model):
 
     def save(self, *args, **kwargs):
         """Verification invalidation and endpoint key isolation live here, so
-        every writer (admin API or direct model save) gets the same policy."""
+        every writer (admin API or direct model save) gets the same policy.
+        typed_api_key=True marks a request-supplied key: it belongs to the
+        (possibly new) endpoint and survives a move; the flag is consumed."""
+        explicit_key = getattr(self, "typed_api_key", False)
+        self.typed_api_key = False
         if not self._state.adding:
             update_fields = kwargs.get("update_fields")
             tracked = ("llm_base_url", "llm_model", "llm_api_key")
@@ -450,7 +454,13 @@ class ServerSettings(models.Model):
                 )
                 if changed:
                     self.llm_verified_at = None  # actual change: capability check must rerun
-                stale_key = moved and self.llm_api_key == saved.get("llm_api_key")
+                # A key explicitly re-entered for the new endpoint stays; only
+                # one carried over unchanged from the old endpoint is isolated.
+                stale_key = (
+                    moved
+                    and self.llm_api_key == saved.get("llm_api_key")
+                    and not explicit_key
+                )
                 if stale_key:
                     self.llm_api_key = ""  # a stored key belongs to its old endpoint
                 if changed and update_fields is not None:
