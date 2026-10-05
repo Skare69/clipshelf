@@ -15,8 +15,6 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
-import androidx.work.testing.WorkManagerTestInitHelper;
-
 import java.io.File;
 
 import dev.clipshelf.app.Creds;
@@ -44,7 +42,9 @@ public class ShareReceiverActivityTest {
                 .putString("user_id", "user-1")
                 .putString("email", "a@b.c")
                 .commit();
-        WorkManagerTestInitHelper.initializeTestWorkManager(ctx);
+        // No WorkManager init: DurableShare.accelerate absorbs the enqueue failure,
+        // so the saved confirmation stays correct without leaking executor threads
+        // that would keep the shared test JVM alive after the run.
     }
 
     private static Intent shareIntent(String text) {

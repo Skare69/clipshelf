@@ -80,6 +80,15 @@ android {
         unitTests {
             includeAndroidResources = true
         }
+        unitTests.all {
+            // Robolectric fetches android-all at test runtime over its own HTTP
+            // stack, which fails on some CI egress (SSL handshake). Resolve the
+            // artifact through Gradle instead and hand the test JVM a seeded
+            // Maven-layout dir, so tests never touch the network.
+            it.dependsOn seedRobolectricRepo
+            it.systemProperty "robolectric.dependency.dir",
+                    layout.buildDirectory.dir("robolectric-all").get().asFile.absolutePath
+        }
     }
 
     compileOptions {
@@ -88,9 +97,26 @@ android {
     }
 }
 
+// The android-all artifacts must match every SDK a Robolectric test touches:
+// @Config(sdk = 34) sandboxes (Robolectric 4.14.1 ids) plus the targetSdk 35
+// app-loading path. Robolectric 4.14.1 resolves these ids per SDK.
+configurations {
+    robolectricSeed
+}
+dependencies {
+    robolectricSeed "org.robolectric:android-all-instrumented:14-robolectric-10818077-i7"
+    robolectricSeed "org.robolectric:android-all-instrumented:15-robolectric-12650502-i7"
+}
+
+def robolectricDir = layout.buildDirectory.dir("robolectric-all")
+
+tasks.register("seedRobolectricRepo", Copy) {
+    from(configurations.robolectricSeed)
+    into robolectricDir
+}
+
 dependencies {
     implementation "androidx.work:work-runtime:2.9.1"
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.robolectric:robolectric:4.14.1"
-    testImplementation "androidx.work:work-testing:2.9.1"
 }
