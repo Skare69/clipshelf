@@ -241,7 +241,7 @@ class InvitationFlowTests(AccountTestCase):
         self.client.force_login(self.admin)
 
         response = self.admin_post(
-            "/admin/invitations", {"email": email}, reauth=True
+            "/api/admin/invitations", {"email": email}, reauth=True
         )
 
         self.assertEqual(response.status_code, 201)
@@ -466,7 +466,7 @@ class AdminBoundaryTests(AccountTestCase):
         self.client.force_login(self.admin)
 
         response = self.admin_post(
-            f"/admin/collections/{shared.pk}/transfer",
+            f"/api/admin/collections/{shared.pk}/transfer",
             {"owner_id": str(member.pk)},
             reauth=True,
         )

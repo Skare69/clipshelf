@@ -330,7 +330,7 @@ class ScreeningApiTests(TestCase):
                 mock.patch.object(judgment, "ask",
                                   return_value={"ai_tool": mock.Mock(noul=0.98)}) as ask:
             response = self.admin_post(
-                "/admin/screening/check", {"api_key": "typed-key"}, reauth=True
+                "/api/admin/screening/check", {"api_key": "typed-key"}, reauth=True
             )
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["ok"])
