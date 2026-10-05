@@ -211,11 +211,16 @@ suite still passes is a survived mutant — a behavior no test guards.
   command modules join the scope the same way. Tests, migrations and wiring
   are never mutated (the suite is the oracle).
 - Gate: `--fail-under` exits nonzero below the score percent. The default
-  `DEFAULT_FAIL_UNDER = 55` is the ratchet floor from the initial 120-mutant
-  stratified sample of the default scope (~59% killed; the gap sits mostly in
-  `clipshelf/interpretation.py`) minus one sampling margin — raise it as tests
-  improve, never lower it. `--max-mutants N` gives a stratified smoke sample;
-  `python mutate.py self-check` verifies the harness itself in under a second.
+  `DEFAULT_FAIL_UNDER = 55` is the ratchet floor — raise it as tests improve,
+  never lower it. Measured 2026-10-05 with the full CI suite per mutant
+  (Django discovery plus the two standalone script suites): a 116-mutant
+  stratified sample of the default scope scored 81.0% killed; the residue is
+  docstrings, screening prompt text, and provably dead branches. An earlier
+  recorded ~59% baseline did not reproduce on identical inputs: it ran before
+  the harness covered the whole CI suite, and its concurrent full-scope run
+  inflated kills (a per-mutant timeout counts as killed). `--max-mutants N`
+  gives a stratified smoke sample; `python mutate.py self-check` verifies
+  the harness itself in under a second.
 
 ## License
 
