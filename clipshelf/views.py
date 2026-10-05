@@ -30,6 +30,7 @@ from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.static import serve as _static_serve
 
+from clipshelf.accounts import ApiError, json_error
 from clipshelf import accounts, asset_files, services
 from clipshelf.models import (
     Asset,
@@ -65,18 +66,6 @@ _BANNED_IMPORT_KEYS = {
 _INERT_TYPES = {"text/html", "application/xhtml+xml", "application/xml", "text/xml"}
 
 
-class ApiError(Exception):
-    def __init__(self, status, code, message):
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.message = message
-
-
-def _error(status, code, message):
-    return JsonResponse({"error": message, "code": code}, status=status)
-
-
 def _json(payload, status=200):
     return JsonResponse(payload, status=status)
 
@@ -103,23 +92,22 @@ def api(view):
         try:
             user = accounts.api_user(request)
         except PermissionDenied:
-            return _error(401, "unauthenticated", "authentication required")
+            return json_error(401, detail="unauthenticated")
         request.user = user
         try:
             response = protected(request, *args, **kwargs)
         except ApiError as exc:
-            response = _error(exc.status, exc.code, exc.message)
+            response = exc.response
         except ValidationError as exc:
             conflict = getattr(exc, "code", None) == "conflict"
-            response = _error(
+            response = json_error(
                 409 if conflict else 400,
-                "conflict" if conflict else "invalid",
-                _vmessage(exc),
+                detail=_vmessage(exc),
             )
         except PermissionDenied:
-            response = _error(403, "forbidden", "not allowed")
+            response = json_error(403, detail="forbidden")
         except Http404:
-            response = _error(404, "not_found", "no such resource")
+            response = json_error(404, detail="no such resource")
         response["Cache-Control"] = "no-store"
         return response
 
@@ -129,23 +117,23 @@ def api(view):
 def _json_body(request):
     body = request.body or b""
     if len(body) > MAX_BODY_BYTES:
-        raise ApiError(413, "oversized", "request body too large")
+        raise ApiError(413, detail="request body too large")
     try:
         data = json.loads(body) if body else {}
     except ValueError:
-        raise ApiError(400, "invalid_json", "malformed JSON body")
+        raise ApiError(400, detail="malformed JSON body")
     if not isinstance(data, dict):
-        raise ApiError(400, "invalid_json", "JSON object expected")
+        raise ApiError(400, detail="JSON object expected")
     return data
 
 
 def _uuid_or_400(value, field):
     if not value:
-        raise ApiError(400, "invalid", f"{field} required")
+        raise ApiError(400, detail=f"{field} required")
     try:
         return uuid_mod.UUID(str(value))
     except (ValueError, AttributeError):
-        raise ApiError(400, "invalid", f"{field} must be a UUID")
+        raise ApiError(400, detail=f"{field} must be a UUID")
 
 
 def _import_max_bytes():
@@ -252,14 +240,14 @@ def shell(request):
 
 def not_found(request, exception=None):
     if request.path.startswith("/api/"):
-        return _error(404, "not_found", "no such resource")
+        return json_error(404, detail="no such resource")
     return HttpResponse("not found", status=404, content_type="text/plain")
 
 
 
 def server_error(request):
     if request.path.startswith("/api/"):
-        return _error(500, "server_error", "internal server error")
+        return json_error(500, detail="internal server error")
     return HttpResponse("server error", status=500, content_type="text/plain")
 
 
@@ -321,7 +309,7 @@ def api_collections(request):
     body = _json_body(request)
     name = str(body.get("name") or "").strip()
     if not name or len(name) > MAX_NAME_LEN:
-        raise ApiError(400, "invalid", "name must be 1-200 characters")
+        raise ApiError(400, detail="name must be 1-200 characters")
     collection = Collection.objects.create(name=name, kind="shared", owner=user)
     return _json({"collection": _collection_json(collection, user)}, status=201)
 
@@ -351,21 +339,21 @@ def api_collection_members(request, collection_id):
     user = request.user
     collection = _accessible_collection(user, collection_id)
     if collection.kind != "shared":
-        raise ApiError(403, "forbidden", "personal collections have no members")
+        raise ApiError(403, detail="personal collections have no members")
     if collection.owner_id != user.id:
-        raise ApiError(403, "forbidden", "only the owner manages members")
+        raise ApiError(403, detail="only the owner manages members")
     body = _json_body(request)
     email = str(body.get("email") or "").strip()
     target = User.objects.filter(email__iexact=email, is_active=True).first()
     if target is None:
-        raise ApiError(400, "invalid", "no active user with that email")
+        raise ApiError(400, detail="no active user with that email")
     if target.id == collection.owner_id:
-        raise ApiError(409, "conflict", "owner is already a member")
+        raise ApiError(409, detail="owner is already a member")
     try:
         with transaction.atomic():  # keep the outer transaction usable on conflict
             Membership.objects.create(collection=collection, user=target)
     except IntegrityError:
-        raise ApiError(409, "conflict", "already a member")
+        raise ApiError(409, detail="already a member")
     return _json(
         {
             "member": {
@@ -384,11 +372,11 @@ def api_collection_member(request, collection_id, user_id):
     user = request.user
     collection = _accessible_collection(user, collection_id)
     if collection.kind != "shared":
-        raise ApiError(403, "forbidden", "personal collections have no members")
+        raise ApiError(403, detail="personal collections have no members")
     if collection.owner_id != user.id:
-        raise ApiError(403, "forbidden", "only the owner manages members")
+        raise ApiError(403, detail="only the owner manages members")
     if str(user_id) == str(collection.owner_id):
-        raise ApiError(400, "invalid", "ownership transfers, never member removal")
+        raise ApiError(400, detail="ownership transfers, never member removal")
     membership = Membership.objects.filter(collection=collection, user_id=user_id).first()
     if membership is None:
         raise Http404("not a member")
@@ -403,7 +391,7 @@ def api_settings(request):
     body = _json_body(request)
     collection = _accessible_collection(user, body.get("default_collection_id"))
     if not services.can_write(user, collection):
-        raise ApiError(403, "forbidden", "destination is not writable")
+        raise ApiError(403, detail="destination is not writable")
     user.default_collection = collection
     user.save(update_fields=["default_collection"])
     return _json(_me_payload(user))
@@ -452,7 +440,7 @@ def api_entries(request):
     kind = request.GET.get("kind")
     if kind:
         if kind not in ("link", "prompt"):
-            raise ApiError(400, "invalid", "kind must be link or prompt")
+            raise ApiError(400, detail="kind must be link or prompt")
         qs = qs.filter(kind=kind)
     collection_id = request.GET.get("collection_id")
     if collection_id:
@@ -466,7 +454,7 @@ def api_entries(request):
     ]
     sort = request.GET.get("sort", "new")
     if sort not in ("az", "new"):
-        raise ApiError(400, "invalid", "sort must be az or new")
+        raise ApiError(400, detail="sort must be az or new")
     if sort == "az":
         pairs.sort(key=lambda p: str(p[1].get("title") or p[1].get("url") or "").lower())
     else:
@@ -476,9 +464,9 @@ def api_entries(request):
         offset = max(0, int(request.GET.get("offset", "0")))
         limit = int(request.GET.get("limit", str(DEFAULT_PAGE)))
     except ValueError:
-        raise ApiError(400, "invalid", "offset and limit must be integers")
+        raise ApiError(400, detail="offset and limit must be integers")
     if limit <= 0:
-        raise ApiError(400, "invalid", "limit must be positive")
+        raise ApiError(400, detail="limit must be positive")
     limit = min(limit, MAX_PAGE)
     return _json({"entries": filtered[offset : offset + limit], "count": len(filtered)})
 
@@ -556,12 +544,12 @@ def api_asset(request, asset_id):
 def _check_identity(body, user):
     instance_id = body.get("instance_id")
     if not instance_id:
-        raise ApiError(400, "invalid", "instance_id required")
+        raise ApiError(400, detail="instance_id required")
     if str(instance_id) != str(services.get_settings().instance_id):
-        raise ApiError(409, "conflict", "unknown server instance")
+        raise ApiError(409, detail="unknown server instance")
     user_id = body.get("user_id")
     if user_id is not None and str(user_id) != str(user.id):
-        raise ApiError(409, "conflict", "client identity does not match account")
+        raise ApiError(409, detail="client identity does not match account")
 
 
 @api
@@ -592,10 +580,10 @@ def api_captures(request):
         )
     except ValidationError as exc:
         if getattr(exc, "code", None) == "oversized":
-            raise ApiError(413, "oversized", _vmessage(exc))
+            raise ApiError(413, detail=_vmessage(exc))
         raise
     except PermissionDenied:
-        raise ApiError(403, "forbidden", "destination not available")
+        raise ApiError(403, detail="destination not available")
     return _json({"receipt": services.receipt(capture)}, status=201 if created else 200)
 
 
@@ -633,7 +621,7 @@ def api_job_retry(request, job_id):
         try:
             current.requeue()
         except ValueError:
-            raise ApiError(409, "conflict", "job is already queued or running")
+            raise ApiError(409, detail="job is already queued or running")
     return _json({"job": _job_json(current)})
 
 
@@ -642,11 +630,11 @@ def api_job_retry(request, job_id):
 
 def _scan_import_keys(node, depth=0):
     if depth > MAX_IMPORT_DEPTH:
-        raise ApiError(400, "invalid", "export nesting exceeds the supported depth")
+        raise ApiError(400, detail="export nesting exceeds the supported depth")
     if isinstance(node, dict):
         for key, value in node.items():
             if str(key).lower() in _BANNED_IMPORT_KEYS:
-                raise ApiError(400, "invalid", f"export must not contain {key!r}")
+                raise ApiError(400, detail=f"export must not contain {key!r}")
             _scan_import_keys(value, depth + 1)
     elif isinstance(node, list):
         for value in node:
@@ -659,16 +647,16 @@ def api_import(request):
     user = request.user
     upload = request.FILES.get("file")
     if upload is None:
-        raise ApiError(400, "invalid", "multipart file required")
+        raise ApiError(400, detail="multipart file required")
     max_bytes = _import_max_bytes()
     if upload.size and upload.size > max_bytes:
-        raise ApiError(413, "oversized", "import exceeds the configured ceiling")
+        raise ApiError(413, detail="import exceeds the configured ceiling")
     body = request.POST
     request_id = _uuid_or_400(body.get("client_request_id"), "client_request_id")
     _check_identity(body, user)
     collection = _accessible_collection(user, body.get("collection_id"))
     if not services.can_write(user, collection):
-        raise ApiError(403, "forbidden", "destination not writable")
+        raise ApiError(403, detail="destination not writable")
 
     root = _data_root()
     staging = os.path.join(root, STAGING_SUBDIR)
@@ -682,7 +670,7 @@ def api_import(request):
             for chunk in upload.chunks():
                 written += len(chunk)
                 if written > max_bytes:
-                    raise ApiError(413, "oversized", "import exceeds the configured ceiling")
+                    raise ApiError(413, detail="import exceeds the configured ceiling")
                 digest.update(chunk)
                 out.write(chunk)
 
@@ -697,7 +685,7 @@ def api_import(request):
             .exists()
         )
         if clash:
-            raise ApiError(409, "conflict", "request id reused with a different payload")
+            raise ApiError(409, detail="request id reused with a different payload")
         if existing is not None:
             if (existing.manifest or {}).get("collection_id") != str(collection.id):
                 raise ApiError(
@@ -717,18 +705,17 @@ def api_import(request):
             try:
                 data = json.load(fh)
             except ValueError:
-                raise ApiError(400, "invalid", "file is not valid JSON")
+                raise ApiError(400, detail="file is not valid JSON")
         if isinstance(data, list):
             if not all(isinstance(item, dict) for item in data):
-                raise ApiError(400, "invalid", "tiktok.json must be a list of objects")
+                raise ApiError(400, detail="tiktok.json must be a list of objects")
             fmt = "tiktok"
         elif isinstance(data, dict) and isinstance(data.get("links"), dict):
             fmt = "legacy"
         else:
             raise ApiError(
                 400,
-                "invalid",
-                "file must be a tiktok.json list of objects "
+                detail="file must be a tiktok.json list of objects "
                 "or a legacy library.json object with a 'links' object",
             )
         _scan_import_keys(data)
@@ -756,7 +743,7 @@ def api_import(request):
                 # unique(user, client_request_id) lost: same request id,
                 # different payload. Outer handler removes the staged file.
                 raise ApiError(
-                    409, "conflict", "request id reused with a different payload"
+                    409, detail="request id reused with a different payload"
                 )
             if (record.manifest or {}).get("collection_id") != str(collection.id):
                 raise ApiError(

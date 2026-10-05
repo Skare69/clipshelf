@@ -142,7 +142,7 @@ class AuthenticationBoundaryTests(ApiTestCase):
             response = client.get(path)
             self.assertEqual(response.status_code, 401, path)
             self.assertIn("application/json", response["Content-Type"])
-            self.assertIn(b"error", response.content)
+            self.assertIn(b'"detail"', response.content)
             self.assertFalse(response.content.lstrip().startswith(b"<"))
 
     def test_invalid_session_token_never_falls_back_to_cookie(self):
@@ -521,7 +521,7 @@ class CaptureTests(ApiTestCase):
         big = "https://example.com/x " + "y" * 33000
         oversized = self._post_capture(alice, self._capture_body(self.alice, text=big))
         self.assertEqual(oversized.status_code, 413)
-        self.assertEqual(oversized.json()["code"], "oversized")
+        self.assertEqual(oversized.json()["detail"], "Text exceeds 32768 UTF-8 bytes.")
         # The ceiling is UTF-8 bytes, not characters: multibyte text can pass
         # every other check and still exceed it.
         multibyte = "https://example.com/x " + "é" * 18000
