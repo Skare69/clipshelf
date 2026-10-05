@@ -437,7 +437,7 @@ def test_interpretation_bounds():
         except interp.ConfigurationError:
             pass
     report = interp.check_connection({"model": "m"})
-    assert report["ok"] is False
+    assert report["ok"] is False and set(report) == {"ok", "message"}, report
 
     # findings shape/size/URL/category validation
     good_raw = '{"summary": "s", "repos": ["owner/repo"], "prompts": [], ' \
@@ -521,7 +521,8 @@ def test_interpretation_bounds():
     try:
         report = interp.check_connection({"base_url": "http://h/x", "model": "m",
                                           "api_key": "sekret"})
-        assert report["ok"] is False and "sekret" not in report["message"]
+        assert report == {"ok": False,
+                          "message": "connect failed for key *** at host"}, report
     finally:
         interp.post = real_post
 
@@ -534,7 +535,9 @@ def test_interpretation_bounds():
     interp.post = spy_post
     try:
         report = interp.check_connection({"base_url": "http://h/x", "model": "m"})
-        assert report["ok"] is True
+        assert report == {"ok": True, "message": "image+JSON ok via m (saw: red)"}, report
+        assert calls[-1]["temperature"] == 0  # deterministic probe
+        assert [m["role"] for m in calls[-1]["messages"]] == ["system", "user"]
         assert calls[-1]["max_tokens"] == interp.OUTPUT_TOKENS_MAX
     finally:
         interp.post = real_post
@@ -650,7 +653,7 @@ def test_list_models():
         def __exit__(self, *a): return False
 
     def fake_open(req, timeout=None):
-        calls.append((req.full_url, req.get_header("Authorization")))
+        calls.append((req.full_url, req.get_header("Authorization"), req.get_method()))
         return Resp(json.dumps({"data": [{"id": "b"}, {"id": "a"}, {"id": "a"},
                                          {"id": 7}, {"id": " "}, {}, None, "junk"]}).encode())
 
@@ -659,7 +662,7 @@ def test_list_models():
     try:
         # sorted, deduped, non-string ids dropped; trailing slash not doubled
         assert interp.list_models({"base_url": "http://h/v1/", "api_key": "sekret"}) == ["a", "b"]
-        assert calls[0] == ("http://h/v1/models", "Bearer sekret")
+        assert calls[0] == ("http://h/v1/models", "Bearer sekret", "GET")
         # a local endpoint without a key sends no Authorization header
         interp.list_models({"base_url": "http://h/v1"})
         assert calls[1][1] is None
@@ -673,6 +676,29 @@ def test_list_models():
             raise AssertionError("401 accepted")
         except interp.ConfigurationError as exc:
             assert "credentials" in str(exc) and "sekret" not in str(exc)
+
+        def broken(req, timeout=None):
+            raise interp.urllib.error.HTTPError(req.full_url, 500, "no", {}, io.BytesIO(b""))
+
+        interp.urllib.request.urlopen = broken
+        try:
+            interp.list_models({"base_url": "http://h/v1"})
+            raise AssertionError("500 accepted")
+        except interp.ConfigurationError as exc:
+            assert str(exc) == "endpoint cannot list models (HTTP 500)", exc
+
+        # chat transport: both auth refusals read as credential errors
+        for code in (401, 403):
+            def refused(req, timeout=None, code=code):
+                raise interp.urllib.error.HTTPError(
+                    req.full_url, code, "no", {}, io.BytesIO(b"sekret detail"))
+
+            interp.urllib.request.urlopen = refused
+            try:
+                interp.post("http://h/v1", "sekret", {}, 5)
+                raise AssertionError(f"{code} accepted")
+            except interp.InterpretationError as exc:
+                assert str(exc) == f"endpoint rejected credentials (HTTP {code})", exc
 
         def unreachable(req, timeout=None):
             raise interp.urllib.error.URLError("refused by sekret")

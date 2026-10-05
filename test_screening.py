@@ -2,6 +2,7 @@
 import json
 import os
 import uuid
+from types import SimpleNamespace
 from unittest import mock
 
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -125,6 +126,93 @@ class AvailableKeyTests(SimpleTestCase):
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "env-key"}):
             self.assertTrue(judgment.available(None))
             self.assertTrue(judgment.available("row-key"))
+
+
+class JudgmentClientTests(SimpleTestCase):
+    """judgment's own seam: key/model resolution and answer -> result mapping,
+    with the TypeSafe client faked at its constructor."""
+
+    def fake_client(self, answers):
+        calls = []
+
+        class Client:
+            def __init__(self, **kwargs):
+                calls.append(("init", kwargs))
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def system_one(self, state, questions, timeout):
+                calls.append(("ask", state, sorted(questions)))
+                return SimpleNamespace(answers=answers)
+
+        return calls, mock.patch.object(judgment, "TypeSafeClient", Client)
+
+    def test_explicit_key_beats_env_and_env_names_the_model(self):
+        calls, client = self.fake_client({"ai_tool": SimpleNamespace(noul=0.9)})
+        env = {"TYPESAFE_API_KEY": "env-key", "TYPESAFE_MODEL": "model-x"}
+        with mock.patch.dict(os.environ, env), client:
+            self.assertEqual(judgment.ping(api_key=" row-key "), 0.9)
+        self.assertEqual(calls[0][1]["api_key"], "row-key")
+        self.assertEqual(calls[0][1]["model"], "model-x")
+
+    def test_env_key_is_the_fallback_and_model_defaults_to_none(self):
+        calls, client = self.fake_client({"ai_tool": SimpleNamespace(noul=0.4)})
+        with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "env-key"}), client:
+            os.environ.pop("TYPESAFE_MODEL", None)
+            judgment.ping()
+        self.assertEqual(calls[0][1]["api_key"], "env-key")
+        self.assertIsNone(calls[0][1]["model"])
+
+    def test_screen_material_maps_each_answer_to_its_verdict(self):
+        calls, client = self.fake_client({
+            "text_steer": SimpleNamespace(noul=0.1),
+            "meta_steer": SimpleNamespace(noul=0.2),
+            "severity": SimpleNamespace(score=1.5)})
+        with client:
+            result = judgment.screen_material({"url": "https://a.test/"}, api_key="k")
+        self.assertEqual(result, {"text_steer": 0.1, "meta_steer": 0.2, "severity": 1.5})
+        self.assertEqual(calls[1][2], ["meta_steer", "severity", "text_steer"])
+
+    def test_screen_findings_maps_danger_and_per_entry_relatedness(self):
+        entries = ["https://a.test/1", "https://b.test/2"]
+        calls, client = self.fake_client({
+            "danger": SimpleNamespace(score=0.5),
+            "rel_0": SimpleNamespace(noul=0.9),
+            "rel_1": SimpleNamespace(noul=0.1)})
+        state = {"material": {"title": "T"}, "findings": {"summary": "s"},
+                 "entries": entries}
+        with client:
+            result = judgment.screen_findings(state, api_key="k")
+        self.assertEqual(result, {"danger": 0.5,
+                                  "related": {entries[0]: 0.9, entries[1]: 0.1}})
+        self.assertEqual(calls[1][1], state)
+
+    def test_screen_findings_accepts_entries_max_and_rejects_one_more(self):
+        n = judgment.ENTRIES_MAX
+        answers = {"danger": SimpleNamespace(score=0.0)}
+        answers.update({f"rel_{i}": SimpleNamespace(noul=1.0) for i in range(n)})
+        _, client = self.fake_client(answers)
+        entries = [f"https://e.test/{i}" for i in range(n + 1)]
+        with client:
+            result = judgment.screen_findings(
+                {"material": {}, "findings": {}, "entries": entries[:n]}, api_key="k")
+            self.assertEqual(len(result["related"]), n)
+            with self.assertRaises(judgment.JudgmentError):
+                judgment.screen_findings(
+                    {"material": {}, "findings": {}, "entries": entries}, api_key="k")
+
+    def test_missing_entry_answer_is_named_in_the_error(self):
+        _, client = self.fake_client({"danger": SimpleNamespace(score=0.0),
+                                      "rel_0": SimpleNamespace(noul=1.0)})
+        state = {"material": {}, "findings": {},
+                 "entries": ["https://a.test/1", "https://b.test/2"]}
+        with client, self.assertRaisesMessage(
+                judgment.JudgmentError, "non-numeric answer 'rel_1'"):
+            judgment.screen_findings(state, api_key="k")
 
 
 class InterpretKeyTests(SimpleTestCase):

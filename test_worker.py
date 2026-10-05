@@ -474,6 +474,14 @@ class IngestCommandTests(WorkerMixin, TestCase):
 class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
     """One publication owner: every route agrees on identity, removals hold."""
 
+    def test_link_key_fallback_canonicalizes_urls_norm_rejects(self):
+        from clipshelf import publication
+        self.assertEqual(publication.link_key("https://user:pw@Example.com/a#frag"),
+                         "https://example.com/a")
+        self.assertEqual(publication.link_key("https://user@Example.com:8443/a"),
+                         "https://example.com:8443/a")
+        self.assertEqual(publication.link_key(" https:///no-host "), "https:///no-host")
+
     def test_redirect_keeps_source_and_findings_on_one_entry(self):
         job = self.make_job(url="https://example.com/short")
         resolved = "https://example.com/full-article"

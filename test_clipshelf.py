@@ -134,6 +134,7 @@ def test():
     assert cs.norm("http://[::ffff:127.0.0.1]/x") == "http://[::ffff:127.0.0.1]/x"
     assert cs.norm("http://[::1]:80/a") == "http://[::1]:80/a"
     assert cs.norm("  https://example.com/x ,") == "https://example.com/x"
+    assert cs.norm("https://example.com/a?si=abc&x=1") == "https://example.com/a?x=1"
 
     # tagging + terminal hosts
     assert cs.tag_for("https://github.com/foo/bar") == "github"
@@ -141,15 +142,24 @@ def test():
     assert cs.tag_for("https://huggingface.co/x") == "huggingface"
     assert cs.tag_for("https://example.com/x", "Awesome Prompt list") == "prompt"
     assert cs.tag_for("https://example.com/boring") is None
+    assert cs.tag_for("https://example.com/x", "Beginner Tutorial") == "tutorial"
     # github nav chrome / non-repo shapes are rejected
     for noise in ("https://github.com", "https://github.com/anthropics",
                   "https://github.com/features/copilot", "https://github.com/login",
                   "https://github.com/a/b/blob/main/x.ipynb", "https://docs.github.com"):
         assert cs.tag_for(noise) is None, noise
     assert cs.is_terminal("https://github.com/a/b") and not cs.is_terminal("https://example.com")
+    for word in ("features", "pricing", "topics", "collections", "trending", "marketplace",
+                 "sponsors", "about", "site", "orgs", "enterprise", "security",
+                 "customer-stories", "readme", "events", "explore", "settings",
+                 "notifications", "login", "join", "signup", "contact", "new",
+                 "why-github", "edu", "open-source"):
+        assert not cs.github_repo(f"https://github.com/{word}/x"), word
+    assert cs.github_repo("https://github.com/owner/x")
 
     # shortener detection
     for short in ("https://share.google/abc", "https://vm.tiktok.com/ZS8x",
+                  "https://vt.tiktok.com/ZS9y",
                   "https://www.reddit.com/r/x/s/TOKEN", "https://www.tiktok.com/t/ZTx"):
         assert cs.is_short(short), short
     for full in ("https://www.tiktok.com/@u/video/1", "https://reddit.com/r/x/comments/1/y",
@@ -162,6 +172,9 @@ def test():
            '<a href="/rel">Awesome  prompts</a><a href="https://github.com/a/b">repo</a>')
     assert p.title == "T" and p.desc == "D"
     assert p.links == [("/rel", "Awesome prompts"), ("https://github.com/a/b", "repo")]
+    p = cs.PageParser()
+    p.feed('<meta property="og:description" content="OG">')
+    assert p.desc == "OG"
 
     # readable body text: non-rendered containers excluded, block boundaries split
     p = cs.PageParser()
@@ -172,12 +185,19 @@ def test():
     p.close()
     assert p.title == "T"
     assert p.text == "First para secondbold", p.text  # inline tags add no space
+    blocks = ("p", "div", "li", "ul", "ol", "tr", "table", "section", "article",
+              "h1", "h2", "h3", "h4", "h5", "h6", "blockquote", "pre", "figure",
+              "header", "footer", "main", "nav", "aside", "dl", "dt", "dd")
+    p = cs.PageParser()
+    p.feed("".join(f"<{tag}>w{i}</{tag}>" for i, tag in enumerate(blocks)) + "a<br>b")
+    p.close()
+    assert p.text == " ".join(f"w{i}" for i in range(len(blocks))) + " a b", p.text
 
     # readable text is bounded
     p = cs.PageParser()
     p.feed("<p>" + "word " * (cs.TEXT_LIMIT // 4))
     p.close()
-    assert len(p.text) <= cs.TEXT_LIMIT
+    assert len(p.text) == 100_000  # TEXT_LIMIT: the documented model-input bound
 
     _automatic_migration_waits_for_exclusive_lock()
     print("ok")
