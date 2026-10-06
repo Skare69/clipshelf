@@ -3,11 +3,13 @@
 
 Generates single-site mutants (operator swaps, constant tweaks) of the
 targeted modules, then runs the repo's own offline test suite once per mutant
-inside a copied workspace with a per-mutant throwaway data dir. Mutant runs
-execute nothing but the repo's tests: no network, no other commands. The real
-checkout is never modified — all writes land in a copy under
-the system temp directory's clipshelf-mutation folder. Nothing the harness creates
-is ever deleted (operator policy: leftover run dirs are expected, not leaks).
+inside a workspace holding only the git-tracked files (gitignored personal
+data, caches, and credentials never get copied) with a per-mutant throwaway
+data dir. Mutant runs execute nothing but the repo's tests: no network, no
+other commands. The real checkout is never modified — all writes land in a
+copy under the system temp directory's clipshelf-mutation folder. Nothing the
+harness creates is ever deleted (operator policy: leftover run dirs are
+expected, not leaks).
 
 Usage:
   python mutate.py                          # default scope: DEFAULT_TARGETS
@@ -207,6 +209,22 @@ def changed_targets(base_ref):
     return targets
 
 
+def copy_tracked(repo, ws):
+    """Copy the working-tree content of git-tracked files only; ignored and
+    untracked files (personal data, caches, keystores) stay behind. Symlinks
+    are skipped so a tracked link cannot pull in a file outside the repo."""
+    out = subprocess.run(["git", "ls-files", "-z"], cwd=repo,
+                         capture_output=True, check=True)
+    copied = set()
+    for rel in out.stdout.decode("utf-8").split("\0"):
+        src = repo / rel
+        if rel and src.is_file() and not src.is_symlink():
+            (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src, ws / rel)
+            copied.add(rel)
+    return copied
+
+
 def run(args, log=print):
     if args.diff:
         targets = changed_targets(args.diff)
@@ -231,11 +249,11 @@ def run(args, log=print):
     temp_root = TEMP_ROOT / f"run-{run_id}"
     ws = temp_root / "workspace"
     log(f"workspace: {ws} (kept after the run; nothing is deleted)")
-    shutil.copytree(REPO, ws, ignore=shutil.ignore_patterns(
-        ".git", ".venv", "__pycache__", "data", "android", "node_modules",
-        ".worktrees", "htmlcov", ".pytest_cache", ".ruff_cache", "clipshelf-mutation",
-        ".secrets", ".env*", "docs", "library.json", "server.log"),
-        dirs_exist_ok=True)
+    copied = copy_tracked(REPO, ws)
+    untracked = [t for t in targets if Path(t).as_posix() not in copied]
+    if untracked:
+        log(f"target(s) not tracked by git: {', '.join(untracked)}")
+        return 2
     env = dict(os.environ)
     env["CLIPSHELF_DATA_DIR"] = str(temp_root / "data-baseline")
     env["CLIPSHELF_DEBUG"] = "1"

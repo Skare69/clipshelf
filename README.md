@@ -211,10 +211,12 @@ suite still passes is a survived mutant — a behavior no test guards.
 
 - Stdlib only (Python 3.13, `ast` + `unittest`), no new dependencies; the
   mutation tool never ships in the runtime image.
-- Safety: mutants run in a copied workspace under `TEMP/clipshelf-mutation/`
-  with a per-mutant throwaway `CLIPSHELF_DATA_DIR`; the checkout is never
-  modified, mutant runs execute only the offline test suite (no network, no
-  other commands), and nothing the harness creates is deleted.
+- Safety: mutants run in a workspace under `TEMP/clipshelf-mutation/` that
+  holds only the git-tracked files (gitignored personal data, caches and
+  keystores are never copied), with a per-mutant throwaway
+  `CLIPSHELF_DATA_DIR`; the checkout is never modified, mutant runs execute
+  only the offline test suite (no network, no other commands), and nothing
+  the harness creates is deleted.
 - Scope: `DEFAULT_TARGETS` in `mutate.py` — the pure-logic domain modules.
   For a change-sized run use `python mutate.py --diff origin/main`; view and
   command modules join the scope the same way. Tests, migrations and wiring
