@@ -559,10 +559,20 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
         backed_assets = [p for p in (backup_dir / "assets").rglob("*") if p.is_file()]
         self.assertTrue(backed_assets, "media missing from backup")
 
-        # live overwrite refused: the current database already has tables
-        with override_settings(DATA_DIR=str(self.tmp)):
-            with self.assertRaises(CommandError):
+        # live overwrite refused: a populated file-backed target (the runner's
+        # own DB is a URI, which the non-file guard would reject first)
+        live = self.tmp / "live"
+        live.mkdir()
+        live_db = live / "live.db"
+        shutil.copy2(backup_dir / "db.sqlite3", live_db)
+        with override_settings(
+                DATA_DIR=str(live),
+                DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3",
+                                       "NAME": str(live_db)}}):
+            with self.assertRaisesMessage(CommandError, "refusing live overwrite"):
                 call_command("restore", "--input", str(backup_dir))
+        self.assertEqual(sorted(p.name for p in live.iterdir()), ["live.db"],
+                         "refusal must precede staging")
 
         # isolated restore into an empty data directory
         fresh = self.tmp / "fresh"
