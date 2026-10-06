@@ -383,6 +383,37 @@ def _staging_finished_at(manifest, created_at):
     return parsed if timezone.is_aware(parsed) else timezone.make_aware(parsed)
 
 
+def _staging_sweep_candidates(manifest_paths, accepts, now=None):
+    """Shared ImportRecord staging-retention rule.
+
+    manifest_paths(manifest) yields the manifest values naming staging
+    paths; accepts(path) is the per-path qualification (containment under
+    DATA_DIR/staging plus file/directory kind). A path qualifies only when
+    every record naming it is finished (done/error) and at least one owner
+    is past the retention window; any live (pending/running) owner keeps
+    the path ineligible at any age. Returns accepted paths sorted.
+    """
+    now = now or timezone.now()
+    root = (Path(settings.DATA_DIR) / "staging").resolve()
+    cutoff = now - timedelta(days=STAGING_RETENTION_DAYS)
+    claims = {}
+    for record in models.ImportRecord.objects.only("manifest", "created_at").iterator():
+        manifest = record.manifest or {}
+        for rel in manifest_paths(manifest):
+            if not isinstance(rel, str) or not rel:
+                continue
+            path = (Path(settings.DATA_DIR) / rel).resolve()
+            if not accepts(path):
+                continue
+            claims.setdefault(path, []).append(
+                (manifest.get("status"),
+                 _staging_finished_at(manifest, record.created_at)))
+    return sorted(
+        path for path, owners in claims.items()
+        if all(status in ("done", "error") for status, _ in owners)
+        and any(finished <= cutoff for _, finished in owners))
+
+
 def staging_cleanup_candidates(now=None):
     """Staged uploads an approved retention sweep may delete, sorted by path.
 
@@ -392,26 +423,11 @@ def staging_cleanup_candidates(now=None):
     and at least one owner is past the retention window; any live
     (pending/running) owner keeps the path ineligible at any age.
     """
-    now = now or timezone.now()
     root = (Path(settings.DATA_DIR) / "staging").resolve()
-    cutoff = now - timedelta(days=STAGING_RETENTION_DAYS)
-    claims = {}
-    for record in models.ImportRecord.objects.only("manifest", "created_at").iterator():
-        manifest = record.manifest or {}
-        rel = manifest.get("staging")
-        if not isinstance(rel, str) or not rel:
-            continue
-        path = (Path(settings.DATA_DIR) / rel).resolve()
-        if not path.is_relative_to(root) or path == root:
-            continue
-        claims.setdefault(path, []).append(
-            (manifest.get("status"),
-             _staging_finished_at(manifest, record.created_at)))
-    return sorted(
-        path for path, owners in claims.items()
-        if path.is_file()
-        and all(status in ("done", "error") for status, _ in owners)
-        and any(finished <= cutoff for _, finished in owners))
+    return _staging_sweep_candidates(
+        lambda manifest: [manifest.get("staging")],
+        lambda path: path.is_relative_to(root) and path != root and path.is_file(),
+        now=now)
 
 
 def run_staged_import(record):
@@ -473,27 +489,12 @@ def import_media_cleanup_candidates(now=None):
     is past the retention window; any live (pending/running) owner keeps it
     ineligible at any age.
     """
-    now = now or timezone.now()
     root = (Path(settings.DATA_DIR) / "staging").resolve()
-    cutoff = now - timedelta(days=STAGING_RETENTION_DAYS)
-    claims = {}
-    for record in models.ImportRecord.objects.only("manifest", "created_at").iterator():
-        manifest = record.manifest or {}
-        for rel in [manifest.get("media_staging"),
-                    *(manifest.get("retained_media_staging") or [])]:
-            if not isinstance(rel, str) or not rel:
-                continue
-            path = (Path(settings.DATA_DIR) / rel).resolve()
-            if path.parent != root or path == root:
-                continue
-            claims.setdefault(path, []).append(
-                (manifest.get("status"),
-                 _staging_finished_at(manifest, record.created_at)))
-    return sorted(
-        path for path, owners in claims.items()
-        if path.is_dir()
-        and all(status in ("done", "error") for status, _ in owners)
-        and any(finished <= cutoff for _, finished in owners))
+    return _staging_sweep_candidates(
+        lambda manifest: [manifest.get("media_staging"),
+                          *(manifest.get("retained_media_staging") or [])],
+        lambda path: path.parent == root and path != root and path.is_dir(),
+        now=now)
 
 
 # ------------------------------------------------------------- import engine
