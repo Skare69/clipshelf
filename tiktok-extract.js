@@ -7,7 +7,7 @@
 // no fetch/CORS/bot-detection issues. Allow pop-ups for tiktok.com.
 //
 // Downloads tiktok.json (descriptions + image/video bytes embedded as base64;
-// media that refuses byte-reads keeps its URL and the CLI fetches it).
+// oversized media or failed byte-reads keep their URLs for CLI fetch).
 // Feed it to the tool:  python clipshelf.py tiktok.json
 
 // best-quality-first, deduped play-mirror URLs; [] for photo posts.
@@ -33,6 +33,33 @@ function isTikTokUrl(value) {
       (hostname === "tiktok.com" || hostname.endsWith(".tiktok.com"));
   } catch {
     return false;
+  }
+}
+
+async function boundedBlob(response) {
+  // ponytail: 80MB is the existing video ceiling; use it for images too.
+  const limit = 80e6;
+  if (Number(response.headers.get("Content-Length")) >= limit) {
+    await response.body?.cancel();
+    return null;
+  }
+  if (!response.body) return new Blob();
+  const reader = response.body.getReader();
+  const chunks = [];
+  let size = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return new Blob(chunks);
+      size += value.byteLength;
+      if (size >= limit) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
   }
 }
 
@@ -113,7 +140,8 @@ async function tiktokExtract(urls, onProgress) {
         try {
           const r = await fetch(iu);
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          images.push({ url: iu, b64: await toB64(await r.blob()) });
+          const blob = await boundedBlob(r);
+          images.push(blob ? { url: iu, b64: await toB64(blob) } : { url: iu });
         } catch {
           images.push({ url: iu }); // CLI fetches by URL at ingest time
         }
@@ -128,13 +156,14 @@ async function tiktokExtract(urls, onProgress) {
           // omitted and it answers 403 (fetch does NOT throw on that)
           const r = await fetch(vu, { credentials: "include" });
           if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          const blob = await r.blob();
-          const head = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
-          if (head.length < 8 || String.fromCharCode(head[4], head[5], head[6], head[7]) !== "ftyp")
-            throw new Error("not mp4 (CDN error body)");
-          // ponytail: 80MB base64 ceiling keeps tiktok.json usable
+          const blob = await boundedBlob(r);
+          if (blob) {
+            const head = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+            if (head.length < 8 || String.fromCharCode(head[4], head[5], head[6], head[7]) !== "ftyp")
+              throw new Error("not mp4 (CDN error body)");
+          }
           video = { urls: mirrors };
-          if (blob.size < 80e6) video.b64 = await toB64(blob);
+          if (blob) video.b64 = await toB64(blob);
           break;
         } catch (e) {
           console.warn("video mirror failed:", e.message, vu.slice(0, 60));
@@ -272,8 +301,10 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
     }
     const previousDocument = global.document;
     const previousTimeout = global.setTimeout;
+    const previousFetch = global.fetch;
     const previousCreateObjectURL = URL.createObjectURL;
     let openerWasCleared = false;
+    let itemStruct = {};
     let locationHref = "about:blank";
     const worker = {
       opener: {},
@@ -292,7 +323,7 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
             ? {
                 textContent: JSON.stringify({
                   __DEFAULT_SCOPE__: {
-                    "webapp.video-detail": { itemInfo: { itemStruct: {} } },
+                    "webapp.video-detail": { itemInfo: { itemStruct } },
                   },
                 }),
               }
@@ -319,6 +350,45 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
       await tiktokExtract(["https://www.tiktok.com/@test/video/1"]);
       assert.strictEqual(popupCalls, 2);
       assert.strictEqual(openerWasCleared, true);
+      const imageUrl = "https://cdn.example/cover";
+      const videoUrl = "https://cdn.example/video";
+      itemStruct = { video: { cover: imageUrl, playAddr: videoUrl } };
+      let imageReads = 0, videoReads = 0, imageCancelled = false, videoCancelled = false;
+      const chunk = new Uint8Array(1e6);
+      global.fetch = async (url, options) => {
+        if (url === imageUrl) {
+          assert.strictEqual(options, undefined);
+          return new Response(new ReadableStream({
+            pull(controller) { imageReads++; controller.enqueue(chunk); },
+            cancel() { imageCancelled = true; },
+          }, { highWaterMark: 0 }), { headers: { "Content-Length": "80000000" } });
+        }
+        assert.strictEqual(url, videoUrl);
+        assert.deepStrictEqual(options, { credentials: "include" });
+        return new Response(new ReadableStream({
+          pull(controller) {
+            if (++videoReads > 80) throw new Error("oversized stream was not cancelled");
+            controller.enqueue(chunk);
+          },
+          cancel() { videoCancelled = true; },
+        }, { highWaterMark: 0 }));
+      };
+      const [oversized] = await tiktokExtract(["https://www.tiktok.com/@test/video/2"]);
+      assert.deepStrictEqual(oversized.images, [{ url: imageUrl }]);
+      assert.deepStrictEqual(oversized.video, { urls: [videoUrl] });
+      assert.strictEqual(imageReads, 0);
+      assert.strictEqual(imageCancelled, true);
+      assert.strictEqual(videoReads, 80);
+      assert.strictEqual(videoCancelled, true);
+      global.fetch = async (url) => {
+        const bytes = url === imageUrl
+          ? new Uint8Array([1, 2])
+          : new Uint8Array([0, 0, 0, 0, 102, 116, 121, 112]);
+        return new Response(bytes, { headers: { "Content-Length": String(bytes.length) } });
+      };
+      const [small] = await tiktokExtract(["https://www.tiktok.com/@test/video/3"]);
+      assert.deepStrictEqual(small.images, [{ url: imageUrl, b64: "AQI=" }]);
+      assert.deepStrictEqual(small.video, { urls: [videoUrl], b64: "AAAAAGZ0eXA=" });
     } finally {
       if (previousWindow === undefined) delete global.window;
       else global.window = previousWindow;
@@ -327,6 +397,8 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
       global.setTimeout = previousTimeout;
       if (previousCreateObjectURL === undefined) delete URL.createObjectURL;
       else URL.createObjectURL = previousCreateObjectURL;
+      if (previousFetch === undefined) delete global.fetch;
+      else global.fetch = previousFetch;
     }
     console.log("tiktok-extract self-test ok");
   })().catch((error) => {
