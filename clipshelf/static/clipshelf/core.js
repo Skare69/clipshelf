@@ -13,6 +13,7 @@ const el = (tag, attrs, ...kids) => {
     if (k === "class") n.className = v;
     else if (k === "text") n.textContent = v;
     else if (k === "value") n.value = v;
+    else if (k.startsWith("on") && typeof v === "function") n.addEventListener(k.slice(2), v);
     else if (v === true) n.setAttribute(k, "");
     else n.setAttribute(k, v);
   }
