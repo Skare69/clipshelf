@@ -153,8 +153,16 @@ class RestorePublicationTests(RestoreMixin, SimpleTestCase):
                 self.restore()
         self.assertFalse((self.fresh / "assets").exists(), "refusal must precede cutover")
 
-    def test_corrupt_target_db_is_debris_and_is_replaced(self):
-        self.fresh_db.write_bytes(b"not a database at all")
+    def test_unreadable_nonempty_target_db_is_refused_and_preserved(self):
+        corrupt = b"SQLite format 3\x00" + b"\xde\xad" * 600
+        self.fresh_db.write_bytes(corrupt)
+        with self.assertRaisesMessage(CommandError, "left untouched for recovery"):
+            self.restore()
+        self.assertEqual(self.fresh_db.read_bytes(), corrupt)
+        self.assertFalse((self.fresh / "assets").exists(), "refusal must precede cutover")
+
+    def test_zero_byte_target_db_is_debris_and_is_replaced(self):
+        self.fresh_db.write_bytes(b"")
         self.restore()
         self.assertGreater(self.db_tables(), 0)
 

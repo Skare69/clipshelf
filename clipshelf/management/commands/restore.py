@@ -157,8 +157,9 @@ class Command(BaseCommand):
             + (", ".join(secrets_needed) if secrets_needed else "(none recorded)"))
 
     def _tables(self, target_db):
-        """Count target user tables; an absent, empty, or unreadable file is
-        debris, not a live instance."""
+        """Count target user tables; an absent or zero-byte file is debris, not
+        a live instance. A nonempty file SQLite cannot read is refused, never
+        replaced: it may be a damaged but recoverable instance database."""
         if not target_db.exists():
             return 0
         con = sqlite3.connect(str(target_db))
@@ -166,7 +167,10 @@ class Command(BaseCommand):
             return con.execute(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' "
                 "AND name NOT LIKE 'sqlite_%'").fetchone()[0]
-        except sqlite3.DatabaseError:
-            return 0
+        except sqlite3.DatabaseError as exc:
+            raise CommandError(
+                f"refusing restore: {target_db} exists but is not a readable "
+                f"SQLite database ({exc}); it is left untouched for recovery. "
+                "Move it aside manually to restore into this data directory") from exc
         finally:
             con.close()
