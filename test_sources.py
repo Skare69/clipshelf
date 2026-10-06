@@ -12,6 +12,7 @@ import os
 import time
 import threading
 import unittest
+from email.message import Message
 from unittest import mock
 
 import clipshelf.acquisition as acq
@@ -840,14 +841,16 @@ def test_post_transport_and_http_errors():
 
     def fake_open(req, timeout=None):
         calls.append((req.full_url, req.get_method(),
-                      req.get_header("Authorization")))
+                      req.get_header("Authorization"),
+                      req.get_header("Content-type")))
         return _Resp(b'{"choices": []}')
 
     real_open = interp.urllib.request.urlopen
     interp.urllib.request.urlopen = fake_open
     try:
         assert interp.post("http://h/v1", "sk-test", {"q": 1}, 5) == {"choices": []}
-        assert calls[-1] == ("http://h/v1/chat/completions", "POST", "Bearer sk-test")
+        assert calls[-1] == ("http://h/v1/chat/completions", "POST", "Bearer sk-test",
+                             "application/json")
     finally:
         interp.urllib.request.urlopen = real_open
 
@@ -902,6 +905,49 @@ def test_post_transport_and_http_errors():
         interp.LLM_RESPONSE_MAX = real_max
         interp.urllib.request.urlopen = real_open
 
+    # the error body read is bounded at 4096, never unbounded
+    class RecordingFp(io.BytesIO):
+        def __init__(self):
+            super().__init__(b"e" * 4097)
+            self.sizes = []
+
+        def read(self, n: int | None = None):
+            self.sizes.append(n)
+            return super().read(n)
+
+    rec = RecordingFp()
+
+    def err_read(req, timeout=None):
+        raise interp.urllib.error.HTTPError(req.full_url, 503, "busy", Message(), rec)
+
+    interp.urllib.request.urlopen = err_read
+    try:
+        try:
+            interp.post("http://h/v1", None, {}, 5)
+            raise AssertionError("503 accepted")
+        except interp.InterpretationError:
+            pass
+        assert rec.sizes and all(
+            n is not None and n <= 4096 for n in rec.sizes), rec.sizes
+    finally:
+        interp.urllib.request.urlopen = real_open
+
+    # a URLError with a very long reason: detail truncated at its 300-char bound
+    def unreachable_long(req, timeout=None):
+        raise interp.urllib.error.URLError("R" * 500)
+
+    interp.urllib.request.urlopen = unreachable_long
+    try:
+        try:
+            interp.post("http://h/v1", None, {}, 5)
+            raise AssertionError("unreachable accepted")
+        except interp.InterpretationError as exc:
+            msg = str(exc)
+            assert msg.startswith("endpoint unreachable: "), msg
+            assert len(msg) == len("endpoint unreachable: ") + 300, msg  # 516-char reason cut at 300
+    finally:
+        interp.urllib.request.urlopen = real_open
+
     # list_models on an unreachable endpoint: transport reported, key redacted
     def unreachable(req, timeout=None):
         raise interp.urllib.error.URLError("refused")
@@ -917,6 +963,61 @@ def test_post_transport_and_http_errors():
     finally:
         interp.urllib.request.urlopen = real_open
     print("post transport ok")
+
+
+def test_response_read_bound():
+    """post() and list_models() read at most LLM_RESPONSE_MAX + 1 bytes per
+    response whatever the endpoint streams, refuse a body above the bound,
+    and accept a body of exactly the bound."""
+    limit = 16 << 20  # literal, not interp.LLM_RESPONSE_MAX: a mutated constant must not self-confirm
+
+    class RecordingResp:
+        """urlopen stand-in that fails an unbounded read and records read sizes."""
+
+        def __init__(self, body):
+            self.body = body
+            self.sizes = []
+
+        def read(self, n):
+            assert n is not None and n >= 0, f"unbounded read: {n!r}"
+            self.sizes.append(n)
+            return self.body[:n]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    real_open = interp.urllib.request.urlopen
+    try:
+        # (callable, JSON tail, call args, parsed result, refusal exception)
+        cases = [
+            (interp.post, '{"ok": 1}', ("http://h/v1", None, {"q": 1}, 5),
+             {"ok": 1}, interp.InterpretationError),
+            (interp.list_models, '{"data": [{"id": "m"}]}',
+             ({"base_url": "http://h/v1"},), ["m"], interp.ConfigurationError),
+        ]
+        for func, tail, args, parsed, exc_type in cases:
+            # a body of exactly the bound is accepted; the leading spaces mean
+            # any short read cuts the JSON tail and breaks parsing
+            resp = RecordingResp(b" " * (limit - len(tail)) + tail.encode())
+            interp.urllib.request.urlopen = lambda req, timeout=None: resp
+            assert func(*args) == parsed
+            assert resp.sizes and max(resp.sizes) <= limit + 1, resp.sizes
+
+            # one byte above the bound is refused, not parsed
+            resp = RecordingResp(b" " * (limit + 1 - len(tail)) + tail.encode())
+            interp.urllib.request.urlopen = lambda req, timeout=None: resp
+            try:
+                func(*args)
+                raise AssertionError(f"{func.__name__} accepted an oversized body")
+            except exc_type as exc:
+                assert "size bound" in str(exc), str(exc)
+            assert resp.sizes and max(resp.sizes) <= limit + 1, resp.sizes
+    finally:
+        interp.urllib.request.urlopen = real_open
+    print("response read bound ok")
 
 
 def test_image_source_bounds():
@@ -1021,6 +1122,115 @@ def test_frame_extraction_contract():
     print("frame contract ok")
 
 
+def test_frame_sampling_bounds():
+    """Duration/window/fps boundaries, omission and missing-tool warnings,
+    timeout recovery, and asset filtering all stay pinned."""
+    source = {"assets": [{"kind": "video", "path": "C:/nonexistent/v.mp4"}]}
+
+    def run_case(probe_stdout, frame_count=1, ffmpeg_raises=None, budget=interp.FRAMES_MAX):
+        runs = []
+
+        def fake_run(argv, capture_output=True, timeout=None, check=False):
+            runs.append(list(argv))
+            if "ffprobe" in argv[0]:
+                return interp.subprocess.CompletedProcess(argv, 1, stdout=probe_stdout,
+                                                          stderr=b"")
+            for i in range(frame_count):
+                with open(argv[-1].replace("%02d", f"{i:02d}"), "wb") as fh:
+                    fh.write(jpeg_bytes())
+            if ffmpeg_raises is not None:
+                raise ffmpeg_raises
+            return interp.subprocess.CompletedProcess(argv, 0, stdout=b"", stderr=b"")
+
+        with mock.patch.object(interp.shutil, "which", lambda name: f"/fakebin/{name}"), \
+             mock.patch.object(interp.subprocess, "run", fake_run):
+            warnings = []
+            parts = interp._frame_parts(source, warnings, budget)
+        return parts, warnings, runs
+
+    def ffmpeg_argv(runs):
+        return runs[-1]
+
+    # at the 1800 s duration bound: no warning, full 120 s window still applied
+    out = json.dumps({"format": {"duration": "1800"}}).encode()
+    parts, warnings, runs = run_case(out)
+    assert "exceeds bound" not in "".join(warnings), warnings
+    argv = ffmpeg_argv(runs)
+    assert argv[argv.index("-t") + 1] == "120", argv
+    assert "fps=8/120," in argv[argv.index("-vf") + 1], argv
+
+    # 1801 s: the bound trips and the warning names both numbers
+    out = json.dumps({"format": {"duration": "1801"}}).encode()
+    parts, warnings, runs = run_case(out)
+    text = " ".join(warnings)
+    assert "1801s exceeds bound" in text, warnings
+    assert "first 120s" in text, warnings
+    assert ffmpeg_argv(runs)[ffmpeg_argv(runs).index("-t") + 1] == "120", runs
+
+    # missing / zero / unparseable duration: window falls back to the 120 s default
+    for probe in (b"", b"{}", b"not json"):
+        parts, warnings, runs = run_case(probe)
+        assert "exceeds bound" not in "".join(warnings), (probe, warnings)
+        assert ffmpeg_argv(runs)[ffmpeg_argv(runs).index("-t") + 1] == "120", (probe, runs)
+
+    # sub-second duration: the int window floors at 1 s inside fps, -t stays exact
+    out = json.dumps({"format": {"duration": "0.4"}}).encode()
+    parts, warnings, runs = run_case(out)
+    argv = ffmpeg_argv(runs)
+    assert argv[argv.index("-t") + 1] == "0.4", argv
+    assert "fps=8/1," in argv[argv.index("-vf") + 1], argv
+
+    # more frames than budget: exactly budget parts plus an honest count warning
+    out = json.dumps({"format": {"duration": "60"}}).encode()
+    parts, warnings, _ = run_case(out, frame_count=3, budget=2)
+    assert len(parts) == 2, len(parts)
+    assert any("additional frames omitted beyond 2-frame bound" in w
+               for w in warnings), warnings
+    parts, warnings, _ = run_case(out, frame_count=2, budget=2)
+    assert len(parts) == 2
+    assert not any("additional frames omitted" in w for w in warnings), warnings
+
+    # budget 1 still samples: exactly one frame part, no skip warning
+    parts, warnings, runs = run_case(out, frame_count=1, budget=1)
+    assert len(parts) == 1, len(parts)
+    assert runs, runs  # the sampler ran; frames were not skipped wholesale
+    assert not any("frames omitted" in w for w in warnings), warnings
+
+    # either tool missing: warning, [] and no subprocess at all
+    for which in ({"ffmpeg": None, "ffprobe": "/fakebin/ffprobe"},
+                  {"ffmpeg": "/fakebin/ffmpeg", "ffprobe": None}):
+        runs = []
+        with mock.patch.object(interp.shutil, "which", lambda n, _w=which: _w.get(n)), \
+             mock.patch.object(interp.subprocess, "run",
+                               lambda *a, **k: runs.append(a)):
+            warnings = []
+            assert interp._frame_parts(source, warnings, interp.FRAMES_MAX) == []
+            assert runs == [], runs
+            assert len(warnings) == 1 and "ffmpeg" in warnings[0], warnings
+
+    # timeout mid-extraction: warning emitted, frames already written survive
+    out = json.dumps({"format": {"duration": "60"}}).encode()
+    parts, warnings, _ = run_case(
+        out, frame_count=1,
+        ffmpeg_raises=interp.subprocess.TimeoutExpired(cmd="ffmpeg", timeout=180))
+    assert len(parts) == 1, len(parts)
+    assert "video frame extraction exceeded time bound" in " ".join(warnings), warnings
+
+    # non-video assets and non-string video paths are ignored entirely
+    runs = []
+    with mock.patch.object(interp.shutil, "which", lambda name: f"/fakebin/{name}"), \
+         mock.patch.object(interp.subprocess, "run",
+                           lambda *a, **k: runs.append(a)):
+        for src in ({"assets": [{"kind": "image", "path": "C:/x/a.png"}]},
+                    {"assets": [{"kind": "video", "path": 7}]},
+                    {"assets": []},
+                    {}):
+            warnings = []
+            assert interp._frame_parts(src, warnings, interp.FRAMES_MAX) == [], src
+            assert runs == [] and warnings == [], (src, warnings)
+    print("frame sampling bounds ok")
+
+
 def test_material_state_shape():
     """Only the current capture's bounded context is shipped to the model."""
     cats = [f"cat{i}" for i in range(101)]
@@ -1045,6 +1255,10 @@ def test_material_state_shape():
     plain = interp._material_state({"url": "https://a", "metadata": {}}, cats[:2])
     assert plain["captions_note"] == ""
     assert plain["allowed_categories"] == ["cat0", "cat1"]
+    # a source without desc ships an empty description, never filler
+    assert interp._material_state({"url": "https://a"}, cats[:1])["description"] == ""
+    assert interp._material_state({"url": "https://a", "desc": None},
+                                  cats[:1])["description"] == ""
     print("material state ok")
 
 
@@ -1090,6 +1304,15 @@ def test_validated_findings_caps():
         raise AssertionError("over-long prompt accepted")
     except ValueError as exc:
         assert "prompts entry exceeds 4000 chars" in str(exc)
+
+    # the summary bound itself: 4000 accepted verbatim, 4001 refused
+    out = interp._validated(raw(summary="s" * 4000), source_url, cats, [])
+    assert out["summary"] == "s" * 4000
+    try:
+        interp._validated(raw(summary="s" * 4001), source_url, cats, [])
+        raise AssertionError("over-long summary accepted")
+    except ValueError as exc:
+        assert "summary" in str(exc) and "4000" in str(exc)
 
     # an off-collection category is dropped with a bounded-name warning
     warnings = []
@@ -1328,6 +1551,19 @@ def test_list_models():
         interp.list_models({"base_url": "http://h/v1"})
         assert calls[1][1] is None
 
+        # an endpoint offering more than 500 distinct ids is capped at exactly 500
+        def flood(req, timeout=None):
+            return Resp(json.dumps(
+                {"data": [{"id": f"m{i:04d}"} for i in range(501)]}).encode())
+
+        interp.urllib.request.urlopen = flood
+        try:
+            ids = interp.list_models({"base_url": "http://h/v1"})
+            assert len(ids) == 500, len(ids)
+            assert ids == sorted(ids) and ids[0] == "m0000" and ids[-1] == "m0499"
+        finally:
+            interp.urllib.request.urlopen = fake_open
+
         def denied(req, timeout=None):
             raise interp.urllib.error.HTTPError(req.full_url, 401, "no", {}, io.BytesIO(b""))
 
@@ -1337,6 +1573,32 @@ def test_list_models():
             raise AssertionError("401 accepted")
         except interp.ConfigurationError as exc:
             assert "credentials" in str(exc) and "sekret" not in str(exc)
+
+        # 403 is also read as a credentials rejection, key not leaked
+        def forbidden(req, timeout=None):
+            raise interp.urllib.error.HTTPError(req.full_url, 403, "no", Message(),
+                                                io.BytesIO(b"no sekret for you"))
+
+        interp.urllib.request.urlopen = forbidden
+        try:
+            interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
+            raise AssertionError("403 accepted")
+        except interp.ConfigurationError as exc:
+            assert "credentials" in str(exc) and "sekret" not in str(exc), exc
+
+        # unreachable: the reason part is truncated at its 200-char bound
+        def unreachable_long(req, timeout=None):
+            raise interp.urllib.error.URLError("U" * 400)
+
+        interp.urllib.request.urlopen = unreachable_long
+        try:
+            interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
+            raise AssertionError("unreachable accepted")
+        except interp.ConfigurationError as exc:
+            msg = str(exc)
+            assert msg.startswith("endpoint unreachable: "), msg
+            assert len(msg) == len("endpoint unreachable: ") + 200, msg  # 416-char reason cut at 200
+            assert "sekret" not in msg
 
         def broken(req, timeout=None):
             raise interp.urllib.error.HTTPError(req.full_url, 500, "no", {}, io.BytesIO(b""))
@@ -1421,8 +1683,10 @@ def test():
     test_screening_policy().debug()
     test_screening_warning_projection()
     test_post_transport_and_http_errors()
+    test_response_read_bound()
     test_image_source_bounds()
     test_frame_extraction_contract()
+    test_frame_sampling_bounds()
     test_material_state_shape()
     test_parse_json_content_forms()
     test_validated_findings_caps()

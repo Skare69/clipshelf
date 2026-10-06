@@ -191,7 +191,7 @@ class JudgmentClientTests(SimpleTestCase):
         self.assertEqual(calls[1][1], state)
 
     def test_screen_findings_accepts_entries_max_and_rejects_one_more(self):
-        n = judgment.ENTRIES_MAX
+        n = 40  # documented ENTRIES_MAX; a raised bound must fail here
         answers = {"danger": SimpleNamespace(score=0.0)}
         answers.update({f"rel_{i}": SimpleNamespace(noul=1.0) for i in range(n)})
         _, client = self.fake_client(answers)
@@ -276,6 +276,18 @@ class JudgmentContractTests(SimpleTestCase):
         self.assertEqual(state["links"], links)
         self.assertEqual(len(questions), 2 * len(links))
 
+    def test_tag_links_keep_criterion_names_title_else_url(self):
+        links = [{"url": "https://k.test/0", "title": "Prompt Guide"},
+                 {"url": "https://k.test/1", "title": ""}]
+        answers = {f"keep_{i}": mock.Mock(noul=0.5) for i in range(2)}
+        answers.update({f"tag_{i}": mock.Mock(choice="github") for i in range(2)})
+        with mock.patch.object(judgment, "ask", return_value=answers) as ask:
+            judgment.tag_links(links)
+        _, questions = ask.call_args.args
+        self.assertIn("Prompt Guide", questions["keep_0"].criteria["true"])
+        self.assertNotIn("https://k.test/0", questions["keep_0"].criteria["true"])
+        self.assertIn("https://k.test/1", questions["keep_1"].criteria["true"])
+
     def test_tag_links_missing_tag_answer_raises(self):
         answers = {"keep_0": mock.Mock(noul=0.9)}  # tag_0 absent
         with mock.patch.object(judgment, "ask", return_value=answers):
@@ -291,7 +303,7 @@ class JudgmentContractTests(SimpleTestCase):
                 judgment.tag_links([self._link(0)])
 
     def test_screen_findings_rejects_more_than_40_entries(self):
-        state = {"entries": [f"https://e.test/{i}" for i in range(judgment.ENTRIES_MAX + 1)],
+        state = {"entries": [f"https://e.test/{i}" for i in range(41)],  # ENTRIES_MAX + 1
                  "material": {}, "findings": {}}
         with self.assertRaises(judgment.JudgmentError) as cm:
             judgment.screen_findings(state)

@@ -265,12 +265,24 @@ suite still passes is a survived mutant — a behavior no test guards.
   For a change-sized run use `python mutate.py --diff origin/main`; view and
   command modules join the scope the same way. Tests, migrations and wiring
   are never mutated (the suite is the oracle).
-- Gate: `--fail-under` exits nonzero below the score percent. The default
-  ratchet floor is `DEFAULT_FAIL_UNDER` in `mutate.py`, with its measurement
-  recorded beside it — raise it as tests improve, never lower it. Each mutant
-  runs the full CI suite (Django discovery plus the two standalone script
-  suites). `--max-mutants N` gives an evenly spaced smoke sample;
-  `python mutate.py self-check` verifies the harness itself in under a second.
+- Gate: use the project Python 3.13 virtual environment and run
+  `python mutate.py --max-mutants 116` from the repository root. It runs the
+  full CI test suite for each of exactly 116 evenly spaced sites across
+  `DEFAULT_TARGETS`, in listed file/AST order. For site count `S`, the chosen
+  indices are `floor(i*S/116)` for `i = 0..115`; use the same commit and target
+  list to repeat a score. The `DEFAULT_FAIL_UNDER` floor is 72%; never lower it.
+- The old stride sampler did **not** select the requested count: 950 sites with
+  `--max-mutants 116` gave stride 9 and just 106 mutants (73/106 = 68.9% in
+  the release review). The earlier 94/116 = 81.0% record cannot come from
+  the 950-site tree with that sampler; an older 921-site tree would select 116
+  at stride 8. The scores cannot be compared as a ratchet.
+- The current sample killed 90/116 = 77.6%. Two mutants failed on unrelated
+  Windows restore file-lock errors; discounting them yields 88/116 = 75.9%.
+  Earlier runs had up to seven such false kills; the 72% floor leaves a margin.
+  Inspect `KILLED` diagnostics before raising the floor. A timeout counts as a
+  kill, not evidence that a test caught the mutant.
+- `python mutate.py self-check` verifies the harness. A sample is a practical
+  gate, not the full-scope score; use `python mutate.py` for all sites.
 
 ## License
 

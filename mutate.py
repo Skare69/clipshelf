@@ -55,14 +55,12 @@ SUITE_CMDS = [
 ]
 # suite baseline ~13s; 120s absorbs pathological mutants without stalling runs
 DEFAULT_TIMEOUT = 120
-# Ratchet floor: first reproducible full-suite measurement (2026-10-05,
-# 116-mutant stratified sample of the default scope) killed 94/116 = 81.0%;
-# the residue is docstrings, screening prompt text, and dead branches. An
-# earlier ~59% record did not reproduce on identical inputs (the harness ran
-# only part of the CI suite then, and its concurrent full-scope run inflated
-# kills via timeout-counts-as-killed). Raise as tests improve; the
-# survived-mutant log names where. Never lower.
-DEFAULT_FAIL_UNDER = 55
+# Ratchet: 116 evenly spaced sites of the default 950-site scope. The old
+# stride sampler changed both count and membership when the scope grew:
+# 921 sites / stride 8 gave 116; 950 sites / stride 9 gave only 106.
+# ponytail: sample floor leaves room for Windows restore-file lock noise;
+# rerun in a quiet environment for the full, unsampled score.
+DEFAULT_FAIL_UNDER = 72
 
 CMP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.GtE, ast.GtE: ast.Lt,
        ast.Gt: ast.LtE, ast.LtE: ast.Gt, ast.In: ast.NotIn, ast.NotIn: ast.In,
@@ -149,6 +147,12 @@ def run_suites(ws, env, timeout):
     return 0, ""
 
 
+def sample(items, n):
+    """Exactly n evenly spaced items (first included). The old stride slice
+    returned ceil(len/stride) items: 950 sites at --max-mutants 116 gave 106."""
+    return [items[i * len(items) // n] for i in range(n)] if len(items) > n else list(items)
+
+
 def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
     """Copy sources in, mutate one site at a time, classify, restore."""
     total = killed = 0
@@ -165,9 +169,8 @@ def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
         for (index, label), source in mutant_sources(tree, sites):
             mutants.append((rel, nodes[index].lineno, label, source))
     if max_mutants and len(mutants) > max_mutants:
-        stride = -(-len(mutants) // max_mutants)
-        log(f"sampling {max_mutants} of {len(mutants)} sites, stride {stride}")
-        mutants = mutants[::stride]
+        log(f"sampling {max_mutants} of {len(mutants)} sites, evenly spaced")
+        mutants = sample(mutants, max_mutants)
     log(f"{len(mutants)} mutants across {len(target_files)} module(s)")
     for n, (rel, lineno, label, source) in enumerate(mutants, 1):
         (ws / rel).write_text(source, encoding="utf-8")
@@ -281,6 +284,8 @@ def self_check():
     for expect in ("Eq->NotEq", "Add->Sub", "Mult->Div"):
         assert expect in labels, (expect, labels)
     assert not any("str->" in label for label in labels), labels  # no docstring noise
+    picked = sample(list(range(950)), 116)
+    assert len(picked) == 116 and picked[:2] == [0, 8] and picked[-1] == 941, picked
 
     report_source = "def sample():\n    return 1  # original formatting\n"
 

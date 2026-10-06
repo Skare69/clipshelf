@@ -250,6 +250,16 @@ def test():
            '<a href="/rel">Awesome  prompts</a><a href="https://github.com/a/b">repo</a>')
     assert p.title == "T" and p.desc == "D"
     assert p.links == [("/rel", "Awesome prompts"), ("https://github.com/a/b", "repo")]
+    # character references are decoded everywhere (convert_charrefs=True)
+    p = cs.PageParser()
+    p.feed('<title>A &amp; B</title>'
+           '<meta name="description" content="O&#39;Reilly &quot;q&quot;">'
+           '<a href="/x">C &amp; D</a><p>E &#39;F&#39; &quot;G&quot;</p>')
+    p.close()
+    assert p.title == "A & B", p.title
+    assert p.desc == "O'Reilly \"q\"", p.desc
+    assert p.links == [("/x", "C & D")], p.links
+    assert p.text.endswith("E 'F' \"G\""), p.text  # title and anchor text are body text too
     p = cs.PageParser()
     p.feed('<meta property="og:description" content="OG">')
     assert p.desc == "OG"
