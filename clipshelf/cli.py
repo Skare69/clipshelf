@@ -8,7 +8,7 @@ Usage:
       # one-process production Waitress server (default 127.0.0.1:8000)
 
 serve and data-writing commands hold the shared data lock (backup/restore
-take the exclusive one themselves); check/test run unlocked.
+take the exclusive one themselves; clean owns its locking); check/test run unlocked.
 """
 import os
 import time
@@ -73,8 +73,8 @@ def main(argv):
         return _serve(*_bind(argv[1] if len(argv) > 1 else ""))
     if argv[:1] == ["worker"]:
         _migrate()
-    # backup/restore own the exclusive lock; check/test need no lock
-    unlocked = (argv[0] if argv else "") in ("check", "test", "backup", "restore")
+    # backup/restore/clean own their locking; check/test need no lock
+    unlocked = (argv[0] if argv else "") in ("check", "test", "backup", "restore", "clean")
     if unlocked:
         lock = nullcontext()
     else:

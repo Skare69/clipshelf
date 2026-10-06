@@ -1,4 +1,5 @@
 """Worker coordinator regressions: claims, recovery, pauses, finite failures."""
+from contextlib import redirect_stdout
 import io
 import shutil
 import threading
@@ -15,7 +16,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
-from clipshelf import models, services, worker
+from clipshelf import cli, models, services, worker
 
 FINDINGS = {"source": "", "summary": "good findings", "repos": [], "prompts": [],
             "links": [], "categories": [], "installs": [], "warnings": []}
@@ -920,6 +921,22 @@ class StagingCleanupTests(WorkerMixin, TestCase):
         self.assertTrue(live.exists())
         self.assertTrue(live_media.exists())
         self.assertTrue(stray.exists())
+
+    def test_cli_clean_previews_then_executes_expired_staging(self):
+        old = self.make_job(state="blocked")
+        self.backdate(old)
+        expired = self.job_dir(old)
+        output = io.StringIO()
+        with override_settings(DATA_DIR=str(self.tmp)), redirect_stdout(output):
+            cli.main(["clean"])
+        self.assertIn("dry run: nothing deleted", output.getvalue())
+        self.assertTrue(expired.exists())
+
+        output = io.StringIO()
+        with override_settings(DATA_DIR=str(self.tmp)), redirect_stdout(output):
+            cli.main(["clean", "--execute"])
+        self.assertIn(f"deleted  {expired}", output.getvalue())
+        self.assertFalse(expired.exists())
 
     def test_recovered_import_retains_previous_media_dirs(self):
         """A crash retry must not orphan the first crash's staged directory:
