@@ -157,6 +157,8 @@ one that ran with warnings is badged `screened`.
   model connection. They can restore access to an account that lost both its
   password and mailbox — deliberately, Jellyfin style — but that is identity
   recovery, not permission to read other people's collections.
+- Sensitive admin actions need recent reauthentication. Password retries use
+  allauth's account reauthentication and failed-login limits.
 - Accounts are disabled, never deleted; disabling revokes sessions and keeps
   content, memberships and ownership.
 - Tailscale is transport only. LAN and remote requests get identical checks, and

@@ -24,6 +24,7 @@ from allauth.account.adapter import get_adapter
 from allauth.account.internal.flows.login import record_authentication
 from allauth.account.models import EmailAddress
 from allauth.account.utils import user_pk_to_url_str
+from allauth.core import ratelimit
 
 from clipshelf.accounts import (
     INVITATION_TTL,
@@ -58,13 +59,18 @@ def _require_reauth(request, body) -> None:
     if has_recent_reauthentication(request):
         return
     password = body.get("reauth_password")
-    if password and request.user.check_password(password):
-        # Mirror allauth's own reauthentication bookkeeping so follow-up
-        # sensitive calls inside the timeout window need no password.
-        record_authentication(
-            request, request.user, method="password", reauthenticated=True
-        )
-        return
+    if password:
+        if not ratelimit.consume(
+            request, action="reauthenticate", user=request.user
+        ):
+            raise ApiError(429, detail="too_many_reauth_attempts")
+        if get_adapter(request).reauthenticate(request.user, password):
+            # Mirror allauth's own reauthentication bookkeeping so follow-up
+            # sensitive calls inside the timeout window need no password.
+            record_authentication(
+                request, request.user, method="password", reauthenticated=True
+            )
+            return
     raise ApiError(403, detail="reauthentication_required")
 
 

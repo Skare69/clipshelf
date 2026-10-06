@@ -378,6 +378,44 @@ class TokenAdminReauthTests(AccountTestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(get_user_model().objects.get(pk=self.target.pk).is_active)
 
+    def test_reauth_password_attempts_are_throttled_per_user(self):
+        rates = dict(account_settings.RATE_LIMITS)
+        rates["reauthenticate"] = "2/m/user"
+        # Throwaway cache: the quota starts empty and the attempts spent here
+        # can neither inherit from nor leak into other tests.
+        with override_settings(
+            ACCOUNT_REAUTHENTICATION_TIMEOUT=0,
+            ACCOUNT_RATE_LIMITS=rates,
+            CACHES={
+                "default": {
+                    "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+                    "LOCATION": f"reauth-throttle-{uuid4().hex}",
+                }
+            },
+        ):
+            wrong = {"active": False, "reauth_password": "not-my-password"}
+            # Attempt 1 over the cookie session: allowed, wrong password.
+            self.client.force_login(self.admin)
+            response = self.admin_post(
+                f"/api/admin/users/{self.target.pk}/status", wrong
+            )
+            self.assertEqual(response.status_code, 403)
+            # A passwordless challenge between attempts must not spend quota.
+            response = self._post({"active": False})
+            self.assertEqual(response.status_code, 403)
+            # Attempt 2 over the token session: still allowed (2/2), wrong
+            # password. Quota is per user, not per session transport.
+            response = self._post(wrong)
+            self.assertEqual(response.status_code, 403)
+            # Attempt 3 carries the correct password but the 2/m/user
+            # threshold is spent: JSON 429, the password is never evaluated.
+            response = self._post({"active": False, "reauth_password": PASSWORD})
+            self.assertEqual(response.status_code, 429)
+            self.assertIn("detail", response.json())
+            # The limiter blocks before password verification; no action runs.
+            self.assertTrue(get_user_model().objects.get(pk=self.target.pk).is_active)
+            self.assertNotIn(settings.SESSION_COOKIE_NAME, response.cookies)
+
 
 class AdminBoundaryTests(AccountTestCase):
     def test_admin_endpoints_reject_anonymous_and_non_admins(self):
