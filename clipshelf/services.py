@@ -1,7 +1,7 @@
 """Core domain services (rev. 3).
 
-Every permission check and durable write for captures, jobs, findings, and
-entries lives here. Bad/conflicting input raises ValidationError (request-ID
+Every permission check and durable write for captures, jobs, findings,
+entries, and browser imports lives here. Bad/conflicting input raises ValidationError (request-ID
 reuse conflicts use code="conflict" so the API maps them to 409);
 unauthorized actions raise PermissionDenied. Store functions run short
 transactions, recheck the current account/destination, never move committed
@@ -27,6 +27,8 @@ from clipshelf.models import (
     Contribution,
     Entry,
     History,
+    ImportRecord,
+    ImportRequest,
     Job,
     Membership,
     ServerSettings,
@@ -198,6 +200,102 @@ def receipt(capture):
         "received_at": capture.received_at.isoformat(),
         "notice": capture.notice,
     }
+
+
+# ---------------------------------------------------------------------------
+# Browser import admission
+# ---------------------------------------------------------------------------
+
+def bind_import_request(user, request_id, record):
+    """Durably map an accepted request id to its import record. Rebinding the
+    same record is a no-op; a conflict means the id was concurrently accepted
+    for a different payload."""
+    try:
+        with transaction.atomic():
+            ImportRequest.objects.create(user=user, request_id=request_id, record=record)
+    except IntegrityError:
+        bound = (
+            ImportRequest.objects.select_related("record")
+            .filter(user=user, request_id=request_id)
+            .first()
+        )
+        if bound is not None and bound.record_id == record.id:
+            return
+        if bound is not None:
+            raise ValidationError(
+                "request id reused with a different payload", code="conflict"
+            )
+        raise
+
+
+def import_for_request(user, request_id, input_digest, collection):
+    """First admission pass, before payload parsing: raise ValidationError
+    (code="conflict") when the request id was accepted for a different digest
+    or the digest already lives in another collection; return the record to
+    replay on a same-digest retry, None when the upload may create."""
+    binding = (
+        ImportRequest.objects.select_related("record")
+        .filter(user=user, request_id=request_id)
+        .first()
+    )
+    if binding is not None and binding.record.input_digest != input_digest:
+        raise ValidationError(
+            "request id reused with a different payload", code="conflict"
+        )
+    existing = ImportRecord.objects.filter(user=user, input_digest=input_digest).first()
+    if existing is None:
+        return None
+    if (existing.manifest or {}).get("collection_id") != str(collection.id):
+        raise ValidationError(
+            "file was already imported to a different collection", code="conflict"
+        )
+    bind_import_request(user, request_id, existing)
+    return existing
+
+
+def admit_import(user, request_id, input_digest, collection, staging_rel, fmt):
+    """Create the import record and its request binding in one transaction
+    (a record never exists without its binding). A lost uniqueness race
+    replays the winning record; conflicting reuse raises ValidationError
+    (code="conflict"). Returns (record, created)."""
+    try:
+        with transaction.atomic():
+            record = ImportRecord.objects.create(
+                user=user,
+                input_digest=input_digest,
+                manifest={
+                    "client_request_id": str(request_id),
+                    "staging": staging_rel,
+                    "collection_id": str(collection.id),
+                    "status": "pending",
+                    "format": fmt,
+                },
+            )
+            ImportRequest.objects.create(user=user, request_id=request_id, record=record)
+    except IntegrityError:
+        # A concurrent upload won the digest or the request-id uniqueness
+        # race; both inserts above rolled back together.
+        record = ImportRecord.objects.filter(
+            user=user, input_digest=input_digest
+        ).first()
+        if record is None:
+            binding = (
+                ImportRequest.objects.select_related("record")
+                .filter(user=user, request_id=request_id)
+                .first()
+            )
+            if binding is not None and binding.record.input_digest != input_digest:
+                raise ValidationError(
+                    "request id reused with a different payload", code="conflict"
+                )
+            raise
+        if (record.manifest or {}).get("collection_id") != str(collection.id):
+            raise ValidationError(
+                "file was already imported to a different collection", code="conflict"
+            )
+        bind_import_request(user, request_id, record)
+        return record, False
+    return record, True
 
 
 # ---------------------------------------------------------------------------
