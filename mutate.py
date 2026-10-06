@@ -328,6 +328,8 @@ def self_check():
     fake_repo.mkdir()
     source = fake_repo / "mod.py"
     source.write_text("def f(a):\n    return a + 1\n", encoding="utf-8")
+    for cmd in (["init", "-q"], ["add", "mod.py"]):  # workspace copies tracked files only
+        subprocess.run(["git", *cmd], cwd=fake_repo, check=True, capture_output=True)
     outside = ws.parent / "x.py"
     outside.write_text("X = 1\n", encoding="utf-8")
     original = source.read_bytes(), outside.read_bytes()
