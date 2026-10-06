@@ -192,7 +192,7 @@ only; the original files are never modified and a repeated import is a no-op.
 
 Tests: `python clipshelf.py test` plus `python test_clipshelf.py` and
 `python test_sources.py` (both stdlib-only, no network).
-For the web DOM event helper, run `node test_dom_events.mjs`.
+For the web DOM checks, run `node test_dom_events.mjs` and `node test_web_assets.mjs`.
 
 ### Mutation testing
 
