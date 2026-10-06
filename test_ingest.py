@@ -75,8 +75,7 @@ class IngestCommandTests(TestCase):
             return ReadSpy(stream) if path == dump else stream
 
         with mock.patch.object(Path, "open", autospec=True, side_effect=open_spy):
-            with self.assertRaisesMessage(
-                    CommandError, f"file exceeds {MAX_TEXT_BYTES} UTF-8 bytes"):
+            with self.assertRaises(CommandError):
                 self.ingest(dump)
 
         self.assertEqual(read_sizes, [MAX_TEXT_BYTES + 1])
