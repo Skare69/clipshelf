@@ -1,14 +1,17 @@
 # Third-party license inventory and allowlist (review 2026-10-02).
 #
 # Ground truth sources:
-#   python  : importlib.metadata of the exact `pip install -r requirements.txt`
-#             resolution (the image installs exactly this set; CPython 3.13,
-#             linux). `observed` is the review-time version snapshot, NOT a
-#             gate — pip owns version resolution; this file gates the NAME SET
-#             and the LICENSE of every shipped distribution.
+#   python  : importlib.metadata of the hash-locked install
+#             `pip install --require-hashes -r requirements.lock` (CI and the
+#             image install exactly this set; CPython 3.13, linux). `observed`
+#             is the review-time version snapshot, NOT a gate — the lock owns
+#             versions (`scripts/lock_deps.py check` keeps it in step with
+#             requirements.txt); this file gates the NAME SET and the LICENSE
+#             of every shipped distribution.
 #   android : `gradlew :app:dependencies --configuration releaseRuntimeClasspath`
 #             (versions here are resolved pins and ARE gate-checked exactly).
-#   image   : Dockerfile pins (base, apt lines, bundled SQLite).
+#   image   : Dockerfile pins (base, apt lines, bundled SQLite), read from the
+#             Dockerfile text, not from a built image.
 #
 # Enforced by check_licenses.py in ci.yml (python job: python+image modes,
 # android job: android mode). A new dependency — pip line, gradle line, apt

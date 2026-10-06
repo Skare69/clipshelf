@@ -2,17 +2,19 @@
 """Third-party license gate (stdlib only).
 
 Enforces license_inventory.toml against reality:
-  python  : the installed set (the image ships exactly `pip install
-            -r requirements.txt`) must equal the inventoried set for this
-            platform, and every entry's license must be allowlisted and
-            unchanged since review.
+  python  : the installed set (CI and the image install exactly `pip install
+            --require-hashes -r requirements.lock`) must equal the inventoried
+            set for this platform, and every entry's license must be
+            allowlisted and unchanged since review.
   android : the gradle-resolved releaseRuntimeClasspath must equal the
             inventoried artifact set (exact versions).
-  image   : Dockerfile pins (base, apt, SQLite) must match the inventory, and
-            the shipped THIRD_PARTY_NOTICES.md must exist and be byte-identical
-            to the copy packed into the APK assets. Fails closed: any package-
+  image   : Dockerfile pins (base, apt, SQLite) must match the inventory and
+            the Dockerfile must COPY THIRD_PARTY_NOTICES.md. This reads the
+            Dockerfile text, not a built image. Fails closed: any package-
             manager use it cannot parse, and any external image pulled via
             COPY --from / RUN --mount=from=, fails unless it is the pinned base.
+  notices : (every mode) THIRD_PARTY_NOTICES.md must exist and be
+            byte-identical to the copy packed into the APK assets.
 
 Usage:
   check_licenses.py                 # python + image + notices (CI python job, local)

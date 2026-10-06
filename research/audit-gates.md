@@ -33,13 +33,14 @@ applicable again and this record must be revised.
 | Dependency license inventory + allowlist | Applicable, enforced | `ci.yml` runs `check_licenses.py` against `license_inventory.toml` in both jobs (green 2026-10-03: python 31 pins, android 30 artifacts); the tables below are the observed snapshot behind it |
 | Bun/JS vulnerability + license audit | Not applicable | No manifest exists (see stack inventory) |
 | Gradle vulnerability audit | No first-party scanner; licenses enforced | `ci.yml` android job resolves `releaseRuntimeClasspath` and gates it through `check_licenses.py android`; exact pins in `build.gradle`, wrapper pins Gradle 8.9 and AGP 8.7.3; Gradle-artifact vulnerability scanning remains a gap |
-| Docker image / OS-package audit | Out of scope here | Image pins (base, apt lines, bundled SQLite) are tracked in `license_inventory.toml`; `check_licenses.py image` exists but is not wired into CI |
+| Docker image / OS-package audit | Pins enforced; no OS-package vulnerability scan | `ci.yml` python job runs `python check_licenses.py`, whose default run includes the image check: the Dockerfile base image, apt stage sets, and SQLite ARGs must match `license_inventory.toml`, and the Dockerfile must COPY `THIRD_PARTY_NOTICES.md`. It reads the Dockerfile, not a built image. `docker-publish.yml` (v* tag or manual dispatch only) builds the amd64 image and fails when its installed Python set differs from `requirements.lock`. Debian-package vulnerability scanning remains a gap |
 
 ## Observed license inventory (snapshot 2026-10-02)
 
-Python rows come from `importlib.metadata` of the exact
-`pip install -r requirements.txt` resolution in the CPython 3.13 venv;
-versions drift inside the manifest ranges and are not pinned here. The
+Python rows come from `importlib.metadata` in the CPython 3.13 venv on the
+snapshot date. Since 8cfe6d9, CI and the image install
+`pip install --require-hashes -r requirements.lock`, so the lock, not this
+record, pins the shipped versions. The
 Android rows come from the resolved `releaseRuntimeClasspath` tree and the
 `<licenses>` block of each artifact's POM in the local Gradle cache. The
 enforced, machine-checked inventory is `license_inventory.toml`, gated by
