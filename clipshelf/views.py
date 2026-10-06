@@ -21,7 +21,6 @@ from django.http.request import (
     RequestDataTooBig,
 )
 from django.db import IntegrityError, connection, transaction
-from django.db.models import Q
 from django.http import (
     FileResponse,
     Http404,
@@ -43,6 +42,7 @@ from clipshelf.models import (
     Contribution,
     Entry,
     ImportRecord,
+    ImportRequest,
     Job,
     Membership,
     User,
@@ -649,6 +649,39 @@ def _scan_import_keys(node, depth=0):
             _scan_import_keys(value, depth + 1)
 
 
+def _bind_request_id(user, request_id, record):
+    """Durably map an accepted request id to its import record. Rebinding the
+    same record is a no-op; a conflict means the id was concurrently accepted
+    for a different payload and must 409."""
+    try:
+        with transaction.atomic():
+            ImportRequest.objects.create(user=user, request_id=request_id, record=record)
+    except IntegrityError:
+        bound = (
+            ImportRequest.objects.select_related("record")
+            .filter(user=user, request_id=request_id)
+            .first()
+        )
+        if bound is not None and bound.record_id == record.id:
+            return
+        if bound is not None:
+            raise ApiError(409, detail="request id reused with a different payload")
+        raise
+
+
+def _import_replay(record, spooled):
+    """Same-digest retry: discard the re-spooled copy and replay the receipt."""
+    os.remove(spooled)
+    return _json(
+        {
+            "import": {
+                "id": str(record.id),
+                "status": (record.manifest or {}).get("status", "pending"),
+            }
+        }
+    )
+
+
 @api
 @require_http_methods(["POST"])
 def api_import(request):
@@ -682,32 +715,23 @@ def api_import(request):
                 digest.update(chunk)
                 out.write(chunk)
 
-        # Upload retry identity is the file digest, not the request id alone.
-        existing = ImportRecord.objects.filter(user=user, input_digest=digest.hexdigest()).first()
-        clash = (
-            ImportRecord.objects.filter(
-                Q(user=user, client_request_id=request_id)
-                | Q(user=user, manifest__client_request_id=str(request_id))
-            )
-            .exclude(input_digest=digest.hexdigest())
-            .exists()
+        # Upload retry identity is the file digest, not the request id alone;
+        # every previously accepted request id is durably bound to its record.
+        binding = (
+            ImportRequest.objects.select_related("record")
+            .filter(user=user, request_id=request_id)
+            .first()
         )
-        if clash:
+        if binding is not None and binding.record.input_digest != digest.hexdigest():
             raise ApiError(409, detail="request id reused with a different payload")
+        existing = ImportRecord.objects.filter(user=user, input_digest=digest.hexdigest()).first()
         if existing is not None:
             if (existing.manifest or {}).get("collection_id") != str(collection.id):
                 raise ApiError(
                     409, detail="file was already imported to a different collection"
                 )
-            os.remove(spooled)
-            return _json(
-                {
-                    "import": {
-                        "id": str(existing.id),
-                        "status": (existing.manifest or {}).get("status", "pending"),
-                    }
-                }
-            )
+            _bind_request_id(user, request_id, existing)
+            return _import_replay(existing, spooled)
 
         with open(spooled, "rb") as fh:
             try:
@@ -733,7 +757,6 @@ def api_import(request):
                 record = ImportRecord.objects.create(
                     user=user,
                     input_digest=digest.hexdigest(),
-                    client_request_id=request_id,
                     manifest={
                         "client_request_id": str(request_id),
                         "staging": rel_path,
@@ -742,30 +765,32 @@ def api_import(request):
                         "format": fmt,
                     },
                 )
+                # One transaction: a record never exists without its binding.
+                ImportRequest.objects.create(user=user, request_id=request_id, record=record)
         except IntegrityError:
-            # A concurrent upload won one of the two uniqueness races.
+            # A concurrent upload won the digest or the request-id uniqueness
+            # race; both inserts above rolled back together.
             record = ImportRecord.objects.filter(
                 user=user, input_digest=digest.hexdigest()
             ).first()
             if record is None:
-                # unique(user, client_request_id) lost: same request id,
-                # different payload. Outer handler removes the staged file.
-                raise ApiError(
-                    409, detail="request id reused with a different payload"
+                binding = (
+                    ImportRequest.objects.select_related("record")
+                    .filter(user=user, request_id=request_id)
+                    .first()
                 )
+                if binding is not None and binding.record.input_digest != digest.hexdigest():
+                    # Outer handler removes the staged file.
+                    raise ApiError(
+                        409, detail="request id reused with a different payload"
+                    )
+                raise
             if (record.manifest or {}).get("collection_id") != str(collection.id):
                 raise ApiError(
                     409, detail="file was already imported to a different collection"
                 )
-            os.remove(spooled)
-            return _json(
-                {
-                    "import": {
-                        "id": str(record.id),
-                        "status": (record.manifest or {}).get("status", "pending"),
-                    }
-                }
-            )
+            _bind_request_id(user, request_id, record)
+            return _import_replay(record, spooled)
     except Exception:
         try:
             os.remove(spooled)

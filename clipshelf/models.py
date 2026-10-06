@@ -525,9 +525,6 @@ class ImportRecord(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="import_records")
     input_digest = models.CharField(max_length=64)
-    # Real column so the database enforces request-id uniqueness across
-    # concurrent uploads; legacy rows keep NULL (distinct in unique indexes).
-    client_request_id = models.UUIDField(null=True, blank=True)
     manifest = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -536,11 +533,31 @@ class ImportRecord(models.Model):
             models.UniqueConstraint(
                 fields=["user", "input_digest"], name="clipshelf_import_digest_unique"
             ),
-            models.UniqueConstraint(
-                fields=["user", "client_request_id"],
-                name="clipshelf_import_user_request_unique",
-            ),
         ]
 
     def __str__(self):
         return f"Import {self.input_digest[:12]} by {self.user_id}"
+
+
+class ImportRequest(models.Model):
+    """Durable per-user binding of every accepted import request id to the
+    ImportRecord that consumed it, including same-digest 200 retries. The
+    database unique constraint is the only request-id uniqueness enforced
+    under concurrent uploads; manifest["client_request_id"] is an
+    informational copy, never a lookup path."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="import_requests")
+    request_id = models.UUIDField()
+    record = models.ForeignKey(ImportRecord, on_delete=models.CASCADE, related_name="request_bindings")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "request_id"], name="clipshelf_import_request_unique"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.request_id} -> {self.record_id}"

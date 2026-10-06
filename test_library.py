@@ -19,7 +19,7 @@ from django.utils import timezone
 from allauth.account.models import EmailAddress
 
 from clipshelf import services, worker
-from clipshelf.models import ImportRecord
+from clipshelf.models import ImportRecord, ImportRequest
 from clipshelf.models import Asset, Capture, Collection, Contribution, Entry, History, Job, Membership
 
 User = get_user_model()
@@ -869,9 +869,9 @@ class ImportTests(ApiTestCase):
 
     def test_import_idempotency_and_conflict(self):
         alice = self._login(self.alice)
-        crid = str(uuid.uuid4())
+        r1 = str(uuid.uuid4())
         content = json.dumps([{"id": "1", "desc": "clip one"}]).encode()
-        first = self._post_import(alice, content, crid=crid)
+        first = self._post_import(alice, content, crid=r1)
         self.assertEqual(first.status_code, 201)
         record_id = first.json()["import"]["id"]
         staged = list(
@@ -879,12 +879,28 @@ class ImportTests(ApiTestCase):
         )
         self.assertEqual(len(staged), 1)
         # Same bytes + same request id: idempotent.
-        again = self._post_import(alice, content, crid=crid)
+        again = self._post_import(alice, content, crid=r1)
         self.assertEqual(again.status_code, 200)
         self.assertEqual(again.json()["import"]["id"], record_id)
-        # Same request id + different bytes: conflict.
+        # A second request id on the same bytes replays the original record.
+        r2 = str(uuid.uuid4())
+        replay = self._post_import(alice, content, crid=r2)
+        self.assertEqual(replay.status_code, 200)
+        self.assertEqual(replay.json()["import"]["id"], record_id)
+        # Same request id reused with a different payload: conflict.
+        replay_conflict = self._post_import(
+            alice,
+            json.dumps([{"id": "2", "desc": "clip two"}]).encode(),
+            crid=r2,
+        )
+        self.assertEqual(replay_conflict.status_code, 409)
         self.assertEqual(
-            self._post_import(alice, content + b" ", crid=crid).status_code, 409
+            replay_conflict.json(),
+            {"detail": "request id reused with a different payload"},
+        )
+        # Same request id + different bytes (original user): conflict.
+        self.assertEqual(
+            self._post_import(alice, content + b" ", crid=r1).status_code, 409
         )
         repeat = self._post_import(alice, content, crid=str(uuid.uuid4()))
         self.assertEqual(repeat.status_code, 200)
@@ -918,31 +934,38 @@ class ImportTests(ApiTestCase):
         # The database constraint is the race backstop: the pre-insert check
         # can pass in two processes, only one insert may win.
         crid = str(uuid.uuid4())
-        ImportRecord.objects.create(
-            user=self.alice, input_digest="a" * 64, client_request_id=crid
+        record = ImportRecord.objects.create(user=self.alice, input_digest="a" * 64)
+        ImportRequest.objects.create(
+            user=self.alice, request_id=crid, record=record
         )
+        # A used request id cannot be rebound to a different record either.
+        rebound = ImportRecord.objects.create(user=self.alice, input_digest="c" * 64)
         with self.assertRaises(IntegrityError), transaction.atomic():
-            ImportRecord.objects.create(
-                user=self.alice, input_digest="b" * 64, client_request_id=crid
-            )
+            ImportRequest.objects.create(user=self.alice, request_id=crid, record=rebound)
         # The same request id is a separate identity for a different user.
-        ImportRecord.objects.create(
-            user=self.bob, input_digest="b" * 64, client_request_id=crid
+        ImportRequest.objects.create(
+            user=self.bob,
+            request_id=crid,
+            record=ImportRecord.objects.create(user=self.bob, input_digest="b" * 64),
         )
-        # Legacy rows without a request id never collide on NULLs.
-        ImportRecord.objects.create(user=self.alice, input_digest="c" * 64)
-        ImportRecord.objects.create(user=self.alice, input_digest="d" * 64)
 
-    def test_import_conflict_detected_via_request_id_column(self):
+    def test_import_conflict_detected_via_ledger(self):
         alice = self._login(self.alice)
         crid = str(uuid.uuid4())
-        ImportRecord.objects.create(
-            user=self.alice, input_digest="a" * 64, client_request_id=crid
+        record = ImportRecord.objects.create(
+            user=self.alice,
+            input_digest="a" * 64,
+            manifest={"client_request_id": crid, "status": "done"},
         )
+        ImportRequest.objects.create(user=self.alice, request_id=crid, record=record)
         response = self._post_import(
             alice, json.dumps([{"id": "2", "desc": "other payload"}]).encode(), crid=crid
         )
         self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.json(),
+            {"detail": "request id reused with a different payload"},
+        )
         self.assertEqual(ImportRecord.objects.count(), 1)
         self.assertEqual(
             os.listdir(os.path.join(os.path.realpath(self._data_dir()), "staging")), []
