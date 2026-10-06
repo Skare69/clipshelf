@@ -394,7 +394,6 @@ def _staging_sweep_candidates(manifest_paths, accepts, now=None):
     the path ineligible at any age. Returns accepted paths sorted.
     """
     now = now or timezone.now()
-    root = (Path(settings.DATA_DIR) / "staging").resolve()
     cutoff = now - timedelta(days=STAGING_RETENTION_DAYS)
     claims = {}
     for record in models.ImportRecord.objects.only("manifest", "created_at").iterator():
