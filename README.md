@@ -6,8 +6,8 @@ Share a link from your phone and your own server fetches what is actually in the
 post: TikTok photo carousels slide by slide with their audio, video with its ASR
 captions, pages as text. A vision model you host turns that into typed repo,
 prompt and guide entries — not tags. The Android app queues shares while offline
-and delivers them when it can. Self-hosted, account-based, no third-party
-service in the loop.
+and delivers them when it can. Self-hosted and account-based. A local model
+needs no third-party service when optional screening is off.
 
 ![clipshelf](screenshot.jpg)
 
@@ -22,8 +22,9 @@ service in the loop.
 | `tiktok-extract.js` | browser export for login-required posts; the server never takes TikTok cookies |
 
 Data lives in one directory (`CLIPSHELF_DATA_DIR`): `db.sqlite3` plus `assets/`
-(retained pages, images, video). Nothing leaves it except the outbound fetches
-the worker makes and the calls to the model endpoint you configure.
+(retained pages, images, video). The worker fetches sources and calls the model
+endpoint you configure. Optional TypeSafe screening also sends capture material
+and findings to its service.
 
 ## Run it locally
 
@@ -74,8 +75,10 @@ regardless. Setting `CLIPSHELF_CSRF=1` turns CSRF verification on and then
 requires `CLIPSHELF_ORIGIN` or a concrete `CLIPSHELF_ALLOWED_HOSTS`. Setting
 `CLIPSHELF_ORIGIN` to an `https://` URL additionally enables the HTTPS
 redirect, HSTS and secure cookies — set it only when a TLS ingress actually
-terminates in front of the app. The residual risk of the wildcard host default
-is DNS rebinding; narrow it by setting `CLIPSHELF_ALLOWED_HOSTS`.
+terminates in front of the app. With wildcard hosts and no `CLIPSHELF_ORIGIN`,
+account-mail links can inherit the request Host. Set `CLIPSHELF_ORIGIN` and
+restrict `CLIPSHELF_ALLOWED_HOSTS` when you enable SMTP. Wildcard hosts also
+permit DNS rebinding.
 
 ### Dependency and build pinning
 
