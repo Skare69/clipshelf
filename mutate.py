@@ -153,6 +153,8 @@ def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
     survived = []
     baseline_text = {}
     for rel in target_files:
+        if not (ws / rel).resolve().is_relative_to(ws.resolve()):
+            raise ValueError(f"mutation target escapes the workspace: {rel}")
         baseline_text[rel] = (ws / rel).read_text(encoding="utf-8")
     mutants = []
     for rel in target_files:
@@ -213,6 +215,14 @@ def run(args, log=print):
             return 0
     else:
         targets = args.targets or DEFAULT_TARGETS
+    rels = []
+    for t in targets:  # absolute or ../ paths would write outside the copied workspace
+        path = (REPO / t).resolve()
+        if not path.is_relative_to(REPO):
+            log(f"target outside the repo: {t}")
+            return 2
+        rels.append(path.relative_to(REPO).as_posix())
+    targets = rels
     missing = [t for t in targets if not (REPO / t).exists()]
     if missing:
         log(f"target(s) not found: {', '.join(missing)}")
@@ -247,7 +257,7 @@ def self_check():
     """Assert the mutator produces the expected classes and that the runner
     kills a caught mutant and reports an uncaught one. Hermetic: its own
     temp workspace, plain unittest, no repo code."""
-    global run_suite
+    global run_suite, REPO, TEMP_ROOT
     snippet = "def f(a, b):\n    if a == b:\n        return a + b\n    return a * b\n"
     labels = [label for _, label, _ in collect_sites(ast.parse(snippet))[1]]
     for expect in ("Eq->NotEq", "Add->Sub", "Mult->Div"):
@@ -293,6 +303,33 @@ def self_check():
         [sys.executable, "-c",
          "import sys; print('stderr diagnostic', file=sys.stderr); sys.exit(1)"], 60)
     assert code == 1 and "stderr diagnostic" in out, out
+
+    # target confinement: an absolute in-repo target mutates only the copy,
+    # and a ../ target is refused before anything is copied or written
+    fake_repo = (ws.parent / "repo").resolve()
+    fake_repo.mkdir()
+    source = fake_repo / "mod.py"
+    source.write_text("def f(a):\n    return a + 1\n", encoding="utf-8")
+    outside = ws.parent / "x.py"
+    outside.write_text("X = 1\n", encoding="utf-8")
+    original = source.read_bytes(), outside.read_bytes()
+    seen = []
+    real = run_suite, REPO, TEMP_ROOT
+    try:
+        run_suite = lambda *_args: (seen.append(source.read_bytes()), (0, ""))[1]
+        REPO, TEMP_ROOT = fake_repo, ws.parent / "runs"
+        args = argparse.Namespace(diff=None, targets=[str(source)], timeout=60,
+                                  max_mutants=0, fail_under=0)
+        logs = []
+        assert run(args, logs.append) == 0, logs
+        assert len(seen) > 1 and set(seen) == {original[0]}, seen
+        args.targets = ["../x.py"]
+        logs = []
+        assert run(args, logs.append) != 0, logs
+        assert any("outside the repo" in line for line in logs), logs
+    finally:
+        run_suite, REPO, TEMP_ROOT = real
+    assert (source.read_bytes(), outside.read_bytes()) == original
     print(f"self-check ok ({ws})")
 
 
