@@ -265,6 +265,41 @@ def test_deadline_bounded_reads():
         net.validate_url = real_validate
         srv.close()
 
+    # a status line + headers trickled one byte per 60 ms must still die at the
+    # deadline: each recv resets a plain socket timeout, so only a per-read
+    # deadline bounds header parsing (was 2.3 s for a 0.15 s budget)
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def trickle():
+        try:
+            conn, _ = srv.accept()
+            with conn:
+                for byte in b"HTTP/1.1 200 OK\r\nX-Slow: " + b"y" * 60 + b"\r\n\r\n":
+                    conn.sendall(bytes([byte]))
+                    time.sleep(0.06)
+        except OSError:
+            pass
+
+    net.validate_url = lambda url: ("http", "media.example", port, "/",
+                                    [(socket.AF_INET, ("127.0.0.1", port))])
+    thread = threading.Thread(target=trickle, daemon=True)
+    thread.start()
+    start = time.monotonic()
+    try:
+        try:
+            net.fetch_public("http://media.example/x", timeout=0.15)
+            raise AssertionError("trickled headers accepted past deadline")
+        except net.NetworkError as exc:
+            elapsed = time.monotonic() - start
+            assert "time bound" in str(exc), str(exc)
+            assert elapsed < 0.6, f"slow headers held the fetch {elapsed:.2f}s"
+    finally:
+        net.validate_url = real_validate
+        srv.close()
+
     # address retries share one budget: two refused dials must not each take
     # the full timeout
     class SlowRefusedSock(FakeSock):

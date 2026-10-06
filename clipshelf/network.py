@@ -13,6 +13,7 @@ policy per tunnel and pins the upstream IP. Extractors receive it as a fixed
 """
 import contextlib
 import http.client
+import io
 import ipaddress
 import os
 import select
@@ -116,12 +117,36 @@ def validate_url(url):
 
 # ------------------------------------------------------------- pinned fetch
 
+class _DeadlineIO(io.RawIOBase):
+    """Response stream that re-tightens the socket timeout to the remaining
+    whole-fetch budget before every single read: status line, headers, body.
+    A per-recv timeout alone lets a byte-at-a-time trickle reset it forever."""
+
+    def __init__(self, sock, fp, deadline):
+        self._sock, self._fp, self._deadline = sock, fp, deadline
+
+    def readable(self):
+        return True
+
+    def readinto(self, b):
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("fetch exceeded time bound")
+        self._sock.settimeout(left)
+        return self._fp.readinto1(b)    # at most one recv per call
+
+    def close(self):
+        super().close()
+        self._fp.close()                # drops the makefile ref on the socket
+
+
 class _PinnedHTTP(http.client.HTTPConnection):
     """HTTPConnection that connects to one pre-validated sockaddr, never DNS."""
 
-    def __init__(self, host, port, family, sockaddr, timeout, tls_ctx):
-        super().__init__(host, port, timeout=timeout)
+    def __init__(self, host, port, family, sockaddr, deadline, tls_ctx):
+        super().__init__(host, port, timeout=deadline - time.monotonic())
         self._family, self._sockaddr, self._tls_ctx = family, sockaddr, tls_ctx
+        self._deadline = deadline
 
     def connect(self):
         self.sock = socket.socket(self._family, socket.SOCK_STREAM)
@@ -131,6 +156,12 @@ class _PinnedHTTP(http.client.HTTPConnection):
             self.sock = self._tls_ctx.wrap_socket(self.sock, server_hostname=self.host)
             self.sock.settimeout(self.timeout)
 
+    def response_class(self, sock, **kwargs):
+        """HTTPResponse whose every read is bounded by the whole-fetch deadline."""
+        resp = http.client.HTTPResponse(sock, **kwargs)
+        resp.fp = io.BufferedReader(_DeadlineIO(sock, resp.fp, self._deadline))
+        return resp
+
 
 def _open_pinned(scheme, host, port, path, infos, user_agent, deadline):
     headers = {"Host": host if port in (80, 443) else f"{host}:{port}",
@@ -138,25 +169,26 @@ def _open_pinned(scheme, host, port, path, infos, user_agent, deadline):
                "Accept-Encoding": "gzip, deflate", "Connection": "close"}
     last = None
     for family, sockaddr in infos:
-        left = deadline - time.monotonic()
-        if left <= 0.05:
+        if deadline - time.monotonic() <= 0.05:
             raise NetworkError("fetch exceeded time bound")
-        conn = _PinnedHTTP(host, port, family, sockaddr, left, _TLS.get(scheme))
+        conn = _PinnedHTTP(host, port, family, sockaddr, deadline, _TLS.get(scheme))
         try:
             conn.request("GET", path, headers=headers)
             return conn, conn.getresponse()
         except (OSError, http.client.HTTPException) as exc:
             last = exc
             conn.close()
+            if deadline - time.monotonic() <= 0.05:
+                raise NetworkError("fetch exceeded time bound") from exc
     raise NetworkError(f"connect to {host[:255]} failed: {last}")
 
 
-def _bounded_read(resp, encoding, max_bytes, deadline, sock=None):
+def _bounded_read(resp, encoding, max_bytes, deadline):
     """Decompression-bounded read; gzip/deflate bombs die at max_bytes.
 
-    Reads one raw chunk at a time with the socket timeout re-tightened to the
-    remaining whole-fetch budget, so a slow trickle can never stretch the fetch
-    past its deadline. ponytail: header reads are only bounded per attempt.
+    Reads one raw chunk at a time; resp's _DeadlineIO stream bounds every
+    socket read by the whole-fetch deadline, so a slow trickle can never
+    stretch the fetch past it.
     """
     enc = (encoding or "").strip().lower()
     dec = None
@@ -179,14 +211,11 @@ def _bounded_read(resp, encoding, max_bytes, deadline, sock=None):
             if dec is not None and dec.unconsumed_tail:
                 absorb(dec.decompress(dec.unconsumed_tail, 65536))
                 continue
-            left = deadline - time.monotonic()
-            if left <= 0:
+            if deadline - time.monotonic() <= 0:
                 raise NetworkError("fetch exceeded time bound")
-            if sock is not None:
-                sock.settimeout(left)
             try:
                 chunk = resp.read1(65536)
-            except TimeoutError as exc:   # settimeout(left) ran out: budget spent
+            except TimeoutError as exc:   # deadline-tightened timeout ran out
                 raise NetworkError("fetch exceeded time bound") from exc
             except OSError as exc:
                 raise NetworkError(f"connection lost mid-body: {exc}") from exc
@@ -246,16 +275,16 @@ def fetch_public(url, max_bytes=DEFAULT_MAX_BYTES, timeout=DEFAULT_TIMEOUT,
             cap = _byte_cap(max_bytes, resp.headers.get("Content-Type"))
             if status in (301, 302, 303, 307, 308):
                 location = resp.headers.get("Location")
-                _bounded_read(resp, None, min(1 << 20, cap), deadline, conn.sock)
+                _bounded_read(resp, None, min(1 << 20, cap), deadline)
                 if not location:
                     raise NetworkError(f"redirect from {host[:255]} without location")
                 current = urllib.parse.urljoin(current, location)
                 continue
             if not 200 <= status < 300:
-                _bounded_read(resp, None, 1 << 20, deadline, conn.sock)
+                _bounded_read(resp, None, 1 << 20, deadline)
                 raise NetworkError(f"HTTP {status} from {host[:255]}")
             body = _bounded_read(resp, resp.headers.get("Content-Encoding"),
-                                 cap, deadline, conn.sock)
+                                 cap, deadline)
             return {"url": current, "body": body,
                     "content_type": _media_type(resp.headers.get("Content-Type"))}
         finally:
