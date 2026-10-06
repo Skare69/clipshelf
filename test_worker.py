@@ -503,6 +503,36 @@ class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
         self.assertEqual(data["title"], "t")
         self.assertEqual(data["findings"]["summary"], "good findings")
 
+    def test_tombstoned_redirect_publishes_nothing(self):
+        original = "https://example.com/short"
+        resolved = "https://example.com/full-article"
+        models.History.objects.create(
+            collection=self.personal, user=self.user,
+            kind=models.History.Kind.REMOVED, url=original)
+        job = self.make_job(url=original)
+
+        def redirecting(url, directory, status="complete"):
+            source = fake_acquire(resolved, directory, status)
+            source["original_url"] = url
+            return source
+
+        self.run_worker(
+            acquire=redirecting,
+            interpret=lambda source, config, cats, **kw: {
+                **FINDINGS, "source": source.get("url"),
+                "prompts": ["Summarize the changelog for operators."]})
+        job = self.refresh(job)
+        self.assertEqual(job.state, "done")
+        self.assertEqual(job.interpretation, "complete")
+        self.assertEqual(job.final_url, resolved)
+        # The interpreter really produced a prompt, so no-publication is a real guard.
+        self.assertTrue(job.findings["prompts"])
+        # Neither the redirect target nor the tombstoned original may publish.
+        self.assertFalse(models.Entry.objects.filter(collection=self.personal).exists())
+        self.assertFalse(models.Contribution.objects.filter(job=job).exists())
+        self.assertTrue(any("removed from this collection" in w for w in job.warnings),
+                        job.warnings)
+
     def test_prompt_identity_reuses_legacy_entries_and_mints_sha256(self):
         from clipshelf import publication
         shipped = "Write a tidy release note."

@@ -464,12 +464,13 @@ def store_findings(job, findings, screen=True):
                 interpretation=Job.InterpretationStatus.BLOCKED)
             caller_job.refresh_from_db()
             return False
-        # Same identity store_source published under: a redirected job keeps
-        # its source and its findings on one entry.
+        # Same identity store_source published under: a redirect, or the
+        # legacy all-lowercase form of either URL, must not re-attach.
         canonical = publication.link_key((job.source or {}).get("url") or job.url)
         warnings = list(job.warnings or [])
         if publication.tombstoned(
-                job.collection_id, user.id, *publication.link_keys(canonical)):
+                job.collection_id, user.id,
+                *publication.link_keys(canonical), *publication.link_keys(job.url)):
             warnings.append("URL was removed from this collection; findings were not attached.")
         else:
             publication.contribute_link(
