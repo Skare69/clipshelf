@@ -156,6 +156,27 @@ class CheckAndroidTests(unittest.TestCase):
         self.assertIn("unparseable", errors[0])
 
 
+REAL = (Path(check_licenses.__file__).parent / "Dockerfile").read_text(encoding="utf-8")
+
+
+def image_errors(dockerfile):
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        (root / "Dockerfile").write_text(dockerfile, encoding="utf-8")
+        errors = []
+        with patch.object(check_licenses, "ROOT", root), patch.object(
+                check_licenses, "errors", errors):
+            check_licenses.check_image()
+    return errors
+
+
+def runtime_plus(snippet):
+    """The shipped Dockerfile with `snippet` added to the runtime stage."""
+    anchor = "WORKDIR /app\n"
+    assert anchor in REAL
+    return REAL.replace(anchor, snippet + "\n" + anchor)
+
+
 class CheckImageTests(unittest.TestCase):
     def test_checks_runtime_external_base_and_ignores_stage_alias(self):
         image = check_licenses.INV["image"]
@@ -175,18 +196,75 @@ class CheckImageTests(unittest.TestCase):
             "COPY THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md\n"
         )
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "Dockerfile").write_text(dockerfile, encoding="utf-8")
-            errors = []
-            with patch.object(check_licenses, "ROOT", root), patch.object(
-                    check_licenses, "errors", errors):
-                check_licenses.check_image()
-
         self.assertEqual(
-            errors,
+            image_errors(dockerfile),
             [f"image: base image is python:3.13-alpine, inventory pins {image['base']}"],
         )
+
+    def test_shipped_dockerfile_passes(self):
+        self.assertEqual(image_errors(REAL), [])
+
+    def test_any_apt_install_form_is_compared_against_inventory(self):
+        for snippet in (
+            "RUN apt-get update && apt-get install -y jq",
+            "RUN apt install jq",
+            "RUN apt-get -y install jq",
+            "RUN DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -yq jq",
+            "RUN apt-get update; apt-get -o Dpkg::Use-Pty=0 install jq || true",
+            "RUN apt-get update \\\n# a comment line inside the continuation\n    && apt-get install jq",
+        ):
+            with self.subTest(snippet=snippet):
+                errors = image_errors(runtime_plus(snippet))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("apt stage sets", errors[0])
+                self.assertIn("'jq'", errors[0])
+
+    def test_unverifiable_package_manager_use_fails_closed(self):
+        for snippet in (
+            "RUN sh -c 'apt-get install -y jq'",
+            "RUN <<EOF\nset -e\napt-get install -y jq\nEOF",
+            "RUN python - <<'PY'\nimport os; os.system('apt-get install -y jq')\nPY",
+            "RUN apt-get install -y $EXTRA",
+            "RUN apt-get install -y jq=1.6-2.1",
+            "RUN apt-get install -y ./vendor.deb",
+            "RUN apt-get dist-upgrade -y",
+            "RUN dpkg -i /tmp/vendor.deb",
+            "RUN apk add jq",
+            "RUN dnf install -y jq",
+            "RUN microdnf install jq",
+            "RUN yum install -y jq",
+            "RUN rpm -i /tmp/vendor.rpm",
+            "RUN zypper in jq",
+            "RUN apt-get update # && apt-get install -y jq",
+            "RUN echo 'unbalanced",
+        ):
+            with self.subTest(snippet=snippet):
+                errors = image_errors(runtime_plus(snippet))
+                self.assertTrue(any("cannot verify" in e for e in errors), errors)
+
+    def test_external_image_sources_fail(self):
+        for snippet in (
+            "COPY --from=alpine:3.20 /bin/busybox /usr/local/bin/busybox",
+            "COPY --chown=0:0 --from=busybox /bin/busybox /usr/local/bin/busybox",
+            "RUN --mount=type=bind,from=alpine:3.20,target=/x cp /x/bin/busybox /usr/local/bin/",
+            "RUN --mount=type=cache,from=${CACHE_IMAGE},target=/c true",
+        ):
+            with self.subTest(snippet=snippet):
+                errors = image_errors(runtime_plus(snippet))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("pulls external image", errors[0])
+
+    def test_stage_and_pinned_base_sources_pass(self):
+        base = check_licenses.INV["image"]["base"]
+        for snippet in (
+            "COPY --from=SQLITE-BUILD /usr/local/include /tmp/include",
+            "COPY --from=0 /etc/os-release /tmp/os-release",
+            f"COPY --from={base} /etc/os-release /tmp/os-release",
+            "RUN --mount=type=bind,from=sqlite-build,target=/b true",
+            "RUN rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/",
+        ):
+            with self.subTest(snippet=snippet):
+                self.assertEqual(image_errors(runtime_plus(snippet)), [])
 
 
 if __name__ == "__main__":

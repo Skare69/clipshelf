@@ -12,8 +12,9 @@
 #
 # Enforced by check_licenses.py in ci.yml (python job: python+image modes,
 # android job: android mode). A new dependency — pip line, gradle line, apt
-# line, or new transitive — fails the build until it is reviewed and added
-# here and to THIRD_PARTY_NOTICES.md.
+# install (any form), external image via COPY --from / RUN --mount=from=, or new
+# transitive — fails the build until it is reviewed and added here and to
+# THIRD_PARTY_NOTICES.md. Package-manager use the gate cannot parse also fails.
 
 [allow]
 # SPDX identifiers permitted for shipped third-party code.

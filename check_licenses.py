@@ -10,7 +10,9 @@ Enforces license_inventory.toml against reality:
             inventoried artifact set (exact versions).
   image   : Dockerfile pins (base, apt, SQLite) must match the inventory, and
             the shipped THIRD_PARTY_NOTICES.md must exist and be byte-identical
-            to the copy packed into the APK assets.
+            to the copy packed into the APK assets. Fails closed: any package-
+            manager use it cannot parse, and any external image pulled via
+            COPY --from / RUN --mount=from=, fails unless it is the pinned base.
 
 Usage:
   check_licenses.py                 # python + image + notices (CI python job, local)
@@ -19,6 +21,7 @@ Usage:
 """
 import argparse
 import re
+import shlex
 import sys
 import tomllib
 from importlib.metadata import distributions
@@ -161,20 +164,125 @@ def check_android(deps_file: str) -> None:
                  f"reviewed {entry['observed']} — re-review, then update")
 
 
+# Tools that can put OS code into the image. Only `apt-get|apt|aptitude update`
+# and `... install <plain package names>` are understood; any other use fails
+# the gate rather than slipping past it.
+PKG_TOOLS = ("apt-get", "aptitude", "apt", "dpkg", "apk", "microdnf", "dnf",
+             "yum", "rpm", "zypper")
+PKG_WORD = re.compile(r"(?<![\w.-])(?:%s)(?![\w./-])" % "|".join(PKG_TOOLS))
+APT_ARG_OPTS = {"-o", "--option", "-c", "--config-file", "-t", "--target-release",
+                "--default-release", "-a", "--host-architecture"}
+DEB_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]+")
+
+
+def dockerfile_instructions(text: str):
+    """Yield (KEYWORD, flags, args, heredoc bodies) per Dockerfile instruction."""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        i += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        while line.endswith("\\") and i < len(lines):
+            nxt = lines[i].rstrip()
+            i += 1
+            if nxt.strip() and not nxt.lstrip().startswith("#"):
+                line = line[:-1] + " " + nxt
+        bodies = []
+        for delim in re.findall(r"(?<!<)<<(?!<)-?[ \t]*[\"']?(\w+)", line):
+            body = []
+            while i < len(lines) and lines[i].strip() != delim:
+                body.append(lines[i])
+                i += 1
+            i += 1
+            bodies.append("\n".join(body))
+        keyword, _, rest = line.strip().partition(" ")
+        m = re.match(r"((?:--\S+\s+)*)(.*)", rest.strip(), re.S)
+        yield keyword.upper(), m.group(1).split(), m.group(2), bodies
+
+
+def run_packages(args: str, bodies: list[str]) -> list[str] | None:
+    """apt packages a RUN installs; None if it uses a package manager in any
+    form this gate cannot verify (other tools, subcommands, names, wrappers)."""
+    lex = shlex.shlex(args, posix=True, punctuation_chars=True)
+    lex.whitespace_split = True
+    try:
+        tokens = list(lex)
+    except ValueError:
+        return None
+    segments = [[]]
+    for tok in tokens:
+        if tok and all(c in "();<>|&" for c in tok):
+            segments.append([])
+        else:
+            segments[-1].append(tok)
+
+    packages, seen = [], 0
+    for seg in segments:
+        hits = [n for n, tok in enumerate(seg) if tok.rpartition("/")[2] in PKG_TOOLS]
+        if not hits:
+            continue
+        seen += len(hits)
+        if seg[hits[0]].rpartition("/")[2] not in ("apt-get", "apt", "aptitude"):
+            return None
+        positional, skip = [], False
+        for tok in seg[hits[0] + 1:]:
+            if skip:
+                skip = False
+            elif tok.startswith("-"):
+                skip = tok in APT_ARG_OPTS
+            else:
+                positional.append(tok)
+        if positional == ["update"]:
+            continue
+        if (positional[:1] != ["install"] or len(positional) < 2
+                or not all(DEB_NAME.fullmatch(p) for p in positional[1:])):
+            return None
+        packages += positional[1:]
+    # Every tool mention in the text (quoted `sh -c`, heredoc bodies, comments)
+    # must be one of the invocations parsed above.
+    if seen != len(PKG_WORD.findall("\n".join([args, *bodies]))):
+        return None
+    return packages
+
+
 def check_image() -> None:
     text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     img = INV["image"]
 
-    stage_aliases = set()
+    aliases = set()
     bases = []
-    for match in re.finditer(
-            r"^[ \t]*FROM[ \t]+(?:(?:--\S+)[ \t]+)*(\S+)(?:[ \t]+AS[ \t]+(\S+))?",
-            text, re.M | re.I):
-        image, alias = match.groups()
-        if image.casefold() not in stage_aliases:
-            bases.append(image)
-        if alias:
-            stage_aliases.add(alias.casefold())
+    stage_pkgs = [set()]  # [0]: before any FROM (Docker rejects RUN there anyway)
+    for kw, flags, args, bodies in dockerfile_instructions(text):
+        if kw == "FROM":
+            words = args.split()
+            image = words[0] if words else ""
+            if image.casefold() not in aliases:
+                bases.append(image)
+            if len(words) >= 3 and words[1].upper() == "AS":
+                aliases.add(words[2].casefold())
+            stage_pkgs.append(set())
+        for flag in flags:
+            name, _, value = flag.partition("=")
+            if name == "--from":
+                sources = [value]
+            elif name == "--mount":
+                sources = [v for k, _, v in (o.partition("=") for o in value.split(","))
+                           if k == "from"]
+            else:
+                continue
+            for src in sources:
+                if src.casefold() not in aliases and not src.isdigit() and src != img["base"]:
+                    fail(f"image: {kw} {name} pulls external image {src}, "
+                         f"inventory pins only {img['base']}")
+        if kw == "RUN":
+            pkgs = run_packages(args, bodies)
+            if pkgs is None:
+                fail("image: RUN uses a package manager in a form the gate cannot "
+                     f"verify — review it, then extend check_licenses.py: {args[:160]}")
+            else:
+                stage_pkgs[-1].update(pkgs)
 
     if not bases:
         fail(f"image: base image is missing, inventory pins {img['base']}")
@@ -182,8 +290,7 @@ def check_image() -> None:
         if base != img["base"]:
             fail(f"image: base image is {base}, inventory pins {img['base']}")
 
-    stages = [sorted(m.group(1).split())
-              for m in re.finditer(r"apt-get install -y --no-install-recommends ([^\\]+)", text)]
+    stages = [sorted(s) for s in stage_pkgs if s]
     want = [sorted(img["apt_build_stage"]), sorted(img["apt_runtime"])]
     if stages != want:
         fail(f"image: apt stage sets {stages} != inventoried {want}")
