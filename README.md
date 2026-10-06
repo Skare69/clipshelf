@@ -21,6 +21,13 @@ needs no third-party service when optional screening is off.
 | Container (`Dockerfile`, `compose.yaml`) | one image, web + worker roles, SQLite and retained media on one data volume |
 | `tiktok-extract.js` | browser export for login-required posts; the server never takes TikTok cookies |
 
+The Android outbox holds at most 500 rows and 8 MiB of UTF-8 share text across
+all accounts on the phone. One share may hold at most 32768 UTF-8 bytes and 50
+URLs. A full outbox rejects new shares and never evicts stored rows; delivered
+rows count until you clear them, and paused or rejected rows can be deleted.
+Android OS backup is off (`android:allowBackup="false"`), so undelivered shares
+remain on this phone only.
+
 Data lives in one directory (`CLIPSHELF_DATA_DIR`): `db.sqlite3` plus `assets/`
 (retained pages, images, video). The worker fetches sources and calls the model
 endpoint you configure. Optional TypeSafe screening also sends capture material
@@ -29,9 +36,9 @@ and findings to its service.
 ## Run it locally
 
 ```
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
-CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data python clipshelf.py serve 127.0.0.1:8000   # shell 1
-CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data python clipshelf.py worker                 # shell 2
+python3.13 -m venv .venv && .venv/bin/python -m pip install --require-hashes -r requirements.lock
+CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data .venv/bin/python clipshelf.py serve 127.0.0.1:8000   # shell 1
+CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data .venv/bin/python clipshelf.py worker                 # shell 2
 ```
 
 Open the URL and complete the setup wizard — it creates the first
@@ -43,7 +50,7 @@ relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery.
 ## Deploy on the NAS
 
 Published image (linux/amd64 + linux/arm64), built and verified by CI:
-`ghcr.io/skare69/clipshelf:0.8.1`. The signed Android APK is attached to each
+`ghcr.io/skare69/clipshelf:0.9.0`. The signed Android APK is attached to each
 [release](https://github.com/Skare69/clipshelf/releases) — there is no app
 store, you sideload it.
 
@@ -82,10 +89,10 @@ permit DNS rebinding.
 
 ### Dependency and build pinning
 
-`requirements.txt` holds version ranges for local development. CI and the
-published image install one hash-locked resolution of it — `requirements.lock`,
-with per-platform wheel hashes for Windows CI and linux/amd64 + arm64 — so the
-audited set is the shipped set:
+`requirements.txt` holds the version ranges. CI, the published image and the
+local setup above install one hash-locked resolution of it — `requirements.lock`,
+with per-platform wheel hashes for Windows development and linux/amd64 + arm64 —
+so the audited set is the shipped set:
 
 - `python scripts/lock_deps.py check` fails when `requirements.txt` would
   resolve differently from the lock (CI runs this gate): a changed pin, a
@@ -113,17 +120,51 @@ import owns its spooled upload JSON plus a `staging/import-<hex>` media
 directory for its fetched bytes. Active work is never eligible for cleanup;
 finished work is kept for 30 days after completion for audit and replay.
 `python clipshelf.py clean` lists those candidates (paths and sizes) and
-deletes nothing; `python clipshelf.py clean --execute` waits for the exclusive
+deletes nothing. `python clipshelf.py clean --execute` takes the exclusive
 data lock (stop web/worker first — the controlled write pause), rechecks each
 candidate under the lock, and deletes only paths that are still expired,
 skipping (printing, never deleting) anything reactivated after listing.
 Unowned staging files are never touched by the command — inspect
 and remove those by hand after checking no import or job refers to them.
+In Docker the image entrypoint accepts only `serve`, `worker`, `migrate`,
+`bootstrap` and `check`, so name Python explicitly:
+
+```
+docker compose run --rm --entrypoint python web clipshelf.py clean --execute
+```
 
 Verification leftovers on a development machine (regression fixtures and
 restore drills: `clipshelf-*`, `cs-src-*`, `restore-*` directories and probe
 databases in the OS temp directory) are disposable by policy; the test suite
 removes its own fixtures, and the server never scans the OS temp directory.
+
+### Backup and restore
+
+`backup` writes a new directory (the path must not exist yet): a SQLite
+backup API snapshot `db.sqlite3`, `assets/`, `manifest.json`, and
+`SECRETS.json` (mode 0600) when the instance has secrets — protect it.
+`restore` accepts only an empty, isolated data directory and refuses one that
+already holds a database. Both take the exclusive data lock: stop web and
+worker first.
+
+```
+CLIPSHELF_DATA_DIR=./data .venv/bin/python clipshelf.py backup --output /backups/clipshelf-2026-10-06
+CLIPSHELF_DATA_DIR=./restored .venv/bin/python clipshelf.py restore --input /backups/clipshelf-2026-10-06
+```
+
+In Docker, pass the entrypoint and mount the backup path. The host backup
+directory and the empty restore directory must belong to
+`CLIPSHELF_UID`/`CLIPSHELF_GID`:
+
+```
+docker compose stop web worker
+docker compose run --rm -v /tank/backups:/backups --entrypoint python web clipshelf.py backup --output /backups/clipshelf-2026-10-06
+CLIPSHELF_DATA_DIR=/tank/clipshelf-restore docker compose run --rm -v /tank/backups:/backups:ro --entrypoint python web clipshelf.py restore --input /backups/clipshelf-2026-10-06
+```
+
+Restore prints the secrets to set before you serve the restored data: put
+`SECRET_KEY` from `SECRETS.json` into `CLIPSHELF_SECRET_KEY` and
+`EMAIL_HOST_PASSWORD` into `CLIPSHELF_SMTP_PASSWORD`.
 
 ## The loop
 
@@ -202,7 +243,7 @@ only; the original files are never modified and a repeated import is a no-op.
 | `research/` | the plan and the research behind it |
 
 Tests: `python clipshelf.py test` plus `python test_clipshelf.py` and
-`python test_sources.py` (both stdlib-only, no network).
+`python test_sources.py` (both use project dependencies and avoid external network).
 For the web DOM checks, run `node test_dom_events.mjs` and `node test_web_assets.mjs`.
 
 ### Mutation testing
@@ -225,16 +266,11 @@ suite still passes is a survived mutant — a behavior no test guards.
   command modules join the scope the same way. Tests, migrations and wiring
   are never mutated (the suite is the oracle).
 - Gate: `--fail-under` exits nonzero below the score percent. The default
-  `DEFAULT_FAIL_UNDER = 55` is the ratchet floor — raise it as tests improve,
-  never lower it. Measured 2026-10-05 with the full CI suite per mutant
-  (Django discovery plus the two standalone script suites): a 116-mutant
-  stratified sample of the default scope scored 81.0% killed; the residue is
-  docstrings, screening prompt text, and provably dead branches. An earlier
-  recorded ~59% baseline did not reproduce on identical inputs: it ran before
-  the harness covered the whole CI suite, and its concurrent full-scope run
-  inflated kills (a per-mutant timeout counts as killed). `--max-mutants N`
-  gives a stratified smoke sample; `python mutate.py self-check` verifies
-  the harness itself in under a second.
+  ratchet floor is `DEFAULT_FAIL_UNDER` in `mutate.py`, with its measurement
+  recorded beside it — raise it as tests improve, never lower it. Each mutant
+  runs the full CI suite (Django discovery plus the two standalone script
+  suites). `--max-mutants N` gives an evenly spaced smoke sample;
+  `python mutate.py self-check` verifies the harness itself in under a second.
 
 ## License
 
