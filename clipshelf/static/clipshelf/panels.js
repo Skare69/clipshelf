@@ -255,13 +255,22 @@ async function openDetail(id) {
       : [el("p", { class: "hint", text: "No jobs recorded for this entry." })]
   );
 }
+// Only root-relative /api/assets/<uuid> URLs resolve; everything else is rejected.
+function assetUrl(raw) {
+  if (typeof raw !== "string") return null;
+  if (!/^\/api\/assets\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(raw)) return null;
+  try {
+    const u = new URL(raw, location.origin);
+    return u.origin === location.origin && !u.search && !u.hash ? u.href : null;
+  } catch { return null; }
+}
 function renderAssets(assets) {
   if (!assets.length) return el("p", { class: "hint",
     text: "No source files retained for this entry." });
   const grid = el("div", { class: "thumbs" });
   const other = [];
   for (const a of assets) {
-    const u = safeUrl(a.url);
+    const u = assetUrl(a.url);
     if (!u) continue;
     if (a.kind === "image" && /^image\//.test(a.content_type || ""))
       grid.append(el("a", { href: u, target: "_blank", rel: "noopener" },
@@ -275,7 +284,7 @@ function renderAssets(assets) {
   const wrap = el("div", {});
   if (grid.childNodes.length) wrap.append(grid);
   for (const a of other) {
-    const u = safeUrl(a.url); if (!u) continue;
+    const u = assetUrl(a.url); if (!u) continue;
     const row = el("div", { class: "row2" },
       el("span", { class: "badge", text: a.kind || (a.content_type || "").split("/")[0] || "file" }),
       el("a", { href: u, target: "_blank", rel: "noopener" }, a.name || u));
