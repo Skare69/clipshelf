@@ -292,10 +292,12 @@ def api_me(request):
 
 @require_GET
 def api_instance(request):
-    """Unauthenticated instance disclosure for client origin verification:
-    the Android client probes a candidate endpoint through this view and only
-    sends its session token after it answers with the instance_id the client
-    is enrolled under (session tokens must never reach unverified origins)."""
+    """Unauthenticated, public instance disclosure. The Android client probes
+    a candidate endpoint here before it adopts it (Api.adoptCandidate) and
+    refuses a candidate that reports a different instance_id. The id is public,
+    so a match is not proof of origin: the client never sends its enrolled
+    session token to the candidate and instead signs in there afresh with the
+    account password, so only that fresh login's token is used there."""
     response = _json({"instance_id": str(services.get_settings().instance_id)})
     response["Cache-Control"] = "no-store"
     return response
