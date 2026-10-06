@@ -226,6 +226,9 @@ def serialize_entry(entry, user):
         desc = desc or _str(data.get("desc"))
         text = text or _str(data.get("text"))
         install = install or _str(data.get("install"))
+        cat = data.get("cat")
+        if isinstance(cat, str) and cat:
+            categories.add(cat)
         categories.update(v for v in data.get("categories") or [] if isinstance(v, str))
         tags.update(v for v in data.get("tags") or [] if isinstance(v, str))
         for item in data.get("sources") or []:

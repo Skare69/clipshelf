@@ -19,7 +19,8 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import Client, TestCase, TransactionTestCase, override_settings
+from allauth.account.models import EmailAddress
 from PIL import Image
 
 from clipshelf import judgment, models, publication, services, worker
@@ -431,6 +432,41 @@ class ImportTests(MigrationMixin, TestCase):
             {c.origin for c in models.Contribution.objects.filter(
                 entry__collection=self.personal)},
             {"legacy-import"})
+
+    def test_legacy_scalar_category_filters_on_api_without_assets(self):
+        """A legacy item with a scalar `cat` and no cached page still lands in
+        the right API category filter: regression for release e2233859, where
+        the scalar was dropped and `?cat=ml` returned nothing."""
+        url = "https://legacy.example/ml-note"
+        result = self.direct_import(items=[{
+            "url": url, "title": "ML note", "desc": "asset-free",
+            "sources": ["dump.txt"], "tags": [], "found": "2024-01-01",
+            "interpreted": "2024-02-01", "cat": "ml"}])
+        self.assertEqual(result["manifest"]["counts"]["links"], 1)
+        self.assertFalse(models.Job.objects.filter(url=url).exists(),
+                         "asset-free item must not enqueue a job")
+        entry = models.Entry.objects.get(collection=self.personal, key=url)
+
+        client = Client()
+        EmailAddress.objects.create(
+            user=self.user, email=self.user.email, verified=True, primary=True)
+        client.force_login(self.user)
+        response = client.get("/api/entries", {"cat": "ml"})
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual([item["id"] for item in payload["entries"]], [str(entry.id)])
+        self.assertEqual(payload["entries"][0]["title"], "ML note")
+        self.assertEqual(payload["entries"][0]["cat"], ["ml"])
+
+        contribution = models.Contribution.objects.get(
+            entry=entry, origin="legacy-import")
+        contribution.data["cat"] = 7
+        contribution.save()
+        self.assertEqual(services.serialize_entry(entry, self.user)["cat"], [])
+        contribution.data["cat"] = ""
+        contribution.save()
+        self.assertEqual(services.serialize_entry(entry, self.user)["cat"], [])
 
 
 class BackupRestoreTests(MigrationMixin, TransactionTestCase):
