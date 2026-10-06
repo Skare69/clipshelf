@@ -16,6 +16,10 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.http.request import (
+    MultiPartParserError,
+    RequestDataTooBig,
+)
 from django.db import IntegrityError, connection, transaction
 from django.db.models import Q
 from django.http import (
@@ -108,6 +112,10 @@ def api(view):
             response = json_error(403, detail="forbidden")
         except Http404:
             response = json_error(404, detail="no such resource")
+        except MultiPartParserError:
+            response = json_error(400, detail="malformed multipart body")
+        except RequestDataTooBig:
+            response = json_error(413, detail="request body too large")
         response["Cache-Control"] = "no-store"
         return response
 

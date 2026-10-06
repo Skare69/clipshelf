@@ -1006,6 +1006,39 @@ class ImportTests(ApiTestCase):
         self.assertEqual(
             [p.name for p in worker.staging_cleanup_candidates()], staged)
 
+    def test_malformed_multipart_gets_json_400(self):
+        alice = self._login(self.alice)
+        response = alice.post(
+            "/api/import",
+            data=b"--not-a-real-body",
+            content_type="multipart/form-data",  # no boundary parameter
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "malformed multipart body")
+        self.assertIn("application/json", response["Content-Type"])
+        self.assertEqual(response["Cache-Control"], "no-store")
+
+    def test_oversized_body_gets_json_413(self):
+        alice = self._login(self.alice)
+        boundary = "----clipshelftest"
+        field = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="client_request_id"\r\n\r\n'
+            + "x" * 4096 + "\r\n"
+            f"--{boundary}--\r\n"
+        ).encode()
+        with override_settings(DATA_UPLOAD_MAX_MEMORY_SIZE=1024):
+            response = alice.post(
+                "/api/import",
+                data=field,
+                content_type=f"multipart/form-data; boundary={boundary}",
+            )
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.json()["detail"], "request body too large")
+        self.assertIn("application/json", response["Content-Type"])
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertFalse(ImportRecord.objects.exists())
+
 
 class ShellAndHealthTests(ApiTestCase):
     def test_healthz_reports_real_database(self):
