@@ -14,6 +14,8 @@ import io
 import os
 import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import threading
 from pathlib import Path
@@ -214,3 +216,120 @@ class DeployProbeTests(SimpleTestCase):
             [n for n in os.listdir(data_dir) if n.startswith(".entrypoint-write-probe")],
             [],
         )
+
+
+def fake_dpkg_query(statuses):
+    """Emulate subprocess.run(["dpkg-query", "-W", "-f=FMT", *names]).
+
+    `statuses` is the dpkg database ({package: Status field}). Exit 1 when a
+    queried name is unknown, 2 on any other argv, like the real tool. Honors
+    capture_output/text/check so a call that would not get decoded stdout
+    in reality gets nothing usable here either.
+    """
+    def run(argv, **kwargs):
+        if argv[:2] != ["dpkg-query", "-W"] or not argv[2].startswith("-f="):
+            return subprocess.CompletedProcess(argv, 2, "", "dpkg-query: bad usage")
+        fmt, names = argv[2][3:], argv[3:]
+        out = "".join(
+            fmt.replace("${Package}", n).replace("${Status}", statuses[n])
+            for n in names if n in statuses
+        )
+        code = 0 if all(n in statuses for n in names) else 1
+        if kwargs.get("check") and code:
+            raise subprocess.CalledProcessError(code, argv)
+        if not kwargs.get("capture_output"):
+            out = None
+        elif not kwargs.get("text"):
+            out = out.encode()
+        return subprocess.CompletedProcess(argv, code, out, "")
+    return run
+
+
+def run_build_tools_gate(dpkg, paths=None):
+    """Run deploy/check_build_tools.py main() with faked dpkg-query and PATH.
+
+    `dpkg` replaces subprocess.run (a callable or an exception); `paths` maps
+    executable names to the path shutil.which should report.
+    Returns (exit code, captured output).
+    """
+    mod = load_deploy_script("check_build_tools.py", "check_build_tools")
+    run = mock.patch.object(subprocess, "run", side_effect=dpkg)
+    which = mock.patch.object(shutil, "which", side_effect=(paths or {}).get)
+    out = io.StringIO()
+    with run, which, contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+        try:
+            code = mod.main()
+        except SystemExit as exc:
+            code = exc.code
+    return code, out.getvalue()
+
+
+class BuildToolsGateTests(SimpleTestCase):
+    def test_clean_runtime_passes(self):
+        # None of the build packages exist (dpkg-query exits 1): the expected
+        # runtime state, not an error. Unrelated installed packages are fine.
+        code, out = run_build_tools_gate(
+            fake_dpkg_query({"ffmpeg": "install ok installed"})
+        )
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS", out)
+
+    def test_dpkg_query_success_without_installed_tools_passes(self):
+        # Exit 0 also means a clean image when all queried entries are
+        # removed-but-not-purged.
+        code, out = run_build_tools_gate(fake_dpkg_query({
+            name: "deinstall ok config-files"
+            for name in ("gcc", "make", "libc6-dev", "build-essential")
+        }))
+        self.assertEqual(code, 0, out)
+        self.assertIn("PASS", out)
+
+    def test_each_installed_build_package_fails(self):
+        for package in ("gcc", "make", "libc6-dev", "build-essential"):
+            with self.subTest(package=package):
+                code, out = run_build_tools_gate(
+                    fake_dpkg_query({package: "install ok installed"})
+                )
+                self.assertEqual(code, 1)
+                self.assertIn(f"packages=['{package}']", out)
+
+    def test_removed_but_not_purged_packages_do_not_count(self):
+        code, out = run_build_tools_gate(fake_dpkg_query({
+            "gcc": "install ok installed",
+            "make": "deinstall ok config-files",
+            "libc6-dev": "purge ok not-installed",
+        }))
+        self.assertEqual(code, 1)
+        self.assertIn("packages=['gcc']", out)
+
+    def test_compiler_on_path_without_package_fails(self):
+        # A toolchain copied in outside dpkg must still be caught.
+        for name in ("gcc", "cc", "make"):
+            with self.subTest(name=name):
+                code, out = run_build_tools_gate(
+                    fake_dpkg_query({}), {name: f"/usr/local/bin/{name}"}
+                )
+                self.assertEqual(code, 1)
+                self.assertIn(f"{name}=/usr/local/bin/{name}", out)
+
+    def test_dpkg_query_error_fails_closed(self):
+        def broken(argv, **kwargs):
+            return subprocess.CompletedProcess(argv, 2, "", "db locked")
+
+        for dpkg in (broken, lambda argv, **kwargs: subprocess.CompletedProcess(argv, -9, "", ""),
+                     FileNotFoundError("dpkg-query")):
+            with self.subTest(dpkg=dpkg):
+                code, out = run_build_tools_gate(dpkg)
+                self.assertNotEqual(code, 0)
+                self.assertIn("FAIL", str(code) + out)
+
+    def test_script_run_as_ci_step_fails_without_dpkg_query(self):
+        # Run exactly as the publish job does (python deploy/...): with no
+        # dpkg-query on PATH it must fail, never pass vacuously.
+        env = dict(os.environ, PATH="")
+        result = subprocess.run(
+            [sys.executable, str(DEPLOY / "check_build_tools.py")],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("dpkg-query", result.stderr)
