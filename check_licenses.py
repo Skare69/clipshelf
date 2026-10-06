@@ -95,16 +95,55 @@ def check_python(site: str | None) -> None:
 
 
 def check_android(deps_file: str) -> None:
-    text = Path(deps_file).read_text(encoding="utf-8", errors="replace")
+    text = Path(deps_file).read_text(encoding="utf-8-sig", errors="replace")
     found = {}
-    for m in re.finditer(r"---\s+([\w.]+):([\w.-]+):([\w.-]+)(.*)", text):
-        group, art, version, rest = m.groups()
-        key = f"{group}:{art}"
-        if "(c)" in rest or key in INV["android"]["non_packaged"]:
+
+    def clean(s: str) -> str:
+        s = s.strip()
+        while True:
+            if s.endswith(("(c)", "(*)")):
+                s = s[:-3].strip()
+            elif s.endswith("!"):  # "1.0!!" = forced
+                s = s.rstrip("!").strip()
+            else:
+                return s
+
+    for n, line in enumerate(text.splitlines(), 1):
+        _, sep, rest = line.rpartition("--- ")
+        if not sep:
+            if line.lstrip().startswith(("+---", "\\---")):
+                fail(f"android: line {n}: unparseable dependency node {line.strip()!r}")
             continue
-        resolved = rest.split("->")[-1].strip().split()
-        v = resolved[0] if resolved else version
-        if v != "(*)" and key not in found:  # (*) = subtree shown elsewhere
+        spec = rest.strip()
+        if "(c)" in spec and not spec.endswith("(c)"):  # embedded marker, not a suffix
+            fail(f"android: line {n}: unparseable dependency node {spec!r}")
+            continue
+        constraint = spec.endswith("(c)")  # constraint node, not packaged
+        if constraint:
+            spec = spec[:-3].strip()
+        # "g:a:v", "g:a:v -> selected", or BOM-style "g:a -> selected"
+        left, arrow, right = spec.partition("->")
+        parts = left.strip().split(":")
+        tok = r"[0-9A-Za-z][\w.+-]*"  # valid Gradle coordinate token
+        good = (len(parts) in ((2, 3) if arrow else (3,)) and all(parts)
+                and all(re.fullmatch(tok, p) for p in parts[:2]))
+        if arrow:
+            if not good or not (v := clean(right)):
+                fail(f"android: line {n}: unparseable dependency node {spec!r}")
+                continue
+        else:
+            if not good or not (v := clean(parts[2])):
+                fail(f"android: line {n}: unparseable dependency node {spec!r}")
+                continue
+        if not re.fullmatch(r"[0-9A-Za-z][\w.+-]*", v):
+            fail(f"android: line {n}: unparseable version {v!r} in {spec!r}")
+            continue
+        if constraint:
+            continue  # valid coordinate + constraint suffix, not packaged
+        key = f"{parts[0]}:{parts[1]}"
+        if key in INV["android"]["non_packaged"]:
+            continue  # metadata-only, not packaged in the APK
+        if key not in found:  # (*) = subtree shown elsewhere; version still real
             found[key] = v
 
     entries = INV["android"]["entries"]
