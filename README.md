@@ -89,9 +89,11 @@ audited set is the shipped set:
   missing pin, or an extra pin in the lock that is unrelated to the current
   resolution. The one known exception is Django's win32-only `tzdata` marker
   dependency, which may be present in the lock but absent from a
-  non-Windows resolution.
+  non-Windows resolution. It also fails when any shipped platform (Windows,
+  linux/amd64, linux/arm64) lacks a wheel matching the lock's hashes.
 - `python scripts/lock_deps.py make` regenerates the lock — after changing
-  `requirements.txt`, or when the check fails on a new upstream release.
+  `requirements.txt`, or when the check fails on a new upstream release. It
+  writes nothing when any platform has no wheel for a pin.
 - `pip-audit` in CI audits the lock directly (`--no-deps`), never a fresh
   re-resolution.
 

@@ -50,28 +50,34 @@ def resolve(python: str, req: Path, tmp: Path) -> dict[str, str]:
     return pins
 
 
-def collect_hashes(python: str, pins: dict[str, str], tmp: Path) -> tuple[dict, set, set]:
-    """Download wheels per platform set; return hashes per pin, dirs used, sdist-needed set."""
+def plat_args(plats: list[str]) -> list[str]:
+    """pip flags that select wheels for Python 3.13 on one platform set."""
+    args = ["--only-binary=:all:", "--python-version", "3.13", "--implementation", "cp",
+            "--abi", "cp313", "--abi", "abi3", "--abi", "none"]
+    for p in plats:
+        args += ["--platform", p]
+    return args
+
+
+def collect_hashes(python: str, pins: dict[str, str], tmp: Path) -> dict:
+    """Download wheels per platform set; return hashes per pin.
+
+    Exits when any platform set lacks a wheel for any pin: the image builds
+    without a compiler, so a partial lock would only fail at publish time.
+    """
     pins_file = tmp / "pins.txt"
     pins_file.write_text("\n".join(f"{n}=={v}" for n, v in sorted(pins.items())) + "\n",
                          encoding="utf-8")
     hashes: dict[tuple[str, str], set] = {}
-    sdists: set[str] = set()
-    dirs_used: set[str] = set()
 
     for plats in PLATFORM_SETS:
         plat_dir = tmp / ("plat-" + "-".join(plats))
-        cmd = [python, "-m", "pip", "download", "--no-deps", "--only-binary=:all:",
-               "-r", str(pins_file), "-d", str(plat_dir),
-               "--python-version", "3.13", "--implementation", "cp",
-               "--abi", "cp313", "--abi", "abi3", "--abi", "none"]
-        for p in plats:
-            cmd += ["--platform", p]
+        cmd = [python, "-m", "pip", "download", "--no-deps",
+               "-r", str(pins_file), "-d", str(plat_dir)] + plat_args(plats)
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
-            print(f"[warn] wheel download failed for {plats}:\n{r.stderr}", file=sys.stderr)
-            continue
-        dirs_used.add(plat_dir.name)
+            sys.exit(f"wheel download failed for {plats}; lock not written:\n{r.stderr}")
+        found = set()
         for f in plat_dir.iterdir():
             m = re.match(r"(.+)-([0-9][^-]*)-", f.name)
             if not m:
@@ -79,38 +85,23 @@ def collect_hashes(python: str, pins: dict[str, str], tmp: Path) -> tuple[dict, 
             n, v = canon(m.group(1)), m.group(2)
             if n not in pins or pins[n] != v:
                 continue
+            found.add(n)
             h = hashlib.sha256(f.read_bytes()).hexdigest()
             hashes.setdefault((n, v), set()).add(f"sha256:{h}")
-
-    # per-package sdist fallback for anything with no wheel
-    for n, v in sorted(pins.items()):
-        if (n, v) in hashes:
-            continue
-        sdists.add(n)
-        sdist_dir = tmp / "sdist" / n
-        r = subprocess.run([python, "-m", "pip", "download", "--no-deps",
-                            f"{n}=={v}", "-d", str(sdist_dir)],
-                           capture_output=True, text=True)
-        if r.returncode != 0:
-            sys.exit(f"No wheel or sdist for {n}=={v}:\n{r.stderr}")
-        dirs_used.add("sdist")
-        for f in sdist_dir.iterdir():
-            h = hashlib.sha256(f.read_bytes()).hexdigest()
-            hashes.setdefault((n, v), set()).add(f"sha256:{h}")
-    return hashes, dirs_used, sdists
+        if missing := sorted(pins.keys() - found):
+            sys.exit(f"no wheel for {plats}: {missing}; lock not written")
+    return hashes
 
 
 def make(python: str, req: Path, out: Path) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-"))
     print(f"temp: {tmp}")
     pins = resolve(python, req, tmp)
-    hashes, dirs_used, sdists = collect_hashes(python, pins, tmp)
+    hashes = collect_hashes(python, pins, tmp)
 
     lines = [HEADER.format(date=date.today().isoformat())]
     for n, v in sorted(pins.items()):
-        hs = sorted(hashes.get((n, v), []))
-        if not hs:
-            continue
+        hs = sorted(hashes[(n, v)])
         lines.append(f"{n}=={v} \\")
         for j, h in enumerate(hs):
             lines.append(f"    --hash={h}" + (" \\" if j < len(hs) - 1 else ""))
@@ -119,11 +110,7 @@ def make(python: str, req: Path, out: Path) -> None:
 
     print(f"wrote {out} with {len(pins)} pins")
     for n, v in sorted(pins.items()):
-        nhs = len(hashes.get((n, v), ()))
-        print(f"  {n}=={v}: {nhs} hash(es)")
-    print(f"platform dirs used: {sorted(dirs_used)}")
-    if sdists:
-        print(f"sdist fallback (no wheel): {sorted(sdists)}")
+        print(f"  {n}=={v}: {len(hashes[(n, v)])} hash(es)")
 
 
 def check(python: str, req: Path, lock: Path) -> int:
@@ -173,16 +160,16 @@ def check(python: str, req: Path, lock: Path) -> int:
     for w in warnings:
         print(f"warning: {w}")
 
-    # end-to-end validation: pip must accept the lock for this platform
-    with tempfile.TemporaryDirectory(prefix="clipshelf-lockgen-hashcheck-") as td:
-        tdp = Path(td)
+    # end-to-end validation: pip must accept the lock on every shipped platform,
+    # not just this host (CI runs on x86_64; the image also ships arm64)
+    for plats in PLATFORM_SETS:
         r = subprocess.run(
-            [python, "-m", "pip", "install", "--dry-run", "--require-hashes",
-             "--report", str(tdp / "inv.json"), "-r", str(lock)],
+            [python, "-m", "pip", "install", "--dry-run", "--ignore-installed",
+             "--require-hashes", "--no-deps", "-r", str(lock)] + plat_args(plats),
             capture_output=True, text=True)
         if r.returncode != 0:
             print("DRIFT:")
-            print("  hash validation failed for this platform")
+            print(f"  hash validation failed for {plats}")
             for ln in r.stderr.splitlines()[-15:]:
                 print(f"  {ln}")
             return 1
