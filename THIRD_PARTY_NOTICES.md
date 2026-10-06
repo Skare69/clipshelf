@@ -23,7 +23,10 @@ is the machine-readable twin of this file; `check_licenses.py` enforces both.
    it to this file. `check_licenses.py` runs in ci.yml (python job and
    android job).
 4. **Notices ship.** This file is `COPY`-ed into the server image and packed
-   byte-identically into the Android APK (`android/app/src/main/assets/`).
+   byte-identically into the Android APK assets at build time: the repo keeps
+   only this root copy, and `copyThirdPartyNotices` in
+   `android/app/build.gradle` copies it into the APK. The android CI job
+   asserts the built APK carries the file (`check_licenses.py --apk`).
 5. **Versions.** The Python versions below are the `requirements.lock` pins
    at review; the Android versions are the exact resolved artifacts. The gate
    checks that every inventory entry has a matching row here (name, version,

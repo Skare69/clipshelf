@@ -7,27 +7,29 @@ Enforces license_inventory.toml against reality:
             set for this platform, and every entry's license must be
             allowlisted and unchanged since review.
   android : the gradle-resolved releaseRuntimeClasspath must equal the
-            inventoried artifact set (exact versions).
+            inventoried artifact set (exact versions), and the built APK must
+            pack THIRD_PARTY_NOTICES.md.
   image   : Dockerfile pins (base, apt, SQLite) must match the inventory and
             the Dockerfile must COPY THIRD_PARTY_NOTICES.md. This reads the
             Dockerfile text, not a built image. Fails closed: any package-
             manager use it cannot parse, and any external image pulled via
             COPY --from / RUN --mount=from=, fails unless it is the pinned base.
-  notices : (every mode) THIRD_PARTY_NOTICES.md must exist and be
-            byte-identical to the copy packed into the APK assets; its Python
-            and Android tables must list exactly the inventoried entries
-            (name, version, license).
+  notices : (every mode) THIRD_PARTY_NOTICES.md must exist; its Python and
+            Android tables must list exactly the inventoried entries (name,
+            version, license). android mode also requires the built APK to
+            pack it.
 
 Usage:
   check_licenses.py                 # python + image + notices (CI python job, local)
   check_licenses.py --site DIR      # python set from a --target install dir
-  check_licenses.py android --deps FILE   # CI android job (after gradlew dependencies)
+  check_licenses.py android --deps FILE --apk APK   # CI android job (after assembleDebug)
 """
 import argparse
 import re
 import shlex
 import sys
 import tomllib
+import zipfile
 from importlib.metadata import distributions
 from pathlib import Path
 
@@ -60,13 +62,9 @@ def raw_license(dist) -> str:
 
 def check_notices() -> None:
     root = ROOT / "THIRD_PARTY_NOTICES.md"
-    apk = ROOT / "android/app/src/main/assets/THIRD_PARTY_NOTICES.md"
-    if not root.is_file() or not apk.is_file():
-        fail(f"notices: missing {root} or {apk}")
+    if not root.is_file():
+        fail(f"notices: missing {root}")
         return
-    if root.read_bytes() != apk.read_bytes():
-        fail("notices: android/app/src/main/assets/THIRD_PARTY_NOTICES.md "
-             "differs from the root copy")
     text = root.read_text(encoding="utf-8")
     for kind, heading in (("python", "Python dependencies"),
                           ("android", "Android dependencies")):
@@ -80,6 +78,16 @@ def check_notices() -> None:
             if want.get(n) != rows.get(n):
                 fail(f"notices: {kind} {n}: inventory (version, license) "
                      f"{want.get(n)} != THIRD_PARTY_NOTICES.md row {rows.get(n)}")
+
+
+def check_apk(apk: str) -> None:
+    """The built APK must pack the notices (Gradle copies them from the root)."""
+    try:
+        with zipfile.ZipFile(apk) as z:
+            if "assets/THIRD_PARTY_NOTICES.md" not in z.namelist():
+                fail(f"notices: {apk} does not pack assets/THIRD_PARTY_NOTICES.md")
+    except (OSError, zipfile.BadZipFile) as e:
+        fail(f"notices: cannot read {apk}: {e}")
 
 
 def check_python(site: str | None) -> None:
@@ -329,6 +337,7 @@ def main() -> int:
     ap.add_argument("mode", nargs="?", choices=["python", "android", "image"],
                     help="run one mode (default: python + image + notices)")
     ap.add_argument("--deps", help="gradle dependencies output for android mode")
+    ap.add_argument("--apk", help="built APK to check for the packaged notices")
     args = ap.parse_args()
 
     if args.mode in ("python", None):
@@ -337,6 +346,9 @@ def main() -> int:
         if not args.deps:
             ap.error("android mode needs --deps FILE")
         check_android(args.deps)
+        if not args.apk:
+            ap.error("android mode needs --apk APK")
+        check_apk(args.apk)
     if args.mode in ("image", None):
         check_image()
     check_notices()

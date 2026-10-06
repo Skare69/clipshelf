@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -301,6 +302,64 @@ class CheckNoticesTests(unittest.TestCase):
             f"notices: android androidx.core:core: inventory (version, license) "
             f"('{an['observed']}', 'Apache-2.0') != THIRD_PARTY_NOTICES.md row None",
         ])
+
+
+class CheckNoticesApkTests(unittest.TestCase):
+    def run_notices(self, root):
+        inv = {"python": {"entries": {}}, "android": {"entries": {}}}
+        errors = []
+        with patch.object(check_licenses, "ROOT", Path(root)), patch.object(
+                check_licenses, "INV", inv), patch.object(
+                check_licenses, "errors", errors):
+            check_licenses.check_notices()
+        return errors
+
+    def test_missing_root_notices_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            errors = self.run_notices(directory)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("missing", errors[0])
+
+    def test_present_root_notices_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            (Path(directory) / "THIRD_PARTY_NOTICES.md").write_text("n", encoding="utf-8")
+            self.assertEqual(self.run_notices(directory), [])
+
+    def run_apk(self, path):
+        errors = []
+        with patch.object(check_licenses, "errors", errors):
+            check_licenses.check_apk(str(path))
+        return errors
+
+    def test_apk_packing_notices_passes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "app.apk"
+            with zipfile.ZipFile(apk, "w") as z:
+                z.writestr("assets/THIRD_PARTY_NOTICES.md", "notices")
+            self.assertEqual(self.run_apk(apk), [])
+
+    def test_apk_without_notices_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "app.apk"
+            with zipfile.ZipFile(apk, "w") as z:
+                z.writestr("classes.dex", "dex")
+            errors = self.run_apk(apk)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("assets/THIRD_PARTY_NOTICES.md", errors[0])
+
+    def test_unreadable_apk_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            apk = Path(directory) / "app.apk"
+            apk.write_text("not a zip", encoding="utf-8")
+            errors = self.run_apk(apk)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("cannot read", errors[0])
+
+    def test_missing_apk_fails_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            errors = self.run_apk(Path(directory) / "absent.apk")
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("cannot read", errors[0])
 
 
 if __name__ == "__main__":
