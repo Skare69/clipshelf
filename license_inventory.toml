@@ -4,7 +4,7 @@
 #   python  : importlib.metadata of the hash-locked install
 #             `pip install --require-hashes -r requirements.lock` (CI and the
 #             image install exactly this set; CPython 3.13, linux). `observed`
-#             is the review-time version snapshot, NOT a gate — the lock owns
+#             is the lock pin at review (2026-10-06), NOT a gate — the lock owns
 #             versions (`scripts/lock_deps.py check` keeps it in step with
 #             requirements.txt); this file gates the NAME SET and the LICENSE
 #             of every shipped distribution.
@@ -14,10 +14,12 @@
 #             Dockerfile text, not from a built image.
 #
 # Enforced by check_licenses.py in ci.yml (python job: python+image modes,
-# android job: android mode). A new dependency — pip line, gradle line, apt
-# install (any form), external image via COPY --from / RUN --mount=from=, or new
-# transitive — fails the build until it is reviewed and added here and to
-# THIRD_PARTY_NOTICES.md. Package-manager use the gate cannot parse also fails.
+# android job: android mode). Every python and android entry must also have a
+# matching row (name, version, license) in THIRD_PARTY_NOTICES.md. A new
+# dependency — pip line, gradle line, apt install (any form), external image
+# via COPY --from / RUN --mount=from=, or new transitive — fails the build
+# until it is reviewed and added here and to THIRD_PARTY_NOTICES.md.
+# Package-manager use the gate cannot parse also fails.
 
 [allow]
 # SPDX identifiers permitted for shipped third-party code.
@@ -37,31 +39,31 @@ tooling = ["pip", "setuptools", "wheel"]
 [python.entries]
 
 django            = { observed = "5.2.17",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
-django-allauth    = { observed = "65.19.3", license = "MIT",          meta = "MIT" }
+django-allauth    = { observed = "65.19.7", license = "MIT",          meta = "MIT" }
 waitress          = { observed = "3.0.2",   license = "ZPL-2.1",      meta = "ZPL 2.1" }
 pillow            = { observed = "12.3.0",  license = "MIT-CMU",      meta = "MIT-CMU" }
-gallery-dl        = { observed = "1.32.12", license = "GPL-2.0-only", meta = "GPL-2.0-only" }
+gallery-dl        = { observed = "1.32.15", license = "GPL-2.0-only", meta = "GPL-2.0-only" }
 yt-dlp            = { observed = "2026.8.19", license = "Unlicense",  meta = "Unlicense" }
 argon2-cffi       = { observed = "25.1.0",  license = "MIT",          meta = "MIT" }
-typesafe-sdk      = { observed = "0.7.0",   license = "MIT",          meta = "MIT" }
+typesafe-sdk      = { observed = "0.7.2",   license = "MIT",          meta = "MIT" }
 truststore        = { observed = "0.10.4",  license = "MIT",          meta = "MIT" }
 asgiref           = { observed = "3.12.1",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 sqlparse          = { observed = "0.6.0",   license = "BSD-3-Clause", meta = "BSD License" }
 requests          = { observed = "2.34.2",  license = "Apache-2.0",   meta = "Apache-2.0" }
-charset-normalizer = { observed = "3.5.1",  license = "MIT",          meta = "MIT" }
-idna              = { observed = "3.19",    license = "BSD-3-Clause", meta = "BSD-3-Clause" }
-urllib3           = { observed = "2.7.0",   license = "MIT",          meta = "MIT" }
+charset-normalizer = { observed = "3.5.2",  license = "MIT",          meta = "MIT" }
+idna              = { observed = "3.20",    license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+urllib3           = { observed = "2.8.0",   license = "MIT",          meta = "MIT" }
 certifi           = { observed = "2026.7.22", license = "MPL-2.0",    meta = "MPL-2.0" }
 curl-cffi         = { observed = "0.16.3",  license = "MIT",          meta = "MIT" }
 cffi              = { observed = "2.1.1",   license = "MIT-0",        meta = "MIT-0" }
 pycparser         = { observed = "3.0",     license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 argon2-cffi-bindings = { observed = "26.1.0", license = "MIT",        meta = "MIT" }
-httpx2            = { observed = "2.13.0",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+httpx2            = { observed = "2.13.1",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 pydantic          = { observed = "2.13.5",  license = "MIT",          meta = "MIT" }
 pydantic-core     = { observed = "2.46.5",  license = "MIT",          meta = "MIT" }
 tenacity          = { observed = "9.1.4",   license = "Apache-2.0",   meta = "Apache 2.0" }
 typing-extensions = { observed = "4.16.0",  license = "PSF-2.0",      meta = "PSF-2.0" }
-httpcore2         = { observed = "2.13.0",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+httpcore2         = { observed = "2.13.1",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 h11               = { observed = "0.16.0",  license = "MIT",          meta = "MIT" }
 anyio             = { observed = "4.15.1",  license = "MIT",          meta = "MIT" }
 annotated-types   = { observed = "0.8.0",   license = "MIT",          meta = "MIT" }

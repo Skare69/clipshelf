@@ -267,5 +267,41 @@ class CheckImageTests(unittest.TestCase):
                 self.assertEqual(image_errors(runtime_plus(snippet)), [])
 
 
+class CheckNoticesTests(unittest.TestCase):
+    def run_notices(self, text):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            apk = root / "android/app/src/main/assets/THIRD_PARTY_NOTICES.md"
+            apk.parent.mkdir(parents=True)
+            for path in (root / "THIRD_PARTY_NOTICES.md", apk):
+                path.write_text(text, encoding="utf-8")
+            errors = []
+            with patch.object(check_licenses, "ROOT", root), patch.object(
+                    check_licenses, "errors", errors):
+                check_licenses.check_notices()
+        return errors
+
+    def test_removed_inventoried_rows_fail(self):
+        text = (Path(check_licenses.__file__).parent
+                / "THIRD_PARTY_NOTICES.md").read_text(encoding="utf-8")
+        py = check_licenses.INV["python"]["entries"]["gallery-dl"]
+        an = check_licenses.INV["android"]["entries"]["androidx.core:core"]
+        rows = [
+            f"| gallery-dl | {py['observed']} | **GPL-2.0-only** |",
+            f"| androidx.core:core | {an['observed']} | Apache-2.0 |",
+        ]
+        for row in rows:
+            self.assertIn(row, text)
+            text = "\n".join(line for line in text.split("\n")
+                             if not line.startswith(row))
+
+        self.assertEqual(self.run_notices(text), [
+            f"notices: python gallery-dl: inventory (version, license) "
+            f"('{py['observed']}', 'GPL-2.0-only') != THIRD_PARTY_NOTICES.md row None",
+            f"notices: android androidx.core:core: inventory (version, license) "
+            f"('{an['observed']}', 'Apache-2.0') != THIRD_PARTY_NOTICES.md row None",
+        ])
+
+
 if __name__ == "__main__":
     unittest.main()

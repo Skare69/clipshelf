@@ -14,7 +14,9 @@ Enforces license_inventory.toml against reality:
             manager use it cannot parse, and any external image pulled via
             COPY --from / RUN --mount=from=, fails unless it is the pinned base.
   notices : (every mode) THIRD_PARTY_NOTICES.md must exist and be
-            byte-identical to the copy packed into the APK assets.
+            byte-identical to the copy packed into the APK assets; its Python
+            and Android tables must list exactly the inventoried entries
+            (name, version, license).
 
 Usage:
   check_licenses.py                 # python + image + notices (CI python job, local)
@@ -65,6 +67,19 @@ def check_notices() -> None:
     if root.read_bytes() != apk.read_bytes():
         fail("notices: android/app/src/main/assets/THIRD_PARTY_NOTICES.md "
              "differs from the root copy")
+    text = root.read_text(encoding="utf-8")
+    for kind, heading in (("python", "Python dependencies"),
+                          ("android", "Android dependencies")):
+        section = text.partition(f"\n## {heading}")[2].partition("\n## ")[0]
+        # Rows: | name | version | license | ... ; the header row has no digit version.
+        rows = {m[0]: (m[1], m[2]) for m in re.findall(
+            r"^\| (\S+) \| (\d\S*) \| \**([^|*\s]+)\** \|", section, re.M)}
+        want = {n: (e["observed"], e["license"])
+                for n, e in INV[kind]["entries"].items()}
+        for n in sorted(want.keys() | rows.keys()):
+            if want.get(n) != rows.get(n):
+                fail(f"notices: {kind} {n}: inventory (version, license) "
+                     f"{want.get(n)} != THIRD_PARTY_NOTICES.md row {rows.get(n)}")
 
 
 def check_python(site: str | None) -> None:

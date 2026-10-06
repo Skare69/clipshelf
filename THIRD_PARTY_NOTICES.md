@@ -24,54 +24,56 @@ is the machine-readable twin of this file; `check_licenses.py` enforces both.
    android job).
 4. **Notices ship.** This file is `COPY`-ed into the server image and packed
    byte-identically into the Android APK (`android/app/src/main/assets/`).
-5. **Versions.** `observed` versions in the inventory are review snapshots,
-   not pins. pip/Gradle own version resolution; the gate owns the name set and
-   licenses. When review metadata changes upstream (license expression text),
-   the gate fails and the entry must be re-reviewed.
+5. **Versions.** The Python versions below are the `requirements.lock` pins
+   at review; the Android versions are the exact resolved artifacts. The gate
+   checks that every inventory entry has a matching row here (name, version,
+   license) and that the license metadata of the shipped set is unchanged
+   since review. When it changes upstream, the entry must be re-reviewed.
 6. **No JavaScript/Bun stack.** No JS package manifest, lockfile, or audit
    exists and no JS dependency ships in any artifact. None is fabricated here.
    Introducing one requires extending this inventory and the gate first.
 
 ## Python dependencies (server image)
 
-Ground truth: the exact `pip install -r requirements.txt` resolution the
-image installs (CPython 3.13, linux). `observed` = review snapshot
-(2026-10-02). PyPI project pages are the source of record; every wheel ships
-its license text inside `*.dist-info/licenses/`.
+Ground truth: the hash-locked `requirements.lock`, which the image installs
+with `pip install --require-hashes -r requirements.lock` (CPython 3.13,
+linux). `Observed` = the lock pin at review (2026-10-06). PyPI project pages
+are the source of record; every wheel ships its license text inside
+`*.dist-info/licenses/`.
 
 | Package | Observed | License | Notes |
 |---|---|---|---|
 | django | 5.2.17 | BSD-3-Clause | |
-| django-allauth | 65.19.3 | MIT | |
+| django-allauth | 65.19.7 | MIT | |
 | waitress | 3.0.2 | ZPL-2.1 | |
 | pillow | 12.3.0 | MIT-CMU | |
-| gallery-dl | 1.32.12 | **GPL-2.0-only** | subprocess only; obligations below |
+| gallery-dl | 1.32.15 | **GPL-2.0-only** | subprocess only; obligations below |
 | yt-dlp | 2026.8.19 | Unlicense | `[curl-cffi]` extra only; subprocess only |
 | argon2-cffi | 25.1.0 | MIT | |
-| typesafe-sdk | 0.7.0 | MIT | |
+| typesafe-sdk | 0.7.2 | MIT | |
 | truststore | 0.10.4 | MIT | required by httpx2 on all non-emscripten platforms |
 | asgiref | 3.12.1 | BSD-3-Clause | |
 | sqlparse | 0.6.0 | BSD-3-Clause | |
 | requests | 2.34.2 | Apache-2.0 | |
-| charset-normalizer | 3.5.1 | MIT | |
-| idna | 3.19 | BSD-3-Clause | |
-| urllib3 | 2.7.0 | MIT | |
+| charset-normalizer | 3.5.2 | MIT | |
+| idna | 3.20 | BSD-3-Clause | |
+| urllib3 | 2.8.0 | MIT | |
 | certifi | 2026.7.22 | MPL-2.0 | |
 | curl-cffi | 0.16.3 | MIT | |
 | cffi | 2.1.1 | MIT-0 | |
 | pycparser | 3.0 | BSD-3-Clause | |
 | argon2-cffi-bindings | 26.1.0 | MIT | |
-| httpx2 | 2.13.0 | BSD-3-Clause | |
+| httpx2 | 2.13.1 | BSD-3-Clause | |
 | pydantic | 2.13.5 | MIT | |
 | pydantic-core | 2.46.5 | MIT | |
 | tenacity | 9.1.4 | Apache-2.0 | |
 | typing-extensions | 4.16.0 | PSF-2.0 | |
-| httpcore2 | 2.13.0 | BSD-3-Clause | |
+| httpcore2 | 2.13.1 | BSD-3-Clause | |
 | h11 | 0.16.0 | MIT | |
 | anyio | 4.15.1 | MIT | |
 | annotated-types | 0.8.0 | MIT | |
 | typing-inspection | 0.4.4 | MIT | |
-| tzdata | 2026.3 | Apache-2.0 | django win32 marker: developer workstations only, not in the linux image |
+| tzdata | 2026.5 | Apache-2.0 | django declares it only on win32, but `requirements.lock` ships it on every platform, including the linux image |
 
 Not installed on purpose: yt-dlp's `[default]` extras (mutagen — **GPL-2.0+**,
 pycryptodomex, websockets, yt-dlp-ejs, brotli). If requirements ever enable
@@ -93,15 +95,27 @@ Apache-2.0.
 | androidx.collection:collection | 1.0.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.concurrent:concurrent-futures | 1.0.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.core:core | 1.9.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.lifecycle:lifecycle-* (common, livedata, livedata-core, runtime, service) | 2.5.1 | Apache-2.0 | The Android Open Source Project |
-| androidx.room:room-* (common, ktx, runtime) | 2.5.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.sqlite:sqlite, sqlite-framework | 2.3.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-common | 2.5.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-livedata | 2.5.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-livedata-core | 2.5.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-runtime | 2.5.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-service | 2.5.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.room:room-common | 2.5.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.room:room-ktx | 2.5.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.room:room-runtime | 2.5.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.sqlite:sqlite | 2.3.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.sqlite:sqlite-framework | 2.3.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.startup:startup-runtime | 1.1.1 | Apache-2.0 | The Android Open Source Project |
 | androidx.tracing:tracing | 1.0.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.versionedparcelable:versionedparcelable | 1.1.1 | Apache-2.0 | The Android Open Source Project |
 | org.jetbrains:annotations | 23.0.0 | Apache-2.0 | JetBrains s.r.o. |
-| org.jetbrains.kotlin:kotlin-stdlib (+common, jdk7, jdk8) | 1.8.22 / 1.8.20 | Apache-2.0 | JetBrains s.r.o. |
-| org.jetbrains.kotlinx:kotlinx-coroutines-android/-core/-core-jvm | 1.7.1 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib-common | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib-jdk7 | 1.8.20 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib-jdk8 | 1.8.20 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlinx:kotlinx-coroutines-android | 1.7.1 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlinx:kotlinx-coroutines-core | 1.7.1 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm | 1.7.1 | Apache-2.0 | JetBrains s.r.o. |
 | com.google.guava:listenablefuture | 1.0 | Apache-2.0 | Google LLC (Guava extract; POM omits the license, parent `guava-parent` is Apache-2.0) |
 
 `kotlinx-coroutines-bom` is a Gradle platform (metadata only) and is not
@@ -112,7 +126,7 @@ tooling; they are not shipped in the APK.
 
 | Component | Version | License | Notes |
 |---|---|---|---|
-| python:3.13-slim base | pinned tag | PSF-2.0 (CPython) + Debian distro set | digest pin TODO (see Dockerfile) |
+| python:3.13-slim base | pinned by digest (`sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81`, both Dockerfile stages) | PSF-2.0 (CPython) + Debian distro set | |
 | pip (in base) | per base image | MIT | tooling, not an application dependency |
 | Debian packages: ca-certificates, ffmpeg (runtime image) | per Debian release | DFSG set; ffmpeg program build is **GPL-2.0-or-later** | license texts ship in-image at `/usr/share/doc/<pkg>/copyright`; sources on deb.debian.org |
 | Debian packages: ca-certificates, gcc, libc6-dev, make (build stage only) | per Debian release | DFSG set | compile the bundled SQLite; discarded in the multistage build, never shipped |
@@ -121,7 +135,7 @@ tooling; they are not shipped in the APK.
 Debian policy: the distro guarantees DFSG-free licenses for its packages; the
 per-package copyright/license files are inside the image. The gate checks the
 Dockerfile pins (base, apt set, SQLite tarball + sha256), not each package's
-license. The exact Debian release is whatever the pinned base tag carries
+license. The exact Debian release is whatever the pinned base digest carries
 (see `/etc/os-release` in the image).
 
 ## GPL obligations for the distributed image
@@ -150,10 +164,6 @@ requirements, satisfied by the tables above plus the texts shipped in the
 packages themselves.
 
 ### GNU General Public License v2 (verbatim, from the gallery-dl wheel)
-
-### Apache License 2.0 (verbatim, from the requests wheel)
-
-### Mozilla Public License 2.0 (verbatim, mozilla.org/MPL/2.0)
 
                     GNU GENERAL PUBLIC LICENSE
                        Version 2, June 1991
@@ -496,6 +506,8 @@ library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.
 
 
+### Apache License 2.0 (verbatim, from the requests wheel)
+
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/
@@ -670,6 +682,8 @@ Public License instead of this License.
       defend, and hold each Contributor harmless for any liability
       incurred by, or claims asserted against, such Contributor by reason
       of your accepting any such warranty or additional liability.
+
+### Mozilla Public License 2.0 (verbatim, mozilla.org/MPL/2.0)
 
 Mozilla Public License Version 2.0
 ==================================
