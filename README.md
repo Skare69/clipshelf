@@ -85,7 +85,11 @@ with per-platform wheel hashes for Windows CI and linux/amd64 + arm64 — so the
 audited set is the shipped set:
 
 - `python scripts/lock_deps.py check` fails when `requirements.txt` would
-  resolve differently from the lock (CI runs this gate).
+  resolve differently from the lock (CI runs this gate): a changed pin, a
+  missing pin, or an extra pin in the lock that is unrelated to the current
+  resolution. The one known exception is Django's win32-only `tzdata` marker
+  dependency, which may be present in the lock but absent from a
+  non-Windows resolution.
 - `python scripts/lock_deps.py make` regenerates the lock — after changing
   `requirements.txt`, or when the check fails on a new upstream release.
 - `pip-audit` in CI audits the lock directly (`--no-deps`), never a fresh

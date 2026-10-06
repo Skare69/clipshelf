@@ -111,6 +111,60 @@ def _automatic_migration_waits_for_exclusive_lock():
                 holder.communicate(timeout=15)
 
 
+def _lock_check_regressions():
+    import sys
+    import tempfile
+    from pathlib import Path
+    from unittest import mock
+
+    import scripts.lock_deps as ld
+
+    BASE = {
+        "django": "5.0.6",
+        "asgiref": "3.8.1",
+        "sqlparse": "0.5.0",
+    }
+
+    def lock_file(tmp, extra):
+        lines = ["# test lock"]
+        pins = dict(BASE)
+        pins.update(extra)
+        for n, v in sorted(pins.items()):
+            lines.append(f"{n}=={v} \\")
+            lines.append("    --hash=sha256:" + "0" * 64)
+        path = tmp / "requirements.lock"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return path
+
+    def run_case(current_pins, extra):
+        with tempfile.TemporaryDirectory(prefix="clipshelf-lockcheck-") as td:
+            tmp = Path(td)
+            req = tmp / "requirements.txt"
+            req.write_text("django\n", encoding="utf-8")
+            lock = lock_file(tmp, extra)
+            ok_run = mock.Mock(returncode=0, stdout="", stderr="")
+            with mock.patch.object(ld, "resolve", return_value=current_pins), \
+                 mock.patch.object(ld.subprocess, "run", return_value=ok_run):
+                return ld.check(sys.executable, req, lock)
+
+    # a lock pin missing from the current resolution must fail the check;
+    # typesafe-sdk's real closure pins (per requirements.lock) are absent
+    typesafe_closure = {
+        "typesafe-sdk": "0.7.2",
+        "annotated-types": "0.8.0",
+        "anyio": "4.15.1",
+        "httpcore2": "2.13.1",
+        "httpx2": "2.13.1",
+        "pydantic": "2.13.5",
+        "pydantic-core": "2.46.5",
+        "typing-inspection": "0.4.4",
+    }
+    assert run_case(dict(BASE), typesafe_closure) != 0
+    # the only tolerated absence is Django's win32-only tzdata marker dep
+    assert run_case(dict(BASE), {"tzdata": "2024.1"}) == 0
+    # Django itself stays present in both scenarios (it is in BASE currents)
+
+
 def test():
     # norm: canonicalize + dedup
     assert cs.norm("https://GitHub.com/a/b/?utm_source=x#frag") == cs.norm("https://github.com/a/b")
@@ -266,6 +320,7 @@ def test():
         assert p.text == "a b", (tag, p.text)
 
     _automatic_migration_waits_for_exclusive_lock()
+    _lock_check_regressions()
     print("ok")
 
 
