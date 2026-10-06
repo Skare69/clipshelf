@@ -55,9 +55,9 @@ SUITE_CMDS = [
 ]
 # suite baseline ~13s; 120s absorbs pathological mutants without stalling runs
 DEFAULT_TIMEOUT = 120
-# Ratchet: 116 evenly spaced sites of the default 950-site scope. The old
-# stride sampler changed both count and membership when the scope grew:
-# 921 sites / stride 8 gave 116; 950 sites / stride 9 gave only 106.
+# Ratchet: 116 evenly spaced sites of the default scope. The old stride
+# sampler changed both count and membership when the scope grew: 921 sites /
+# stride 8 gave 116; 950 sites / stride 9 gave only 106.
 # ponytail: sample floor leaves room for Windows restore-file lock noise;
 # rerun in a quiet environment for the full, unsampled score.
 DEFAULT_FAIL_UNDER = 72

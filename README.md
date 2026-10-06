@@ -276,11 +276,12 @@ suite still passes is a survived mutant — a behavior no test guards.
   the release review). The earlier 94/116 = 81.0% record cannot come from
   the 950-site tree with that sampler; an older 921-site tree would select 116
   at stride 8. The scores cannot be compared as a ratchet.
-- The current sample killed 90/116 = 77.6%. Two mutants failed on unrelated
-  Windows restore file-lock errors; discounting them yields 88/116 = 75.9%.
-  Earlier runs had up to seven such false kills; the 72% floor leaves a margin.
-  Inspect `KILLED` diagnostics before raising the floor. A timeout counts as a
-  kill, not evidence that a test caught the mutant.
+- On the 950-site task snapshot, the sample killed 90/116 = 77.6%. Two
+  mutants failed on unrelated Windows restore file-lock errors; discounting
+  them yields 88/116 = 75.9%. The rebased 946-site scope killed 88/116 =
+  75.9%. Earlier runs had up to seven false kills, so the 72% floor leaves a
+  margin. Inspect `KILLED` diagnostics before raising it. A timeout counts as
+  a kill, not evidence that a test caught the mutant.
 - `python mutate.py self-check` verifies the harness. A sample is a practical
   gate, not the full-scope score; use `python mutate.py` for all sites.
 
