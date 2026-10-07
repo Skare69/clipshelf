@@ -143,11 +143,14 @@ public final class PendingLogout {
         }
     }
 
+    /** Drops only the confirmed record: each ciphertext carries its own random
+     *  GCM IV, so it identifies one pending session even when several share an
+     *  endpoint and email. */
     private static void remove(Context ctx, JSONObject r) {
+        String token = r.optString("token", "");
         List<JSONObject> kept = new ArrayList<>();
         for (JSONObject other : records(ctx)) {
-            if (!(r.optString("endpoint", "").equals(other.optString("endpoint", ""))
-                    && r.optString("email", "").equals(other.optString("email", "")))) {
+            if (!token.equals(other.optString("token", ""))) {
                 kept.add(other);
             }
         }
