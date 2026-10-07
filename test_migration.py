@@ -8,8 +8,10 @@ import json
 import os
 import shutil
 import sqlite3
+import stat
 import tempfile
 import threading
+import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -503,6 +505,55 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
             snapshot.assert_not_called()
         self.assertEqual(list(target.iterdir()), [])
         self.assertFalse((data_dir / "data.lock").exists())
+
+    def _backup_spying_secrets_writes(self, fail):
+        """Run a real backup; record the SECRETS.json fd mode at each write, optionally crash."""
+        data_dir = self.tmp / "backup-data"
+        data_dir.mkdir()
+        target = self.tmp / "secret-backup"
+        modes = []
+        real_fdopen = os.fdopen
+
+        def fdopen(fd, *args, **kwargs):
+            fh = real_fdopen(fd, *args, **kwargs)
+            real_write = fh.write
+
+            def write(text):
+                modes.append(stat.S_IMODE(os.fstat(fd).st_mode))
+                if fail:
+                    raise OSError("simulated crash during secrets write")
+                return real_write(text)
+
+            fh.write = write
+            return fh
+
+        old_umask = os.umask(0o022)  # the common default that made the old file 0644
+        try:
+            with override_settings(DATA_DIR=str(data_dir), SECRET_KEY="backup-secret-key",
+                                   EMAIL_HOST_PASSWORD="smtp-password"), \
+                    mock.patch("os.fdopen", side_effect=fdopen):
+                call_command("backup", "--output", str(target), stdout=io.StringIO())
+        finally:
+            os.umask(old_umask)
+        return target / "SECRETS.json", modes
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
+    def test_backup_secrets_are_private_at_first_write(self):
+        secrets_path, modes = self._backup_spying_secrets_writes(fail=False)
+        self.assertEqual(modes, [0o600], "SECRETS.json was readable by others while written")
+        self.assertEqual(stat.S_IMODE(secrets_path.stat().st_mode), 0o600)
+        self.assertEqual(json.loads(secrets_path.read_text(encoding="utf-8")),
+                         {"SECRET_KEY": "backup-secret-key",
+                          "EMAIL_HOST_PASSWORD": "smtp-password"})
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
+    def test_backup_secrets_stay_private_after_failed_write(self):
+        with self.assertRaisesMessage(OSError, "simulated crash"):
+            self._backup_spying_secrets_writes(fail=True)
+        secrets_path = self.tmp / "secret-backup" / "SECRETS.json"
+        self.assertEqual(stat.S_IMODE(secrets_path.stat().st_mode), 0o600,
+                         "a crashed backup left SECRETS.json readable by others")
+        self.assertNotIn("smtp-password", secrets_path.read_text(encoding="utf-8"))
 
     def test_concurrent_backups_publish_one_complete_generation(self):
         data_dir = self.tmp / "backup-data"

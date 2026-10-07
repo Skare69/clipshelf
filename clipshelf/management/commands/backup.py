@@ -104,6 +104,7 @@ class Command(BaseCommand):
         secrets = {key: getattr(settings, key) for key in SECRET_KEYS
                    if getattr(settings, key, "")}
         if secrets:
-            path = target / "SECRETS.json"
-            path.write_text(json.dumps(secrets, indent=2), encoding="utf-8")
-            os.chmod(path, 0o600)
+            # Created 0600 before any byte lands: no world-readable window, even on a crash.
+            fd = os.open(target / "SECRETS.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(secrets, indent=2))
