@@ -35,8 +35,8 @@ x-app: &app
   user: "${CLIPSHELF_UID:?numeric uid owning the data dir}:${CLIPSHELF_GID:?numeric gid owning the data dir}"
   environment: &app-env
     CLIPSHELF_DATA_DIR: /data
-    # Optional: pin the base URL for account-mail links (e.g.
-    # https://nas.example:8443). An https:// value enables HTTPS hardening.
+    # Base URL for account-mail links (e.g. https://nas.example:8443); unset,
+    # mails carry path-only links. An https:// value enables HTTPS hardening.
     CLIPSHELF_ORIGIN: ${CLIPSHELF_ORIGIN:-}
     # Optional: hostnames the server answers on; unset defaults to * (LAN use).
     CLIPSHELF_ALLOWED_HOSTS: ${CLIPSHELF_ALLOWED_HOSTS:-}

@@ -751,6 +751,56 @@ class InvitationUrlOriginTests(AccountTestCase):
         )
 
 
+class AccountMailOriginTests(AccountTestCase):
+    """Account mail never carries a link whose host came from the request
+    Host header: configured origin, or a path-only link until one is set."""
+
+    def setUp(self):
+        super().setUp()
+        self.evil = Client(HTTP_HOST="evil.example")
+
+    def _mail_links(self):
+        bodies = "\n".join(message.body for message in mail.outbox)
+        self.assertNotIn("evil.example", bodies)
+        return re.findall(r"\S*/accounts/\S+", bodies)
+
+    def test_reset_and_unknown_account_mail_ignore_host_header(self):
+        make_user("victim@clipshelf.test")
+        for email in ("victim@clipshelf.test", "nobody@clipshelf.test"):
+            self.evil.post("/accounts/password/reset/", {"email": email})
+        links = self._mail_links()
+        self.assertEqual(len(links), 2)
+        self.assertTrue(links[0].startswith("/accounts/password/reset/key/"), links)
+        self.assertEqual(links[1], "/accounts/signup/")
+
+    def test_confirmation_mail_follows_configured_origin(self):
+        # Own mailbox: allauth's confirm_email rate limit lives in the shared cache.
+        token, _ = make_invitation("mailorigin@clipshelf.test", self.admin)
+        self.evil.get(f"/invite/{token}")
+        with override_settings(CLIPSHELF_ORIGIN="https://clipshelf.example"):
+            self.evil.post("/accounts/signup/", {
+                "email": "mailorigin@clipshelf.test",
+                "password1": PASSWORD,
+                "password2": PASSWORD,
+            })
+        links = self._mail_links()
+        self.assertEqual(len(links), 1)
+        self.assertTrue(
+            links[0].startswith("https://clipshelf.example/accounts/confirm-email/"),
+            links,
+        )
+
+    def test_check_warns_when_smtp_has_no_origin(self):
+        from clipshelf.project.apps import mail_origin_check
+
+        smtp = "django.core.mail.backends.smtp.EmailBackend"
+        with override_settings(EMAIL_BACKEND=smtp, CLIPSHELF_ORIGIN=""):
+            self.assertEqual([w.id for w in mail_origin_check(None)], ["clipshelf.W001"])
+        with override_settings(EMAIL_BACKEND=smtp, CLIPSHELF_ORIGIN="http://nas:8000"):
+            self.assertEqual(mail_origin_check(None), [])
+
+
+
 @override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
 class ProductionAdminMountTests(TestCase):
     def test_production_mount_serves_every_admin_route(self):

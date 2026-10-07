@@ -74,7 +74,11 @@ not the app's.
 ### Configuration and hardening
 
 Nothing is required beyond image, UID/GID, data dir and port. The secret key is
-generated into the data directory on first start. `CLIPSHELF_ALLOWED_HOSTS`
+generated into the data directory on first start. Once SMTP is configured, set
+`CLIPSHELF_ORIGIN` to the URL users open (e.g. `http://nas.example:8000`):
+account mail never builds links from the request's Host header, so without it
+confirmation, reset and signup mails carry path-only links, and
+`clipshelf.py check` warns. `CLIPSHELF_ALLOWED_HOSTS`
 defaults to `*` because the expected deployment is a LAN with remote access
 behind a VPN. CSRF protection is off by default, like Jellyfin and the *arr
 services; cookie mutations stay protected by `SameSite=Lax` sessions

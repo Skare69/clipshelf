@@ -56,9 +56,9 @@ if _hosts_env:
 else:
     ALLOWED_HOSTS = ["*"]  # LAN behind a VPN; every Host header is fine.
 
-# Canonical origin for link-building with no HTTP request to read a Host from
-# (account mail, CLI commands). Purely optional: set it only for a non-default
-# scheme/port, or to turn on HTTPS transport hardening below.
+# Canonical origin for link-building with no trusted HTTP request to read a
+# Host from (account mail, CLI commands). Unset, account mail carries path-only
+# links; set it to make them clickable, or to turn on HTTPS hardening below.
 CLIPSHELF_ORIGIN = os.environ.get("CLIPSHELF_ORIGIN", "").rstrip("/")
 if CLIPSHELF_ORIGIN and not CLIPSHELF_ORIGIN.startswith(("http://", "https://")):
     raise ImproperlyConfigured("CLIPSHELF_ORIGIN must start with http:// or https://.")

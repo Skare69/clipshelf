@@ -90,7 +90,8 @@ class InviteSignupForm(SignupForm):
 
 
 # Links always come from the configured origin, never a Host header. With no
-# CLIPSHELF_ORIGIN configured the URL is returned unchanged.
+# CLIPSHELF_ORIGIN configured the URL is returned unchanged: callers that show
+# it back to the requesting admin may keep that admin's own Host.
 def canonical_url(url):
     origin = getattr(django_settings, "CLIPSHELF_ORIGIN", "") or ""
     if not origin:
@@ -100,6 +101,15 @@ def canonical_url(url):
     return urlunsplit(
         (base.scheme, base.netloc, parts.path, parts.query, parts.fragment)
     )
+
+
+def mail_url(url):
+    """A link for outgoing mail: mail leaves the request, so an unconfigured
+    origin yields a path-only link rather than one built from a Host header."""
+    if getattr(django_settings, "CLIPSHELF_ORIGIN", ""):
+        return canonical_url(url)
+    parts = urlsplit(url)
+    return urlunsplit(("", "", parts.path, parts.query, parts.fragment))
 
 
 class AccountAdapter(DefaultAccountAdapter):
@@ -148,12 +158,15 @@ class AccountAdapter(DefaultAccountAdapter):
     def get_reset_password_from_key_url(self, key):
         return canonical_url(super().get_reset_password_from_key_url(key))
 
-    def get_email_confirmation_url(self, request, emailconfirmation):
-        return canonical_url(
-            super().get_email_confirmation_url(request, emailconfirmation)
-        )
-
     def send_mail(self, template_prefix, email, context):
+        # Every link allauth puts into mail (activate_url, password_reset_url,
+        # signup_url) was built from the request Host; rebase them all here.
+        context = {
+            key: mail_url(value)
+            if key.endswith("_url") and isinstance(value, str)
+            else value
+            for key, value in context.items()
+        }
         # SMTP failures must stay observable: never swallow them into a fake
         # success page.
         super().send_mail(template_prefix, email, context)
