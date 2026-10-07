@@ -86,10 +86,8 @@ regardless. Setting `CLIPSHELF_CSRF=1` turns CSRF verification on and then
 requires `CLIPSHELF_ORIGIN` or a concrete `CLIPSHELF_ALLOWED_HOSTS`. Setting
 `CLIPSHELF_ORIGIN` to an `https://` URL additionally enables the HTTPS
 redirect, HSTS and secure cookies — set it only when a TLS ingress actually
-terminates in front of the app. With wildcard hosts and no `CLIPSHELF_ORIGIN`,
-account-mail links can inherit the request Host. Set `CLIPSHELF_ORIGIN` and
-restrict `CLIPSHELF_ALLOWED_HOSTS` when you enable SMTP. Wildcard hosts also
-permit DNS rebinding.
+terminates in front of the app. Wildcard hosts permit DNS rebinding; narrow
+them by setting `CLIPSHELF_ALLOWED_HOSTS`.
 
 ### Dependency and build pinning
 
