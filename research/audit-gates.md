@@ -15,8 +15,9 @@ dated evidence, not gates — enforcement lives in CI, not in this document.
 
 No `package.json`, `bun.lock`, `package-lock.json`, `yarn.lock`, or
 `pnpm-lock.yaml` is tracked (`git ls-files`, checked 2026-10-02). The only
-shipped JavaScript is `tiktok-extract.js`, a paste-into-DevTools console
-script with no imports and no build step. `bun audit --audit-level=high` and
+shipped JavaScript is `tiktok-extract.js` and `whatsapp-extract.js`,
+paste-into-DevTools console scripts with no imports and no build step.
+`bun audit --audit-level=high` and
 `bun pm licenses` exit 1 here with `No package.json was found` — the gates
 have no subject. Do not add an empty manifest to make them run; that would
 audit nothing. If a real JavaScript build lands, these gates become

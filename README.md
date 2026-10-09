@@ -20,6 +20,7 @@ needs no third-party service when optional screening is off.
 | Android app (`android/`) | share-sheet capture with a durable outbox, background delivery, online browsing |
 | Container (`Dockerfile`, `compose.yaml`) | one image, web + worker roles, SQLite and retained media on one data volume |
 | `tiktok-extract.js` | browser export for login-required posts; the server never takes TikTok cookies |
+| `whatsapp-extract.js` | browser export of one WhatsApp Web chat (links, images, notes) as a `library.json` import; re-runs export only new messages |
 
 The Android outbox holds at most 500 rows and 8 MiB of UTF-8 share text across
 all accounts on the phone. One share may hold at most 32768 UTF-8 bytes and 50
