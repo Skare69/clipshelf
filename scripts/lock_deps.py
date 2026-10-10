@@ -2,8 +2,12 @@
 """Hash-locked dependency resolution shared by CI and Docker.
 
 Usage:
-  python scripts/lock_deps.py make [requirements.txt] [-o requirements.lock]
+  python scripts/lock_deps.py make [requirements.txt] [-o requirements.lock] [--fresh NAME ...]
   python scripts/lock_deps.py check [requirements.txt] [requirements.lock]
+
+Both resolve only releases uploaded at least MIN_RELEASE_AGE ago (pip >= 26.0).
+A newer pin already in the lock stays, so the gate never reverts a security
+bump; `make --fresh NAME` admits the newest release of NAME at once.
 """
 import argparse
 import hashlib
@@ -12,7 +16,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 PLATFORM_SETS = [
@@ -21,11 +25,16 @@ PLATFORM_SETS = [
     ["manylinux2014_aarch64", "manylinux_2_28_aarch64"],
 ]
 
+# Release-age gate: a new upstream release enters the lock, and turns `check`
+# red, only once it is a week old.
+MIN_RELEASE_AGE = timedelta(days=7)
+
 HEADER = """\
 # requirements.lock — exact hash-locked closure of requirements.txt.
 # Purpose: single dependency resolution shared by CI and Docker.
 # Regenerate: python scripts/lock_deps.py make
 # Policy: regenerate whenever requirements.txt changes or `check` fails.
+# Release age: 7+ days before the Date line; newer pins only via make --fresh.
 # Platforms covered: win_amd64, manylinux x86_64/aarch64. Python 3.13 (cp313/abi3).
 # Date: {date}
 """
@@ -35,11 +44,11 @@ def canon(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def resolve(python: str, req: Path, tmp: Path) -> dict[str, str]:
+def dry_run(python: str, req: Path, tmp: Path, extra: list[str]) -> dict[str, str]:
     """Dry-run install, return {canonical_name: pinned_version}."""
     report = tmp / "report.json"
     cmd = [python, "-m", "pip", "install", "--dry-run", "--report", str(report),
-           "--ignore-installed", "-r", str(req)]
+           "--ignore-installed", *extra, "-r", str(req)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"pip dry-run failed:\n{r.stdout}\n{r.stderr}")
@@ -47,6 +56,43 @@ def resolve(python: str, req: Path, tmp: Path) -> dict[str, str]:
     for item in json.loads(report.read_text(encoding="utf-8"))["install"]:
         meta = item["metadata"]
         pins[canon(meta["name"])] = meta["version"]
+    return pins
+
+
+def release(version: str) -> tuple[int, ...]:
+    # ponytail: release segments only, so pre/post/dev suffixes compare equal;
+    # switch to packaging.version if such a pin ever reaches the lock.
+    return tuple(int(p) for p in re.match(r"\d+(?:\.\d+)*", version).group().split("."))
+
+
+def resolve(python: str, req: Path, tmp: Path, keep: dict[str, str] | None = None,
+            fresh: list[str] | None = None) -> dict[str, str]:
+    """Resolve releases older than MIN_RELEASE_AGE. A pin in `keep` (the
+    current lock) newer than that stays; names in `fresh` take their newest
+    release. Either case re-resolves once with every other pin held, so the
+    closure stays consistent."""
+    cutoff = (datetime.now(timezone.utc) - MIN_RELEASE_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
+    pins = dry_run(python, req, tmp, ["--uploaded-prior-to", cutoff])
+    unheld = {canon(n) for n in fresh or ()}
+    newer = {n: v for n, v in (keep or {}).items()
+             if n in pins and release(v) > release(pins[n])}
+    if not newer and not unheld:
+        return pins
+    held = tmp / "held.txt"
+    held.write_text("".join(f"{n}=={newer.get(n, v)}\n" for n, v in sorted(pins.items())
+                            if n not in unheld), encoding="utf-8")
+    return dry_run(python, req, tmp, ["-c", str(held)])
+
+
+def read_pins(lock: Path) -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for line in lock.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("#") or not line:
+            continue
+        m = re.match(r"([A-Za-z0-9_.-]+)==([^-\\\s]+)", line)
+        if m:
+            pins[canon(m.group(1))] = m.group(2)
     return pins
 
 
@@ -93,10 +139,10 @@ def collect_hashes(python: str, pins: dict[str, str], tmp: Path) -> dict:
     return hashes
 
 
-def make(python: str, req: Path, out: Path) -> None:
+def make(python: str, req: Path, out: Path, fresh: list[str] | None = None) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-"))
     print(f"temp: {tmp}")
-    pins = resolve(python, req, tmp)
+    pins = resolve(python, req, tmp, read_pins(out) if out.exists() else None, fresh)
     hashes = collect_hashes(python, pins, tmp)
 
     lines = [HEADER.format(date=date.today().isoformat())]
@@ -115,15 +161,8 @@ def make(python: str, req: Path, out: Path) -> None:
 
 def check(python: str, req: Path, lock: Path) -> int:
     tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-check-"))
-    current = resolve(python, req, tmp)
-    lock_pins: dict[str, str] = {}
-    for line in lock.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line.startswith("#") or not line:
-            continue
-        m = re.match(r"([A-Za-z0-9_.-]+)==([^-\\\s]+)", line)
-        if m:
-            lock_pins[canon(m.group(1))] = m.group(2)
+    lock_pins = read_pins(lock)
+    current = resolve(python, req, tmp, lock_pins)
 
     problems = []
     warnings = []
@@ -183,6 +222,8 @@ def main() -> None:
     mk = sub.add_parser("make")
     mk.add_argument("req", nargs="?", default="requirements.txt")
     mk.add_argument("-o", "--out", default="requirements.lock")
+    mk.add_argument("--fresh", nargs="+", metavar="NAME",
+                    help="admit the newest release of NAME now, for a security fix")
     ck = sub.add_parser("check")
     ck.add_argument("req", nargs="?", default="requirements.txt")
     ck.add_argument("lock", nargs="?", default="requirements.lock")
@@ -190,7 +231,7 @@ def main() -> None:
 
     python = sys.executable
     if args.cmd == "make":
-        make(python, Path(args.req), Path(args.out))
+        make(python, Path(args.req), Path(args.out), args.fresh)
     else:
         sys.exit(check(python, Path(args.req), Path(args.lock)))
 

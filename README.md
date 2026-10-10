@@ -107,6 +107,11 @@ so the audited set is the shipped set:
 - `python scripts/lock_deps.py make` regenerates the lock — after changing
   `requirements.txt`, or when the check fails on a new upstream release. It
   writes nothing when any platform has no wheel for a pin.
+- Both commands resolve only releases uploaded at least 7 days ago, so a new
+  upstream release enters the lock (and turns the check red) one week after it
+  appears. A newer pin already in the lock stays.
+  `python scripts/lock_deps.py make --fresh django` admits a security release
+  of `django` at once.
 - `pip-audit` in CI audits the lock directly (`--no-deps`), never a fresh
   re-resolution.
 

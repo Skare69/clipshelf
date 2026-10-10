@@ -165,6 +165,41 @@ def _lock_check_regressions():
     # Django itself stays present in both scenarios (it is in BASE currents)
 
 
+def _lock_gate_regressions():
+    import tempfile
+    from pathlib import Path
+    from unittest import mock
+
+    import scripts.lock_deps as ld
+
+    gated = {"django": "5.2.9", "asgiref": "3.12.1", "pydantic": "2.13.5"}
+    calls = []
+
+    def fake_dry_run(python, req, tmp, extra):
+        calls.append(extra)
+        if extra[0] == "--uploaded-prior-to":
+            return dict(gated)
+        held = dict(line.split("==") for line in Path(extra[1]).read_text().split())
+        return {n: held.get(n, "99.0") for n in gated}  # an unheld name gets its newest
+
+    with tempfile.TemporaryDirectory(prefix="clipshelf-lockgate-") as td, \
+            mock.patch.object(ld, "dry_run", side_effect=fake_dry_run):
+        tmp = Path(td)
+        req = tmp / "requirements.txt"
+        # a newer lock pin (a security bump) stays, compared numerically; an
+        # older pin and a pin the requirements no longer resolve do not
+        keep = {"django": "5.2.18", "asgiref": "3.11.0", "gone": "1.0"}
+        assert ld.resolve("python", req, tmp, keep) == {
+            "django": "5.2.18", "asgiref": "3.12.1", "pydantic": "2.13.5"}
+        # nothing newer in the lock: the gated pass alone decides
+        calls.clear()
+        assert ld.resolve("python", req, tmp, {"django": "5.2.9"}) == gated
+        assert len(calls) == 1
+        # --fresh unholds that pin only: the second pass takes its newest release
+        assert ld.resolve("python", req, tmp, fresh=["Pydantic"]) == {
+            "django": "5.2.9", "asgiref": "3.12.1", "pydantic": "99.0"}
+
+
 def test():
     # norm: canonicalize + dedup
     assert cs.norm("https://GitHub.com/a/b/?utm_source=x#frag") == cs.norm("https://github.com/a/b")
@@ -331,6 +366,7 @@ def test():
 
     _automatic_migration_waits_for_exclusive_lock()
     _lock_check_regressions()
+    _lock_gate_regressions()
     print("ok")
 
 
