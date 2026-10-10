@@ -600,7 +600,15 @@ def import_export(items, directory):
                          or ("images" not in item and "video" not in item
                              and "error" not in item))
         try:
-            if server_ingest:
+            if server_ingest and not item.get("interpreted") and not item.get("cache"):
+                # The worker's job loop fetches it, as for a capture: an import
+                # never runs one fetch per link before its single commit.
+                # Interpreted or page-cached legacy entries still fetch here.
+                source = new_source(item["url"])
+                source["acquisition"] = "pending"
+                source["title"] = str(item.get("title") or "")[:500]
+                source["desc"] = str(item.get("desc") or "")[:4000]
+            elif server_ingest:
                 source = acquire(item["url"], directory)  # server tier ingests directly
                 source["title"] = source["title"] or str(item.get("title") or "")[:500]
                 source["desc"] = source["desc"] or str(item.get("desc") or "")[:4000]

@@ -221,6 +221,9 @@ def _acquire_phase(job):
     except acquisition.AcquisitionError as exc:
         _fail(job, exc)
         return False
+    # An imported job keeps the export's title and note where the page has none.
+    source["title"] = source["title"] or job.source.get("title", "")
+    source["desc"] = source["desc"] or job.source.get("desc", "")
     asset_files.publish(source, staging, move=True)
     status = source.get("acquisition") or "error"
     # store_source owns every source fact: final_url, acquisition and warnings.
@@ -653,6 +656,8 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     transaction, so a crash or failure leaves no partial contributions and an
     exact repeat is a no-op keyed by (user, input digest). Raises
     ValidationError for rejected payloads; returns a result dict.
+    Links without media are not fetched here: their jobs start pending and
+    the job loop fetches them, as for a capture.
     """
     if not isinstance(items, list):
         raise ValidationError("import payload must be a list of items")
@@ -833,7 +838,7 @@ def _plans(items, sources):
             state, interp = "blocked", "pending"
             findings = None
         else:
-            state, interp = "queued", "pending"  # worker interprets without refetch
+            state, interp = "queued", "pending"  # job loop: fetch if pending, then interpret
             findings = None
         warnings = list(source.get("warnings") or [])
         plans.append({"item": item, "source": source, "url": url, "status": status,

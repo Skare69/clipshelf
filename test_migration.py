@@ -25,7 +25,7 @@ from django.test import Client, TestCase, TransactionTestCase, override_settings
 from allauth.account.models import EmailAddress
 from PIL import Image
 
-from clipshelf import judgment, models, publication, services, worker
+from clipshelf import acquisition, judgment, models, publication, services, worker
 from clipshelf.management.commands.backup import Command as BackupCommand
 
 CACHE_BYTES = b"<html>cached page</html>"
@@ -741,3 +741,35 @@ class ImportScreeningTests(MigrationMixin, TransactionTestCase):
             "flagged item must not be dropped from the import")
         # The whole import committed: the flagged job did not roll it back.
         self.assertTrue(models.ImportRecord.objects.filter(user=self.user).exists())
+
+
+class DeferredFetchTests(MigrationMixin, TestCase):
+    def test_url_only_items_fetch_in_the_job_loop(self):
+        note, done, cached = ("https://example.com/note", "https://example.com/done",
+                              "https://example.com/cached")
+        fetched = []
+
+        def fake_acquire(url, directory):
+            fetched.append(url)
+            source = acquisition.new_source(url)
+            source["acquisition"] = "partial"
+            return source
+
+        items = [{"url": note, "title": "Preview", "desc": f"my note {note}"},
+                 {"url": done, "interpreted": "2024-02-01"},
+                 {"url": cached, "cache": CACHE_NAME}]
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire):
+            worker.import_items(user=self.user, collection_id=None, items=items,
+                                cache_dir=str(self.cache_dir))
+            # Interpreted and page-cached legacy entries still fetch inline.
+            self.assertEqual(sorted(fetched), [cached, done])
+            job = models.Job.objects.get(url=note)
+            self.assertEqual((job.state, job.acquisition), ("queued", "pending"))
+            self.assertTrue(worker._acquire_phase(job))
+        self.assertEqual(fetched[-1], note)
+        job.refresh_from_db()
+        self.assertEqual(job.acquisition, "partial")
+        # The export's preview title and note survive a page without them.
+        self.assertEqual((job.source["title"], job.source["desc"]),
+                         ("Preview", f"my note {note}"))
