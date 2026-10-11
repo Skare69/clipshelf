@@ -33,6 +33,9 @@ const SEEN_KEY = "clipshelf-wa-seen";
 // (CLIPSHELF_MAX_IMPORT_BYTES); the rest waits for the next run. Lower this
 // if your server's ceiling is smaller.
 const FILE_BUDGET = 30e6;
+// mirrors clipshelf services.MAX_IMPORT_ITEMS: the server rejects an upload
+// with more link entries than this
+const ITEM_BUDGET = 5000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const iso = (t) => new Date(t * 1000).toISOString();
@@ -65,6 +68,18 @@ function entriesFor({ id, t, text = "", title = "", imageB64 = null }) {
       { desc: text || undefined, found, images: [{ b64: imageB64 }] }]);
   else if (!urls.length && text.trim()) rows.push(["prompts", id, { text, found }]);
   return rows;
+}
+
+// add one message's rows to `out` under both budgets; null = a budget would
+// be crossed (the caller stops, the message stays for the next run). The
+// first message always fits (bytes === 0): one message never holds thousands
+// of links.
+function applyRows(rows, out, bytes, nLinks) {
+  const size = new Blob([JSON.stringify(rows)]).size;
+  const add = rows.filter(([s, k]) => s === "links" && !(k in out.links)).length;
+  if (bytes && (bytes + size > FILE_BUDGET || nLinks + add > ITEM_BUDGET)) return null;
+  for (const [section, key, entry] of rows) out[section][key] ??= entry;
+  return [add, size];
 }
 
 // the button WhatsApp renders above the first message while older history
@@ -143,29 +158,33 @@ async function whatsappExtract() {
 
   const out = { links: {}, prompts: {} };
   const done = [], skipped = [], failed = [];
-  let bytes = 0, full = false;
+  let bytes = 0, nLinks = 0, full = false;
   for (const m of fresh) {
+    let rows;
     if (m.type !== "chat" && m.type !== "image") {
       skipped.push(`${m.type} ${iso(m.t)}`); // reported once, then marked done
-      done.push(m.id.id);
-      continue;
-    }
-    let imageB64 = null;
-    if (m.type === "image") {
-      console.log(`image ${iso(m.t)}`);
-      try {
-        imageB64 = new Uint8Array(await imageBytes(m)).toBase64();
-      } catch (e) {
-        failed.push(`image ${iso(m.t)}: ${e?.message ?? e}`); // not done: retried next run
-        continue;
+      // a video/document caption can still carry links: export those rows
+      rows = m.caption
+        ? entriesFor({ id: m.id.id, t: m.t, text: m.caption }).filter(([s]) => s === "links")
+        : [];
+    } else {
+      let imageB64 = null;
+      if (m.type === "image") {
+        console.log(`image ${iso(m.t)}`);
+        try {
+          imageB64 = new Uint8Array(await imageBytes(m)).toBase64();
+        } catch (e) {
+          failed.push(`image ${iso(m.t)}: ${e?.message ?? e}`); // not done: retried next run
+          continue;
+        }
       }
+      rows = entriesFor({ id: m.id.id, t: m.t, title: m.title || "", imageB64,
+        text: (m.type === "image" ? m.caption : m.body) || "" });
     }
-    const rows = entriesFor({ id: m.id.id, t: m.t, title: m.title || "", imageB64,
-      text: (m.type === "image" ? m.caption : m.body) || "" });
-    const size = new Blob([JSON.stringify(rows)]).size;
-    if (bytes && bytes + size > FILE_BUDGET) { full = true; break; }
-    bytes += size;
-    for (const [section, key, entry] of rows) out[section][key] ??= entry;
+    const applied = applyRows(rows, out, bytes, nLinks);
+    if (!applied) { full = true; break; }
+    nLinks += applied[0];
+    bytes += applied[1];
     done.push(m.id.id);
   }
 
@@ -188,7 +207,7 @@ async function whatsappExtract() {
     complete, budgetReached: full,
   };
   console.log("whatsapp-extract:", summary);
-  if (full) console.warn("file budget reached: run again for the remaining messages");
+  if (full) console.warn("budget reached (items or bytes): run again for the remaining messages");
   return summary;
 }
 
@@ -221,5 +240,34 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
     ["links", "https://c.example", { found }],
     ["links", "https://web.whatsapp.com/?msg=ID", { desc: "https://c.example", found, images: [{ b64: "AAA=" }] }],
   ]);
+  // budgets: applyRows stops before crossing either budget; the first
+  // message always fits
+  const linkRows = (n, tag) => Array.from({ length: n }, (_, i) =>
+    ["links", `https://${tag}.example/${i}`, { found }]);
+  {
+    const out = { links: {}, prompts: {} };
+    // the first message always fits, even a full cap of links at once
+    assert.strictEqual(applyRows(linkRows(ITEM_BUDGET, "a"), out, 0, 0)[0], ITEM_BUDGET);
+    // one link over the cap: stop, add nothing
+    assert.strictEqual(applyRows(linkRows(1, "b"), out, 1, ITEM_BUDGET), null);
+    assert.strictEqual(Object.keys(out.links).length, ITEM_BUDGET);
+    // at the cap exactly: admitted
+    const out2 = { links: {}, prompts: {} };
+    assert.strictEqual(applyRows(linkRows(ITEM_BUDGET - 1, "a"), out2, 0, 0)[0], ITEM_BUDGET - 1);
+    assert.strictEqual(applyRows(linkRows(1, "b"), out2, 1, ITEM_BUDGET - 1)[0], 1);
+    assert.strictEqual(Object.keys(out2.links).length, ITEM_BUDGET);
+    // the byte budget stops too
+    assert.strictEqual(applyRows(linkRows(1, "c"), { links: {}, prompts: {} }, FILE_BUDGET, 0), null);
+  }
+  // a video/document caption exports its link rows only (never a prompt
+  // row), through the same budgets; a caption with no URL adds nothing
+  {
+    const out = { links: {}, prompts: {} };
+    const cap = (text) => entriesFor({ id: "V1", t: 0, text }).filter(([s]) => s === "links");
+    assert.strictEqual(applyRows(cap("watch https://d.example now"), out, 0, 0)[0], 1);
+    assert.deepStrictEqual(Object.keys(out.links), ["https://d.example"]);
+    assert.deepStrictEqual(out.prompts, {});
+    assert.deepStrictEqual(applyRows(cap("no url here"), out, 1, 1), [0, 2]);
+  }
   console.log("whatsapp-extract self-test ok");
 }
