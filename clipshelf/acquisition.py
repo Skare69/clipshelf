@@ -21,7 +21,7 @@ import urllib.parse
 from PIL import Image
 
 from clipshelf import network
-from clipshelf.lib import PageParser, is_short, norm
+from clipshelf.lib import MAX_URL_LENGTH, PageParser, is_short, norm
 
 __all__ = ["AcquisitionError", "acquire", "import_export", "validate_image",
            "validate_video_file"]
@@ -203,6 +203,11 @@ def _acquire_page(url, directory, source):
             _warn(source, "page links truncated at 50")
             break
         absolute = norm(urllib.parse.urljoin(resp["url"], href))
+        if absolute and len(absolute) > MAX_URL_LENGTH:
+            # calendar/share/tracking hrefs run long; one of them must not
+            # fail the whole capture in store_source's URL validation
+            _warn(source, f"page link dropped: longer than {MAX_URL_LENGTH} characters")
+            continue
         if absolute and absolute not in seen:
             seen.add(absolute)
             links.append({"url": absolute, "title": anchor[:300]})

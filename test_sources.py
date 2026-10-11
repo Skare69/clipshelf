@@ -667,6 +667,17 @@ def test_interpretation_bounds():
     assert mixed["categories"] == ["github"]
     assert any("bogus" in w for w in warnings)
 
+    # an over-long copied URL drops with a warning instead of failing the
+    # whole interpretation (a retry cannot shorten a URL the model copies)
+    warnings = []
+    long_url = "https://calendar.example.com/render?" + "x" * 2100
+    overlong = interp._validated(interp._parse_json_content(
+        '{"summary": "s", "repos": [], "prompts": [], "links": ["' + long_url + '"], '
+        '"categories": [], "installs": [], "warnings": []}'),
+        source["url"], categories, warnings)
+    assert overlong["links"] == []
+    assert any("dropped" in w for w in warnings)
+
     # interpret: one malformed retry then preserve the failure (2 POSTs max)
     real_post = interp.post
     calls = []

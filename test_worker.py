@@ -16,7 +16,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
-from clipshelf import cli, models, services, worker
+from clipshelf import cli, models, publication, services, worker
 
 FINDINGS = {"source": "", "summary": "good findings", "repos": [], "prompts": [],
             "links": [], "categories": [], "installs": [], "warnings": []}
@@ -64,6 +64,45 @@ class WorkerMixin:
     def refresh(self, job):
         job.refresh_from_db()
         return job
+
+
+class HarvestedLinkLengthTests(WorkerMixin, TransactionTestCase):
+    """One over-long href must not fail the whole capture: the long link is
+    dropped at harvest instead of raising in store_source, which used to burn
+    every retry and orphan each attempt's published asset directory."""
+
+    def test_over_long_href_is_dropped_capture_completes(self):
+        page_url = "https://example.com/page"
+        kept = "https://example.com/kept"
+        long_url = "https://calendar.example.com/render?" + "x" * 2100
+        self.assertGreater(len(long_url), services.MAX_URL_LENGTH)
+        html = (f'<html><head><title>t</title></head><body>'
+                f'<a href="{kept}">kept</a>'
+                f'<a href="{long_url}">add to calendar</a></body></html>').encode()
+
+        def fake_fetch(url, max_bytes=None, timeout=None, user_agent=None):
+            return {"url": url, "body": html, "content_type": "text/html"}
+
+        job = self.make_job(url=page_url)
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.network.fetch_public", side_effect=fake_fetch), \
+                mock.patch("clipshelf.interpretation.interpret",
+                           side_effect=lambda source, config, cats, **kw:
+                               {**FINDINGS, "source": source.get("url")}):
+            worker.main(once=True)
+        job = self.refresh(job)
+        self.assertEqual(job.state, "done")
+        self.assertEqual(job.acquisition, "complete")
+        self.assertTrue(models.Entry.objects.filter(
+            collection=self.personal, key=publication.link_key(page_url)).exists())
+        self.assertEqual([link["url"] for link in job.source["links"]], [kept])
+        self.assertIn(f"page link dropped: longer than {services.MAX_URL_LENGTH} characters",
+                      job.source["warnings"])
+        # no orphaned asset directories: every published dir has an Asset row
+        on_disk = {p.name for p in (self.tmp / "assets").iterdir()}
+        referenced = {asset.path.split("/")[1] for asset in models.Asset.objects.all()}
+        self.assertEqual(on_disk, referenced)
+        self.assertEqual(models.Asset.objects.count(), 1)
 
 
 class JobTransitionTests(WorkerMixin, TestCase):

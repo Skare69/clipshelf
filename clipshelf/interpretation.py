@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 
 from PIL import Image, ImageOps
-from clipshelf.lib import norm, repo_url
+from clipshelf.lib import MAX_URL_LENGTH, norm, repo_url
 from clipshelf import network
 from clipshelf import judgment
 
@@ -341,10 +341,23 @@ def _validated(raw, source_url, categories, warnings):
         repos.append(url)
 
     links = []
-    for text in _clean_list(raw["links"], LINKS_MAX, 500, "links"):
-        url = norm(text)
+    if not isinstance(raw["links"], list):
+        raise ValueError("links must be a list")
+    for item in raw["links"]:
+        if len(links) >= LINKS_MAX:
+            break
+        if not isinstance(item, str):
+            raise ValueError("links entries must be strings")
+        url = norm(item)
         if not url:
-            raise ValueError(f"invalid link: {text[:100]!r}")
+            raise ValueError(f"invalid link: {item[:100]!r}")
+        # copied page URLs run long; one over-long entry drops with a warning
+        # instead of failing the whole interpretation (a retry cannot shorten
+        # a URL the model only copies)
+        if len(url) > MAX_URL_LENGTH:
+            warnings.append(f"link exceeds {MAX_URL_LENGTH} characters; "
+                            f"dropped: {item[:100]!r}"[:300])
+            continue
         links.append(url)
 
     prompts = _clean_list(raw["prompts"], PROMPTS_MAX, 4000, "prompts")

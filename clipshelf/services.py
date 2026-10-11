@@ -17,7 +17,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
-from clipshelf import asset_files, judgment, publication
+from clipshelf import asset_files, judgment, lib, publication
 from clipshelf.interpretation import GuardrailBlocked
 
 from clipshelf.models import (
@@ -36,7 +36,7 @@ from clipshelf.models import (
 
 MAX_TEXT_BYTES = 32768
 MAX_URLS = 50
-MAX_URL_LENGTH = 2048
+MAX_URL_LENGTH = lib.MAX_URL_LENGTH
 URL_PATTERN = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
 
 

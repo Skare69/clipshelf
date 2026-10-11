@@ -23,6 +23,9 @@ GH_RESERVED = frozenset((
 SHORT_HOSTS = ("share.google", "goo.gl", "g.co", "bit.ly", "tinyurl.com",
                "vm.tiktok.com", "vt.tiktok.com", "redd.it")
 
+# shared URL storage bound: Job/Entry/Link CharFields and every validator
+MAX_URL_LENGTH = 2048
+
 
 def norm(url):
     """Canonical URL or None: strips fragment, tracking params, trailing slash.
