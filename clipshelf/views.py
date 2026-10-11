@@ -425,7 +425,7 @@ def _entry_filters(entries, params):
     for item in entries:
         if q:
             hay = " ".join(
-                str(item.get(f) or "") for f in ("title", "desc", "text", "url")
+                str(item.get(f) or "") for f in ("title", "desc", "summary", "text", "url")
             ).lower()
             if q not in hay:
                 continue

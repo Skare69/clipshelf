@@ -826,18 +826,27 @@ class EntryApiTests(ApiTestCase):
 
     def test_interpretation_summary_describes_the_link(self):
         entry, job = self._contribute(self.alice, self.alice_personal)
-        Contribution.objects.filter(entry=entry).update(data={"desc": "#tools #fyp"})
+        Contribution.objects.filter(entry=entry).update(data={"desc": "my uv cheatsheet #python"})
         alice = self._login(self.alice)
 
-        def desc():
-            return alice.get("/api/entries").json()["entries"][0]["desc"]
+        def item(**params):
+            response = alice.get("/api/entries", params)
+            self.assertEqual(response.status_code, 200)
+            return response.json()["entries"][0]
 
         services.store_findings(job, {"source": job.url, "summary": "A widget for X."})
-        self.assertEqual(desc(), "A widget for X.")
-        # malformed legacy findings fall back to the page description, never a 500
+        found = item()
+        self.assertEqual(found["summary"], "A widget for X.")
+        self.assertEqual(found["desc"], "my uv cheatsheet #python")
+        # words that exist only in the original description stay searchable
+        self.assertEqual(item(q="cheatsheet")["id"], str(entry.id))
+        self.assertEqual(item(q="widget")["id"], str(entry.id))
+        # malformed legacy findings fall back to no summary, never a 500
         Contribution.objects.filter(entry=entry, origin="capture").update(
             data={"findings": ["junk"]})
-        self.assertEqual(desc(), "#tools #fyp")
+        found = item()
+        self.assertEqual(found["summary"], "")
+        self.assertEqual(found["desc"], "my uv cheatsheet #python")
 
     def test_shared_member_cannot_retry_another_users_entry_job(self):
         shared = Collection.objects.create(

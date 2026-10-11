@@ -74,7 +74,7 @@ function linkCard(e) {
         url ? el("a", { class: "title", href: url, target: "_blank",
           rel: "noopener noreferrer nofollow", text: title })
             : el("span", { class: "title", text: title }),
-        e.desc ? el("div", { class: "desc clamp3", text: e.desc }) : null)),
+        e.summary || e.desc ? el("div", { class: "desc clamp3", text: e.summary || e.desc }) : null)),
     (e.tags || []).length ? el("div", {}, ...e.tags.slice(0, 8)
       .map(t => el("span", { class: "tag", text: t }))) : null,
     el("div", { class: "acts" },
@@ -152,7 +152,7 @@ function linkRow(e) {
             rel: "noopener noreferrer nofollow", text: title })
             : el("span", { class: "title", text: title }),
         ...(e.tags || []).slice(0, 6).map(t => el("span", { class: "tag", text: t }))),
-      e.desc ? el("div", { class: "desc clamp1", text: e.desc }) : null,
+      e.summary || e.desc ? el("div", { class: "desc clamp1", text: e.summary || e.desc }) : null,
       entryMeta(e)),
     el("div", { class: "rside" },
       e.install ? copyBtn(() => e.install, "copy install") : null,
@@ -234,7 +234,8 @@ async function openDetail(id) {
       el("span", { class: "badge " + (e.interpreted ? "ok" : ""), text: e.interpreted ? "interpreted" : "not interpreted" })),
     (e.tags || []).length ? el("div", { class: "row2" },
       ...e.tags.map(t => el("span", { class: "tag", text: t }))) : null,
-    e.desc ? el("p", { text: e.desc }) : null,
+    e.summary || e.desc ? el("p", { text: e.summary || e.desc }) : null,
+    e.summary && e.desc ? el("p", { class: "hint", text: e.desc }) : null,
     (e.contributors || []).length ? el("p", { class: "hint",
       text: "Contributors: " + e.contributors.map(c => c.email).join(", ") }) : null,
     e.found ? el("p", { class: "hint", text: "Found " + fmtWhen(e.found) + "." }) : null,

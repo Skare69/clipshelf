@@ -356,7 +356,8 @@ def serialize_entry(entry, user):
         "kind": entry.kind,
         "url": entry.key if entry.kind == Entry.Kind.LINK else "",
         "title": title,
-        "desc": summary or desc,  # the interpretation describes it better than page metadata
+        "desc": desc,
+        "summary": summary,  # interpretation summary; desc stays the stored description
         "text": text,
         "cat": sorted(categories),
         "tags": sorted(tags),
