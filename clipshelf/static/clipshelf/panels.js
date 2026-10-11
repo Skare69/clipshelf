@@ -226,7 +226,7 @@ async function openDetail(id) {
   const e = j.entry || {};
   $("#detHead").textContent = e.title || (e.url ? shortHost(e.url) : "Entry");
   const url = safeUrl(e.url);
-  detBody.replaceChildren(
+  detBody.replaceChildren(...[
     el("div", { class: "row2" },
       url ? el("a", { href: url, target: "_blank", rel: "noopener noreferrer nofollow" },
         icon(ICONS.ext), " ", shortHost(e.url)) : null,
@@ -254,7 +254,7 @@ async function openDetail(id) {
     el("h3", { text: "Processing jobs" }),
     ...(j.jobs || []).length ? j.jobs.map(job => jobRow(job, () => openDetail(id)))
       : [el("p", { class: "hint", text: "No jobs recorded for this entry." })]
-  );
+  ].filter(Boolean));
 }
 // Only root-relative /api/assets/<uuid> URLs resolve; everything else is rejected.
 function assetUrl(raw) {
