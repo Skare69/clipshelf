@@ -963,6 +963,43 @@ class ImportTests(ApiTestCase):
         self.assertEqual(ImportRecord.objects.filter(user=self.alice).count(), 1)
         self.assertEqual(os.listdir(staging), staged)
 
+    def test_import_rejects_over_cap_payload_at_admission(self):
+        # The WhatsApp exporter stops at services.MAX_IMPORT_ITEMS link
+        # entries; admission keeps an over-cap upload from ever creating a
+        # record the worker would only fail afterwards.
+        alice = self._login(self.alice)
+        over = json.dumps(
+            [{"id": str(i), "url": f"https://e.example/{i}"} for i in range(5001)]
+        ).encode()
+        response = self._post_import(alice, over)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["detail"], "too many items (5001 > 5000)")
+        self.assertFalse(ImportRecord.objects.filter(user=self.alice).exists())
+        self.assertEqual(
+            os.listdir(os.path.join(os.path.realpath(self._data_dir()), "staging")),
+            [],
+        )
+        # Exactly at the cap: admitted as pending.
+        at_cap = json.dumps(
+            [{"id": str(i), "url": f"https://e.example/{i}"} for i in range(5000)]
+        ).encode()
+        ok = self._post_import(alice, at_cap)
+        self.assertEqual(ok.status_code, 201)
+        self.assertEqual(ok.json()["import"]["status"], "pending")
+        record_id = ok.json()["import"]["id"]
+        # The legacy shape counts its links object the same way.
+        legacy = json.dumps(
+            {"links": {f"https://e.example/{i}": {} for i in range(5001)}}
+        ).encode()
+        self.assertEqual(self._post_import(alice, legacy).status_code, 400)
+        self.assertEqual(
+            ImportRecord.objects.filter(user=self.alice).count(), 1
+        )
+        self.assertEqual(
+            ImportRecord.objects.get(id=record_id).manifest.get("status"),
+            "pending",
+        )
+
     def test_import_request_id_unique_across_payloads(self):
         # The database constraint is the race backstop: the pre-insert check
         # can pass in two processes, only one insert may win.

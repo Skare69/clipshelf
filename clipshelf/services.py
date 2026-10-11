@@ -228,6 +228,11 @@ def bind_import_request(user, request_id, record):
         raise
 
 
+# Import admission owns the item cap: api_import enforces it before a record
+# exists, worker.import_items re-checks it for import paths without the view.
+MAX_IMPORT_ITEMS = 5000
+
+
 def import_for_request(user, request_id, input_digest, collection):
     """First admission pass, before payload parsing: raise ValidationError
     (code="conflict") when the request id was accepted for a different digest

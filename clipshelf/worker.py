@@ -48,7 +48,6 @@ log = logging.getLogger(__name__)
 CONFIG_ERROR = "llm-not-configured"  # blocked marker; claim resumes when config exists
 # MAX_ATTEMPTS moved to models.Job; the finite-failure policy lives in Job.fail.
 POLL_SECONDS = 5
-MAX_IMPORT_ITEMS = 5000  # own payload bound; acquisition.import_export batches at 500
 IMPORT_BATCH = 500
 
 
@@ -661,8 +660,9 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     """
     if not isinstance(items, list):
         raise ValidationError("import payload must be a list of items")
-    if len(items) > MAX_IMPORT_ITEMS:
-        raise ValidationError(f"too many items ({len(items)} > {MAX_IMPORT_ITEMS})")
+    if len(items) > services.MAX_IMPORT_ITEMS:
+        raise ValidationError(
+            f"too many items ({len(items)} > {services.MAX_IMPORT_ITEMS})")
     collection, notice = services.destination_for(user, collection_id)
 
     seen = {} if seen is None else seen

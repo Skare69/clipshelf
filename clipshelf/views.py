@@ -723,6 +723,14 @@ def api_import(request):
                 "or a legacy library.json object with a 'links' object",
             )
         _scan_import_keys(data)
+        # Admission rejects an over-cap payload before the ImportRecord
+        # exists; the worker's own check is a backstop for other paths.
+        count = len(data) if fmt == "tiktok" else len(data["links"])
+        if count > services.MAX_IMPORT_ITEMS:
+            raise ApiError(
+                400,
+                detail=f"too many items ({count} > {services.MAX_IMPORT_ITEMS})",
+            )
 
         record, created = services.admit_import(
             user, request_id, digest.hexdigest(), collection, rel_path, fmt
