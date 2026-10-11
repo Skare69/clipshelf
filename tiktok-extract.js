@@ -6,9 +6,10 @@
 // shortlink redirects natively and the page hydrates with your session, so
 // no fetch/CORS/bot-detection issues. Allow pop-ups for tiktok.com.
 //
-// Downloads tiktok.json (descriptions + image/video bytes embedded as base64;
-// oversized media or failed byte-reads keep their URLs for CLI fetch).
-// Feed it to the tool:  python clipshelf.py tiktok.json
+// Downloads tiktok.json (descriptions + image/video bytes embedded as base64).
+// Import: clipshelf web UI -> Import -> choose tiktok.json.
+// Oversized media or failed byte-reads keep their URLs; the server fetches
+// them at import.
 
 // best-quality-first, deduped play-mirror URLs; [] for photo posts.
 // photo post = imagePost in the hydrate JSON, or a multi-slide DOM scrape
@@ -63,15 +64,16 @@ async function boundedBlob(response) {
   }
 }
 
-async function tiktokExtract(urls, onProgress) {
-  const toB64 = async (blob) => {
-    const buf = new Uint8Array(await blob.arrayBuffer());
-    let s = "";
-    for (let i = 0; i < buf.length; i += 0x8000)
-      s += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-    return btoa(s);
-  };
+// ponytail: one run stays below the default 32 MiB import ceiling
+// (CLIPSHELF_MAX_IMPORT_BYTES); the rest waits for the next run. Lower this
+// if your server's ceiling is smaller.
+const FILE_BUDGET = 30e6;
+
+async function tiktokExtract(urls, onProgress, budget = FILE_BUDGET) {
+  const toB64 = async (blob) =>
+    new Uint8Array(await blob.arrayBuffer()).toBase64();
   tiktokExtract.lastFile = null;
+  tiktokExtract.lastUrls = [];
   const needsWorker = urls.some(isTikTokUrl);
   const worker = needsWorker
     ? window.open("about:blank", "cs_worker", "width=1000,height=800")
@@ -80,9 +82,12 @@ async function tiktokExtract(urls, onProgress) {
     throw new Error("Pop-up blocked — allow pop-ups for tiktok.com and click extract again.");
   if (worker) worker.opener = null;
   const out = [];
-  let i = 0;
+  const rest = [];
+  let i = 0, bytes = 0;
   for (const url of urls) {
-    onProgress?.(++i, urls.length, url);
+    // no onProgress?.(++i, ...): an optional call skips argument evaluation
+    i++;
+    onProgress?.(i, urls.length, url);
     if (!isTikTokUrl(url)) {
       out.push({ url, passthrough: true }); // clipshelf ingests it directly
       continue;
@@ -173,7 +178,7 @@ async function tiktokExtract(urls, onProgress) {
         video = { url: mirrors[0], urls: mirrors }; // CLI tries URLs at ingest
       let resolved = url;
       try { resolved = worker.location.href; } catch {}
-      out.push({
+      const entry = {
         url,
         resolvedUrl: resolved,
         author: item?.author?.uniqueId ?? "",
@@ -184,7 +189,16 @@ async function tiktokExtract(urls, onProgress) {
           "",
         images,
         ...(video && { video }),
-      });
+      };
+      const size = new Blob([JSON.stringify(entry)]).size;
+      // the first entry always fits: dropping it too would just hit the same
+      // oversized post again on the next run
+      if (bytes && bytes + size > budget) {
+        rest.push(...urls.slice(i - 1));
+        break;
+      }
+      bytes += size;
+      out.push(entry);
       console.log("ok", url, `${images.length} images${video?.b64 ? ", video" : ""}`);
     } catch (e) {
       out.push({ url, error: String(e) });
@@ -203,6 +217,7 @@ async function tiktokExtract(urls, onProgress) {
   a.download = name;
   a.click();
   tiktokExtract.lastFile = name;
+  tiktokExtract.lastUrls = rest;
   return out;
 }
 
@@ -242,7 +257,16 @@ if (typeof document !== "undefined") (() => {
         status(`${i}/${n} ${u.slice(0, 44)}`)
       );
       const ok = out.filter((o) => !o.error).length;
-      status(`done: ${ok} ok, ${out.length - ok} failed. saved by your browser as:`);
+      const rest = tiktokExtract.lastUrls;
+      if (rest.length) {
+        box.querySelector("#cs-urls").value = rest.join("\n");
+        status(
+          `file budget hit: saved what fits (${ok} posts); ${rest.length} ` +
+            "link(s) left in the box — run again for the rest"
+        );
+      } else {
+        status(`done: ${ok} ok, ${out.length - ok} failed. saved by your browser as:`);
+      }
       box.querySelector("#cs-name").value = tiktokExtract.lastFile;
       f.style.display = "flex";
       box.querySelector("#cs-copy").onclick = async () => {
@@ -261,6 +285,11 @@ if (typeof document !== "undefined") (() => {
 // self-test: node tiktok-extract.js   (pure helper, no DOM needed)
 if (typeof document === "undefined" && typeof module !== "undefined") {
   const assert = require("assert");
+  // Chrome 140+ ships Uint8Array.prototype.toBase64 natively; node (this
+  // self-test's runtime) does not yet
+  Uint8Array.prototype.toBase64 ??= function () {
+    return Buffer.from(this).toString("base64");
+  };
   const vid = {
     video: {
       playAddr: "http://a/low.mp4",
@@ -389,6 +418,24 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
       const [small] = await tiktokExtract(["https://www.tiktok.com/@test/video/3"]);
       assert.deepStrictEqual(small.images, [{ url: imageUrl, b64: "AQI=" }]);
       assert.deepStrictEqual(small.video, { urls: [videoUrl], b64: "AAAAAGZ0eXA=" });
+
+      // file budget: once the next post would cross it, it stays unprocessed
+      // (lastUrls) and only what fits is saved
+      global.fetch = async (url) => {
+        const bytes = url === imageUrl
+          ? new Uint8Array([1, 2])
+          : new Uint8Array([0, 0, 0, 0, 102, 116, 121, 112]);
+        return new Response(bytes, { headers: { "Content-Length": String(bytes.length) } });
+      };
+      const budgetUrls = [
+        "https://www.tiktok.com/@test/video/4",
+        "https://www.tiktok.com/@test/video/5",
+        "https://www.tiktok.com/@test/video/6",
+      ];
+      const split = await tiktokExtract(budgetUrls, null, 300);
+      assert.deepStrictEqual(split.map((o) => o.url), [budgetUrls[0]]);
+      assert.deepStrictEqual(tiktokExtract.lastUrls, budgetUrls.slice(1));
+      assert.match(tiktokExtract.lastFile, /^tiktok-/);
     } finally {
       if (previousWindow === undefined) delete global.window;
       else global.window = previousWindow;
