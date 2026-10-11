@@ -34,7 +34,8 @@ class MakeTests(unittest.TestCase):
     def make(self, run):
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "requirements.lock"
-            with patch.object(lock_deps, "resolve", return_value=dict(PINS)), \
+            with patch.object(lock_deps, "resolve", return_value=lock_deps.Resolution(
+                    pins=dict(PINS), yanked=set(), gated=dict(PINS))), \
                     patch.object(lock_deps.subprocess, "run", side_effect=run):
                 try:
                     lock_deps.make("python", Path("requirements.txt"), out)

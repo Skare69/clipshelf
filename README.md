@@ -99,19 +99,31 @@ so the audited set is the shipped set:
 
 - `python scripts/lock_deps.py check` fails when `requirements.txt` would
   resolve differently from the lock (CI runs this gate): a changed pin, a
-  missing pin, or an extra pin in the lock that is unrelated to the current
-  resolution. The one known exception is Django's win32-only `tzdata` marker
-  dependency, which may be present in the lock but absent from a
-  non-Windows resolution. It also fails when any shipped platform (Windows,
-  linux/amd64, linux/arm64) lacks a wheel matching the lock's hashes.
+  missing pin, an extra pin in the lock that is unrelated to the current
+  resolution, or a yanked pin (pip installs yanked files under exact pins and
+  pip-audit ignores yank status, so they must never ship). The one known
+  exception is Django's win32-only `tzdata` marker dependency, which may be
+  present in the lock but absent from a non-Windows resolution. It also fails
+  when any shipped platform (Windows, linux/amd64, linux/arm64) lacks a wheel
+  matching the lock's hashes.
 - `python scripts/lock_deps.py make` regenerates the lock — after changing
   `requirements.txt`, or when the check fails on a new upstream release. It
-  writes nothing when any platform has no wheel for a pin.
+  writes nothing when any platform has no wheel for a pin, and fails on
+  yanked pins (pin an older release in `requirements.txt` instead) or on
+  ungated additions that must be listed in `--fresh`.
 - Both commands resolve only releases uploaded at least 7 days ago, so a new
   upstream release enters the lock (and turns the check red) one week after it
-  appears. A newer pin already in the lock stays.
+  appears; that age-gated pass resolves a floor-free copy of
+  `requirements.txt` (lower bounds dropped, upper bounds kept), so a floor
+  raised to a release younger than 7 days does not break the gate while the
+  copy still resolves inside the real range. A newer pin already in the lock
+  stays, and every keep
+  pin (including marker-gated ones like `tzdata`) is held in the always-run
+  held pass against the real `requirements.txt`.
   `python scripts/lock_deps.py make --fresh django` admits a security release
-  of `django` at once.
+  of `django` at once; it exits naming the held pins to add when the fresh
+  name does not move. On non-Windows hosts the lock's `tzdata` pin is carried
+  into the resolution verbatim.
 - `pip-audit` in CI audits the lock directly (`--no-deps`), never a fresh
   re-resolution.
 

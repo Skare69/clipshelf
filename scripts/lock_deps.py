@@ -5,9 +5,14 @@ Usage:
   python scripts/lock_deps.py make [requirements.txt] [-o requirements.lock] [--fresh NAME ...]
   python scripts/lock_deps.py check [requirements.txt] [requirements.lock]
 
-Both resolve only releases uploaded at least MIN_RELEASE_AGE ago (pip >= 26.0).
+Both resolve only releases uploaded at least MIN_RELEASE_AGE ago (pip >= 26.0);
+the age-gated pass resolves a floor-free copy of requirements.txt (lower
+bounds dropped, upper bounds kept), so a floor raised to a release younger
+than that keeps working via `make --fresh NAME`.
 A newer pin already in the lock stays, so the gate never reverts a security
-bump; `make --fresh NAME` admits the newest release of NAME at once.
+bump; `make --fresh NAME` admits the newest release of NAME at once (it exits
+naming the held pins to add when the fresh name does not move). Yanked pins
+are never held or shipped: `check` and `make` fail on them.
 """
 import argparse
 import hashlib
@@ -18,6 +23,7 @@ import sys
 import tempfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import NamedTuple
 
 PLATFORM_SETS = [
     ["win_amd64"],
@@ -44,19 +50,23 @@ def canon(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
 
 
-def dry_run(python: str, req: Path, tmp: Path, extra: list[str]) -> dict[str, str]:
-    """Dry-run install, return {canonical_name: pinned_version}."""
+def dry_run(python: str, req: Path, tmp: Path, extra: list[str]) -> tuple[dict[str, str], set[str]]:
+    """Dry-run install; return {canonical_name: version} plus the canonical
+    names pip flagged is_yanked in the report."""
     report = tmp / "report.json"
     cmd = [python, "-m", "pip", "install", "--dry-run", "--report", str(report),
            "--ignore-installed", *extra, "-r", str(req)]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit(f"pip dry-run failed:\n{r.stdout}\n{r.stderr}")
-    pins = {}
+    pins: dict[str, str] = {}
+    yanked: set[str] = set()
     for item in json.loads(report.read_text(encoding="utf-8"))["install"]:
         meta = item["metadata"]
         pins[canon(meta["name"])] = meta["version"]
-    return pins
+        if item.get("is_yanked"):
+            yanked.add(canon(meta["name"]))
+    return pins, yanked
 
 
 def release(version: str) -> tuple[int, ...]:
@@ -65,23 +75,88 @@ def release(version: str) -> tuple[int, ...]:
     return tuple(int(p) for p in re.match(r"\d+(?:\.\d+)*", version).group().split("."))
 
 
+class Resolution(NamedTuple):
+    pins: dict[str, str]   # final held-pass resolution
+    yanked: set[str]       # names pip flagged is_yanked in the final pass
+    gated: dict[str, str]  # pass-1 age-gated resolution
+
+
+def _floor_free(line: str) -> str:
+    """Drop lower-bound specifiers (>=, >, ==) from a requirement line, keeping
+    the name, extras, upper bounds/compatible ranges and any environment
+    marker; comments, blank lines and unparseable lines pass through. The
+    age-gated pass resolves this copy: a floor raised to a too-young security
+    release cannot break the gate, while bounds like <5.3 keep the copy inside
+    the real resolution range."""
+    if not line.strip() or line.lstrip().startswith("#") or line.lstrip().startswith("-"):
+        return line
+    m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9_.-]*(?:\[[^\]]*\])?)\s*([^;@]*?)\s*(;.*)?$", line)
+    if not m:
+        return line
+    name, specs, marker = m.group(1), m.group(2), m.group(3) or ""
+    kept = [c.strip() for c in specs.split(",")
+            if c.strip() and not re.match(r"^(===|==|>=|>)", c.strip())]
+    return name + (" " + ",".join(kept) if kept else "") + ((" " + marker) if marker else "")
+
+
 def resolve(python: str, req: Path, tmp: Path, keep: dict[str, str] | None = None,
-            fresh: list[str] | None = None) -> dict[str, str]:
-    """Resolve releases older than MIN_RELEASE_AGE. A pin in `keep` (the
-    current lock) newer than that stays; names in `fresh` take their newest
-    release. Either case re-resolves once with every other pin held, so the
-    closure stays consistent."""
+            fresh: list[str] | None = None) -> Resolution:
+    """Resolve releases older than MIN_RELEASE_AGE. Pass 1 gates on release
+    age only, against a floor-free copy of requirements.txt (so a floor raised
+    to a too-young release cannot break the gate). The held pass always runs
+    against the real file and holds every gated pin plus every `keep` pin the
+    gated pass does not know (keep-only pins would otherwise float past the
+    age gate; -c constraints for unneeded names are inert). Names in `fresh`
+    stay unheld. A newer pin in `keep` (the current lock) stays; yanked pins
+    are unheld and re-resolved, never shipped. `--fresh` exits naming the
+    held pins to add when the fresh name does not move."""
     cutoff = (datetime.now(timezone.utc) - MIN_RELEASE_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
-    pins = dry_run(python, req, tmp, ["--uploaded-prior-to", cutoff])
+    # pass 1: floor-free copy, so a young security floor (e.g. Django>=5.2.19
+    # for a release days old) still resolves under the age gate; upper bounds
+    # like <5.3 survive, keeping the copy inside the real resolution range
+    gated_req = tmp / "requirements.gated.txt"
+    gated_req.write_text("".join(_floor_free(l) + "\n"
+                                 for l in req.read_text(encoding="utf-8").splitlines()),
+                         encoding="utf-8")
+    gated, _ = dry_run(python, gated_req, tmp, ["--uploaded-prior-to", cutoff])
     unheld = {canon(n) for n in fresh or ()}
     newer = {n: v for n, v in (keep or {}).items()
-             if n in pins and release(v) > release(pins[n])}
-    if not newer and not unheld:
-        return pins
+             if n in gated and n not in unheld and release(v) > release(gated[n])}
+    held_names = {n: gated[n] for n in gated if n not in unheld}
+    held_names.update((n, v) for n, v in (keep or {}).items()
+                      if n not in gated and n not in unheld)
+    held_names.update(newer)
     held = tmp / "held.txt"
-    held.write_text("".join(f"{n}=={newer.get(n, v)}\n" for n, v in sorted(pins.items())
-                            if n not in unheld), encoding="utf-8")
-    return dry_run(python, req, tmp, ["-c", str(held)])
+    while True:
+        held.write_text("".join(f"{n}=={v}\n" for n, v in sorted(held_names.items())),
+                        encoding="utf-8")
+        pins, yanked = dry_run(python, req, tmp, ["-c", str(held)] if held_names else [])
+        drop = yanked & held_names.keys()
+        if not drop:
+            break
+        # pip only installs a yanked release under an exact pin; unholding
+        # settles on the age-gated non-yanked release
+        for n in drop:
+            del held_names[n]
+    # win32-only Django marker dep: keep it in the shipped set verbatim
+    if "django" in pins and "tzdata" in (keep or {}) and "tzdata" not in pins:
+        # ponytail: the carried tzdata version never updates until the lock is
+        # regenerated on Windows; revisit if Django ships tzdata unconditionally.
+        pins["tzdata"] = keep["tzdata"]
+    if unheld:
+        stuck = {n for n in unheld if n not in pins
+                 or (n in gated and release(pins[n]) <= release(gated[n]))}
+        if stuck:
+            probe, _ = dry_run(python, req, tmp, [])
+            blocked = {n for n in stuck if n not in probe
+                       or release(probe[n]) > release(pins.get(n, "0"))}
+            if blocked:
+                # a held pin keeps the fresh name on its old version
+                sys.exit(f"{', '.join(f'{n}=={pins.get(n, '?')}' for n in sorted(blocked))} "
+                         f"did not move (nothing newer exists otherwise): rerun adding the "
+                         f"conflicting held pins, e.g. --fresh {' '.join(sorted(blocked))} "
+                         f"{' '.join(sorted(held_names))}")
+    return Resolution(pins, yanked, gated)
 
 
 def read_pins(lock: Path) -> dict[str, str]:
@@ -142,7 +217,21 @@ def collect_hashes(python: str, pins: dict[str, str], tmp: Path) -> dict:
 def make(python: str, req: Path, out: Path, fresh: list[str] | None = None) -> None:
     tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-"))
     print(f"temp: {tmp}")
-    pins = resolve(python, req, tmp, read_pins(out) if out.exists() else None, fresh)
+    keep = read_pins(out) if out.exists() else None
+    res = resolve(python, req, tmp, keep, fresh)
+    pins = res.pins
+    if res.yanked:
+        # pip installs yanked files under exact pins, and pip-audit ignores
+        # yank status, so they would ship silently inside the lock
+        y = ", ".join(f"{n}=={pins[n]}" for n in sorted(res.yanked))
+        sys.exit(f"yanked: {y}; yanked files must not ship, pin an older release in requirements.txt")
+    added = sorted(pins.keys() - res.gated.keys() - set(keep or {})
+                   - {canon(n) for n in fresh or ()})
+    if added:
+        # these resolved only because a held/fresh pin pulled them in —
+        # without the age gate
+        sys.exit(f"ungated additions: {', '.join(added)}; rerun with them in --fresh, "
+                 f"or hold the pulling pin older")
     hashes = collect_hashes(python, pins, tmp)
 
     lines = [HEADER.format(date=date.today().isoformat())]
@@ -162,10 +251,15 @@ def make(python: str, req: Path, out: Path, fresh: list[str] | None = None) -> N
 def check(python: str, req: Path, lock: Path) -> int:
     tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-check-"))
     lock_pins = read_pins(lock)
-    current = resolve(python, req, tmp, lock_pins)
+    res = resolve(python, req, tmp, lock_pins)
+    current = res.pins
 
     problems = []
     warnings = []
+    for n in sorted(res.yanked):
+        v = lock_pins.get(n, current.get(n, "?"))
+        problems.append(f"yanked: {n}=={v} (pip installs yanked files under exact pins; "
+                        f"pip-audit ignores yank status)")
     for n in sorted(set(current) | set(lock_pins)):
         cur, lk = current.get(n), lock_pins.get(n)
         if cur is None:

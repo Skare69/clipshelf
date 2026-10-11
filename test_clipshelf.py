@@ -143,7 +143,9 @@ def _lock_check_regressions():
             req.write_text("django\n", encoding="utf-8")
             lock = lock_file(tmp, extra)
             ok_run = mock.Mock(returncode=0, stdout="", stderr="")
-            with mock.patch.object(ld, "resolve", return_value=current_pins), \
+            with mock.patch.object(ld, "resolve", return_value=ld.Resolution(
+                    pins=dict(current_pins), yanked=frozenset(),
+                    gated=dict(current_pins))), \
                  mock.patch.object(ld.subprocess, "run", return_value=ok_run):
                 return ld.check(sys.executable, req, lock)
 
@@ -166,38 +168,177 @@ def _lock_check_regressions():
 
 
 def _lock_gate_regressions():
+    import contextlib
+    import io
+    import sys
     import tempfile
+    from datetime import datetime, timedelta, timezone
     from pathlib import Path
     from unittest import mock
 
     import scripts.lock_deps as ld
 
-    gated = {"django": "5.2.9", "asgiref": "3.12.1", "pydantic": "2.13.5"}
-    calls = []
-
-    def fake_dry_run(python, req, tmp, extra):
-        calls.append(extra)
-        if extra[0] == "--uploaded-prior-to":
-            return dict(gated)
-        held = dict(line.split("==") for line in Path(extra[1]).read_text().split())
-        return {n: held.get(n, "99.0") for n in gated}  # an unheld name gets its newest
-
-    with tempfile.TemporaryDirectory(prefix="clipshelf-lockgate-") as td, \
-            mock.patch.object(ld, "dry_run", side_effect=fake_dry_run):
+    with tempfile.TemporaryDirectory(prefix="clipshelf-lockgate-") as td:
         tmp = Path(td)
         req = tmp / "requirements.txt"
-        # a newer lock pin (a security bump) stays, compared numerically; an
-        # older pin and a pin the requirements no longer resolve do not
-        keep = {"django": "5.2.18", "asgiref": "3.11.0", "gone": "1.0"}
-        assert ld.resolve("python", req, tmp, keep) == {
-            "django": "5.2.18", "asgiref": "3.12.1", "pydantic": "2.13.5"}
-        # nothing newer in the lock: the gated pass alone decides
-        calls.clear()
-        assert ld.resolve("python", req, tmp, {"django": "5.2.9"}) == gated
-        assert len(calls) == 1
-        # --fresh unholds that pin only: the second pass takes its newest release
-        assert ld.resolve("python", req, tmp, fresh=["Pydantic"]) == {
-            "django": "5.2.9", "asgiref": "3.12.1", "pydantic": "99.0"}
+        req.write_text("django\npydantic\n", encoding="utf-8")
+
+        # existing behavior: a newer lock pin (a security bump) stays,
+        # compared numerically; an older pin and a pin the requirements no
+        # longer resolve do not
+        gated = {"django": "5.2.9", "asgiref": "3.12.1", "pydantic": "2.13.5"}
+        calls = []
+        held_seen = []
+
+        def fake_dry_run(python, req, tmp, extra):
+            calls.append(list(extra))
+            if extra and extra[0] == "-c":
+                held_seen.append(Path(extra[1]).read_text())
+                held = dict(l.split("==") for l in held_seen[-1].split())
+                return {n: held.get(n, "99.0") for n in gated}, set()  # an unheld name gets its newest
+            return dict(gated), set()
+
+        with mock.patch.object(ld, "dry_run", side_effect=fake_dry_run):
+            keep = {"django": "5.2.18", "asgiref": "3.11.0", "gone": "1.0"}
+            res = ld.resolve("python", req, tmp, keep)
+            assert res.pins == {"django": "5.2.18", "asgiref": "3.12.1", "pydantic": "2.13.5"}
+            # the held pass always runs now; the keep-only pin is held too
+            assert len(calls) == 2 and calls[1][0] == "-c"
+            assert "gone==1.0" in held_seen[0]
+            # nothing newer in the lock: the gated pass alone decides
+            calls.clear(); held_seen.clear()
+            assert ld.resolve("python", req, tmp, {"django": "5.2.9"}).pins == gated
+            assert len(calls) == 2 and calls[1][0] == "-c"
+            # --fresh unholds that pin only: the second pass takes its newest release
+            calls.clear(); held_seen.clear()
+            assert ld.resolve("python", req, tmp, fresh=["Pydantic"]).pins == {
+                "django": "5.2.9", "asgiref": "3.12.1", "pydantic": "99.0"}
+            assert "pydantic" not in held_seen[0]
+            # a fresh name is never held, even when its keep pin is newer
+            calls.clear(); held_seen.clear()
+            assert ld.resolve("python", req, tmp, {"django": "5.2.18"},
+                              fresh=["django"]).pins["django"] == "99.0"
+            assert "django" not in held_seen[0]
+
+        # 1. cutoff exactness: the gated pass is exactly MIN_RELEASE_AGE back
+        class Fixed(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime(2026, 10, 11, 12, 0, 0, tzinfo=timezone.utc)
+
+        seen = []
+        with mock.patch.object(ld, "datetime", Fixed), \
+                mock.patch.object(ld, "dry_run",
+                                  side_effect=lambda p, r, t, e: (seen.append(list(e)) or ({"x": "1.0"}, set()))):
+            ld.resolve("python", req, tmp)
+        assert seen[0] == ["--uploaded-prior-to", "2026-10-04T12:00:00Z"]
+        assert ld.MIN_RELEASE_AGE == timedelta(days=7)
+
+        # 2. a yanked keep pin is unheld and re-resolved, never shipped
+        def yanked_fake(python, req, tmp, extra):
+            if extra and extra[0] == "-c":
+                held = dict(l.split("==") for l in Path(extra[1]).read_text().split())
+                if held.get("foo") == "2.0":
+                    return {"foo": "2.0"}, {"foo"}
+                return {"foo": "1.0"}, set()
+            return {"foo": "1.0"}, set()
+
+        with mock.patch.object(ld, "dry_run", side_effect=yanked_fake):
+            res = ld.resolve("python", req, tmp, {"foo": "2.0"})
+        assert res.pins == {"foo": "1.0"} and not res.yanked
+
+        lock_lines = ["# test lock", "foo==2.0 \\", "    --hash=sha256:" + "0" * 64]
+        lock = tmp / "requirements.lock"
+        lock.write_text("\n".join(lock_lines) + "\n", encoding="utf-8")
+        ok_run = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(ld, "resolve", return_value=ld.Resolution(
+                pins={"foo": "1.0"}, yanked={"foo"}, gated={"foo": "1.0"})), \
+                mock.patch.object(ld.subprocess, "run", return_value=ok_run):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = ld.check("python", req, lock)
+        assert rc == 1
+        assert "changed: foo lock=2.0 current=1.0" in out.getvalue()
+        assert "yanked: foo==2.0" in out.getvalue()
+
+        # 3. a young security floor must not break the gate: the age-gated
+        # pass resolves a floor-free copy; the floor is never held against itself
+        assert ld._floor_free("Django>=5.2.19,<5.3") == "Django <5.3"
+        assert ld._floor_free("yt-dlp[curl-cffi]>=2026.8.19") == "yt-dlp[curl-cffi]"
+        assert ld._floor_free("# comment") == "# comment"
+        assert ld._floor_free("foo>=1; python_version < '3.10'") == "foo ; python_version < '3.10'"
+        req2 = tmp / "req-floor.txt"
+        req2.write_text("Django>=5.2.19,<5.3\n", encoding="utf-8")
+
+        def floor_fake(python, req, tmp, extra):
+            if extra and extra[0] == "--uploaded-prior-to":
+                text = Path(req).read_text()
+                if ">=" in text or "<5.3" not in text:
+                    sys.exit("No matching distribution")
+                return {"django": "5.2.18"}, set()
+            if extra:  # -c held pass
+                if "django" in Path(extra[1]).read_text():
+                    sys.exit("floor held against itself")
+            return {"django": "5.2.19"}, set()
+
+        with mock.patch.object(ld, "dry_run", side_effect=floor_fake):
+            res = ld.resolve("python", req2, tmp, {"django": "5.2.17"}, fresh=["django"])
+        assert res.pins == {"django": "5.2.19"}
+
+        # 4. --fresh that backtracks exits naming the held pins that block it
+        bt = {"pydantic": "2.13.5", "pydantic-core": "2.46.5"}
+
+        def back_fake(python, req, tmp, extra):
+            if extra == []:
+                return {"pydantic": "2.14.1", "pydantic-core": "2.50.1"}, set()
+            if extra and extra[0] == "-c":
+                held = dict(l.split("==") for l in Path(extra[1]).read_text().split())
+                assert "pydantic" not in held, held
+                return {"pydantic": "2.13.5",
+                        "pydantic-core": held.get("pydantic-core", "9.0")}, set()
+            return dict(bt), set()
+
+        with mock.patch.object(ld, "dry_run", side_effect=back_fake):
+            try:
+                ld.resolve("python", req, tmp,
+                           keep={"pydantic": "2.13.5", "pydantic-core": "2.46.5"},
+                           fresh=["pydantic"])
+                raise AssertionError("backtracked --fresh must exit")
+            except SystemExit as e:
+                msg = str(e)
+        assert "pydantic" in msg and "pydantic-core" in msg
+
+        # 5. keep-only pins are held too, so they cannot float past the age gate
+        def keep_fake(python, req, tmp, extra):
+            if extra and extra[0] == "-c":
+                held = dict(l.split("==") for l in Path(extra[1]).read_text().split())
+                assert held.get("newdep") == "1.5", held
+                return {"parent": "2.0", "newdep": held.get("newdep", "9.0")}, set()
+            return {"parent": "1.0"}, set()
+
+        with mock.patch.object(ld, "dry_run", side_effect=keep_fake):
+            res = ld.resolve("python", req, tmp, {"parent": "2.0", "newdep": "1.5"})
+        assert res.pins["newdep"] == "1.5"
+
+        # 6. make exits on additions that resolved only because a held/fresh
+        # pin pulled them in, without the age gate
+        with mock.patch.object(ld, "resolve", return_value=ld.Resolution(
+                pins={"parent": "2.0", "newdep": "9.0"}, yanked=set(),
+                gated={"parent": "1.0"})), \
+                mock.patch.object(ld, "collect_hashes", return_value={}):
+            try:
+                ld.make("python", req, tmp / "out.lock", None)
+                raise AssertionError("ungated addition must exit")
+            except SystemExit as e:
+                assert "newdep" in str(e)
+
+        # 7. the lock's win32-only tzdata pin is carried into the resolution
+        def tz_fake(python, req, tmp, extra):
+            return {"django": "5.2.17"}, set()
+
+        with mock.patch.object(ld, "dry_run", side_effect=tz_fake):
+            res = ld.resolve("python", req, tmp, {"django": "5.2.17", "tzdata": "2025.2"})
+        assert res.pins["tzdata"] == "2025.2"
 
 
 def test():
