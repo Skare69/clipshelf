@@ -464,7 +464,9 @@ def api_entries(request):
     if sort not in ("az", "new"):
         raise ApiError(400, detail="sort must be az or new")
     if sort == "az":
-        pairs.sort(key=lambda p: str(p[1].get("title") or p[1].get("url") or "").lower())
+        # a prompt has no title or URL: its text is its name
+        pairs.sort(key=lambda p: str(
+            p[1].get("title") or p[1].get("url") or p[1].get("text") or "").lower())
     else:
         pairs.sort(key=lambda p: p[0].created_at, reverse=True)
     filtered = list(_entry_filters((item for _, item in pairs), request.GET))

@@ -308,7 +308,7 @@ def serialize_entry(entry, user):
     contributions = entry.contributions.select_related("user").annotate(
         has_findings=Q(job__isnull=False) & ~Q(job__findings={}),
     ).order_by("created_at", "id")
-    title = desc = text = install = ""
+    title = desc = text = install = summary = ""
     categories, tags, sources = set(), set(), []
     source_urls = set()
     contributors = []
@@ -322,6 +322,9 @@ def serialize_entry(entry, user):
         )
         title = title or _str(data.get("title"))
         desc = desc or _str(data.get("desc"))
+        findings = data.get("findings")
+        if isinstance(findings, dict):  # never raise on malformed legacy data
+            summary = summary or _str(findings.get("summary"))
         text = text or _str(data.get("text"))
         install = install or _str(data.get("install"))
         cat = data.get("cat")
@@ -348,7 +351,7 @@ def serialize_entry(entry, user):
         "kind": entry.kind,
         "url": entry.key if entry.kind == Entry.Kind.LINK else "",
         "title": title,
-        "desc": desc,
+        "desc": summary or desc,  # the interpretation describes it better than page metadata
         "text": text,
         "cat": sorted(categories),
         "tags": sorted(tags),

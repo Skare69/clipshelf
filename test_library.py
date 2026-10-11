@@ -806,6 +806,39 @@ class EntryApiTests(ApiTestCase):
             {str(uncategorized.id), str(categorized.id)},
         )
 
+    def test_az_sorts_prompts_by_text_and_untitled_links_by_url(self):
+        titled, _ = self._contribute(self.alice, self.alice_personal)
+        Contribution.objects.filter(entry=titled).update(data={"title": "Middle link"})
+        untitled, _ = self._contribute(
+            self.alice, self.alice_personal, "https://example.com/plain")
+        Contribution.objects.filter(entry=untitled).update(data={"text": "aardvark page text"})
+        for text in ("zulu prompt", "alpha prompt"):
+            prompt = Entry.objects.create(
+                collection=self.alice_personal, kind="prompt", key=text)
+            Contribution.objects.create(
+                entry=prompt, user=self.alice, origin="test", data={"text": text})
+        response = self._login(self.alice).get("/api/entries", {"sort": "az"})
+        self.assertEqual(
+            [item["url"] or item["text"] for item in response.json()["entries"]],
+            ["alpha prompt", "https://example.com/plain", "https://example.com/widget",
+             "zulu prompt"],
+        )
+
+    def test_interpretation_summary_describes_the_link(self):
+        entry, job = self._contribute(self.alice, self.alice_personal)
+        Contribution.objects.filter(entry=entry).update(data={"desc": "#tools #fyp"})
+        alice = self._login(self.alice)
+
+        def desc():
+            return alice.get("/api/entries").json()["entries"][0]["desc"]
+
+        services.store_findings(job, {"source": job.url, "summary": "A widget for X."})
+        self.assertEqual(desc(), "A widget for X.")
+        # malformed legacy findings fall back to the page description, never a 500
+        Contribution.objects.filter(entry=entry, origin="capture").update(
+            data={"findings": ["junk"]})
+        self.assertEqual(desc(), "#tools #fyp")
+
     def test_shared_member_cannot_retry_another_users_entry_job(self):
         shared = Collection.objects.create(
             name="Shared", kind="shared", owner=self.alice
