@@ -296,8 +296,9 @@ dialog::backdrop{background:rgba(12,10,6,.5);backdrop-filter:blur(3px)}
 .msg-warning,.msg-info{background:var(--warn-container);color:var(--warn);border-color:transparent}
 .foot{padding:18px 0;font-size:12.5px;color:var(--on-muted)}
 .foot a{color:var(--on-muted);font-weight:700}
-.ver{text-align:center;padding:12px 0 24px;font-size:12px;color:var(--on-muted)}
-.ver a{color:inherit;font-weight:700}
+.ver{border-top:1px solid var(--line);padding:12px 14px 0;font-size:12px;color:var(--on-muted)}
+.ver a{color:inherit;font-weight:700;font-size:12px;padding:0}
+.ver a:hover{background:none}
 /* ---------- scroll-driven reveals (progressive; no JS, no library) ---------- */
 @supports (animation-timeline:view()){
   .card,.cap{animation:card-reveal linear both;animation-timeline:view();
