@@ -39,6 +39,8 @@ import java.util.Locale;
 import java.util.Set;
 
 import javax.crypto.spec.SecretKeySpec;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Two pending revocations for the same endpoint and email are separate server
@@ -113,11 +115,53 @@ public class PendingLogoutRetryTest {
         assertTrue(PendingLogout.pendingLabels(ctx).isEmpty());
     }
 
+    @Test
+    public void pendingLabelsReturnsWhileARevokeAttemptIsBlocked() throws Exception {
+        Context ctx = RuntimeEnvironment.getApplication();
+        origin.hold(); // accepted, never answered: the logout attempt parks in its read
+        PendingLogout.signOut(ctx, endpoint, EMAIL, "tok-a");
+        assertEquals(Collections.singletonList(EMAIL), PendingLogout.pendingLabels(ctx));
+
+        Thread revoker = new Thread(() -> PendingLogout.revokeAll(ctx), "revokeAll");
+        revoker.start();
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (origin.hits.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20); // wait until the attempt is parked inside Api.logout
+        }
+        assertFalse("revokeAll never reached the held endpoint", origin.hits.isEmpty());
+
+        CountDownLatch done = new CountDownLatch(1);
+        Thread reader = new Thread(() -> {
+            PendingLogout.pendingLabels(ctx);
+            done.countDown();
+        }, "pendingLabels");
+        reader.start();
+        assertTrue("pendingLabels must not wait for the in-flight revoke attempt",
+                done.await(5, TimeUnit.SECONDS));
+
+        origin.release(); // unblock the attempt; the unconfirmed record stays for retry
+        revoker.join(60_000);
+        assertFalse("revokeAll must finish once the endpoint unblocks", revoker.isAlive());
+        assertEquals(Collections.singletonList(EMAIL), PendingLogout.pendingLabels(ctx));
+    }
+
     /** Session DELETE origin: 200 for accepted tokens, 503 otherwise; records every token. */
     private static final class LogoutOrigin {
         final List<String> hits = Collections.synchronizedList(new ArrayList<>());
         private final ServerSocket server = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
         private volatile Set<String> accepted = new HashSet<>();
+        private final CountDownLatch held = new CountDownLatch(1);
+        private volatile boolean holdConnections;
+
+        /** Accepts connections but never answers until release(): parks Api.logout in its read. */
+        void hold() {
+            holdConnections = true;
+        }
+
+        void release() {
+            holdConnections = false;
+            held.countDown();
+        }
 
         LogoutOrigin() throws Exception {
             Thread t = new Thread(this::serve, "logout-origin");
@@ -148,6 +192,11 @@ public class PendingLogoutRetryTest {
                         }
                     }
                     hits.add(token);
+                    if (holdConnections) {
+                        // Bounded so a failed run cannot park this thread forever.
+                        held.await(60, TimeUnit.SECONDS);
+                        return; // close unanswered: the client attempt fails
+                    }
                     int status = accepted.contains(token) ? 200 : 503;
                     OutputStream out = s.getOutputStream();
                     out.write(("HTTP/1.1 " + status + " T\r\nContent-Type: application/json\r\n"

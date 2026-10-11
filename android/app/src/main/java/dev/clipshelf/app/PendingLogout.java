@@ -114,15 +114,20 @@ public final class PendingLogout {
         }
     }
 
-    /** Account identities with an outstanding server-side sign-out (no crypto on the UI thread). */
+    /**
+     * Account identities with an outstanding server-side sign-out (no crypto
+     * on the UI thread). Deliberately lock-free: revokeAll holds LOCK across
+     * up to ~2 min of network attempts, and onResume/render call this on the
+     * UI thread, which must never park on that monitor. Safe because
+     * SharedPreferences reads are thread-safe and write() replaces the whole
+     * JSON string, so this sees the old or new list, never a tear.
+     */
     public static List<String> pendingLabels(Context ctx) {
-        synchronized (LOCK) {
-            List<String> out = new ArrayList<>();
-            for (JSONObject r : records(ctx)) {
-                out.add(r.optString("email", ""));
-            }
-            return out;
+        List<String> out = new ArrayList<>();
+        for (JSONObject r : records(ctx)) {
+            out.add(r.optString("email", ""));
         }
+        return out;
     }
 
     private static String keep(Context ctx, String endpoint, String email, String token) {
