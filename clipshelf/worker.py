@@ -1095,4 +1095,4 @@ def _merge_own(entry, user, origin, now, title="", summary=None, prompt_text=Non
         data["interpreted"] = now.isoformat()
         contribution.data = data
         contribution.save(update_fields=["data"])
-    return True
+    return changed
