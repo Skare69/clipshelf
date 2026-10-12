@@ -14,7 +14,7 @@
 #   image   : Dockerfile pins (base, apt lines, bundled SQLite), read from the
 #             Dockerfile text, not from a built image.
 #
-# Enforced by check_licenses.py in ci.yml (python job: python+image modes,
+# Enforced by check_licenses.py in ci.yml (python job: the default run,
 # android job: android mode). Every python and android entry must also have a
 # matching row (name, version, license) in THIRD_PARTY_NOTICES.md. A new
 # dependency — pip line, gradle line, apt install (any form), external image

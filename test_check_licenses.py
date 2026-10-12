@@ -185,7 +185,7 @@ class CheckPythonTests(unittest.TestCase):
         with patch.object(check_licenses, "INV", inv), patch.object(
                 check_licenses, "errors", errors), patch.object(
                 check_licenses, "distributions", lambda **kw: dists):
-            check_licenses.check_python(None)
+            check_licenses.check_python()
         return errors
 
     def test_installed_version_behind_observed_fails(self):

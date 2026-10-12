@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """Third-party license gate (stdlib only).
 
-Enforces license_inventory.toml against reality:
+Enforces license_inventory.toml against reality. The default run checks:
   python  : the installed set (CI and the image install exactly `pip install
             --require-hashes -r requirements.lock`) must equal the inventoried
             set and versions for this platform, and every entry's license must
             be allowlisted and unchanged since review.
-  android : the gradle-resolved releaseRuntimeClasspath must equal the
-            inventoried artifact set (exact versions), and the built APK must
-            pack THIRD_PARTY_NOTICES.md.
   image   : Dockerfile pins (base, apt, SQLite) must match the inventory and
             the Dockerfile must COPY THIRD_PARTY_NOTICES.md. This reads the
             Dockerfile text, not a built image. Fails closed: any package-
@@ -16,14 +13,16 @@ Enforces license_inventory.toml against reality:
             COPY --from / RUN --mount=from= fails unless it is the pinned base,
             any apt source reconfiguration (sources.list, /etc/apt/, apt-key,
             trusted.gpg) fails, and ADD of a URL/git source fails.
-  notices : (every mode) THIRD_PARTY_NOTICES.md must exist; its Python and
+  notices : THIRD_PARTY_NOTICES.md must exist; its Python and
             Android tables must list exactly the inventoried entries (name,
-            version, license). android mode also requires the built APK to
-            pack it.
+            version, license).
+
+`android` mode additionally checks that the gradle-resolved
+releaseRuntimeClasspath equals the inventoried artifact set (exact versions),
+and that the built APK packs THIRD_PARTY_NOTICES.md.
 
 Usage:
   check_licenses.py                 # python + image + notices (CI python job, local)
-  check_licenses.py --site DIR      # python set from a --target install dir
   check_licenses.py android --deps FILE --apk APK   # CI android job (after assembleDebug)
 """
 import argparse
@@ -92,11 +91,10 @@ def check_apk(apk: str) -> None:
         fail(f"notices: cannot read {apk}: {e}")
 
 
-def check_python(site: str | None) -> None:
+def check_python() -> None:
     tooling = set(INV["allow"]["tooling"])
-    kwargs = {"path": [site]} if site else {}
     installed = {}
-    for d in distributions(**kwargs):
+    for d in distributions():
         name = norm(d.metadata["Name"])
         if name in tooling:
             continue
@@ -354,24 +352,22 @@ def check_image() -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Third-party license gate")
-    ap.add_argument("--site", help="pip --target dir to inspect instead of the env")
-    ap.add_argument("mode", nargs="?", choices=["python", "android", "image"],
-                    help="run one mode (default: python + image + notices)")
+    ap.add_argument("mode", nargs="?", choices=["android"],
+                    help="run android mode (default: python + image + notices)")
     ap.add_argument("--deps", help="gradle dependencies output for android mode")
     ap.add_argument("--apk", help="built APK to check for the packaged notices")
     args = ap.parse_args()
 
-    if args.mode in ("python", None):
-        check_python(args.site)
-    if args.mode == "android":
+    if args.mode is None:
+        check_python()
+        check_image()
+    else:
         if not args.deps:
             ap.error("android mode needs --deps FILE")
         check_android(args.deps)
         if not args.apk:
             ap.error("android mode needs --apk APK")
         check_apk(args.apk)
-    if args.mode in ("image", None):
-        check_image()
     check_notices()
 
     if errors:
