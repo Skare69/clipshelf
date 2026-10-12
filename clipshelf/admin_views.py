@@ -46,7 +46,7 @@ _USER = get_user_model()
 def _json_body(request) -> dict:
     try:
         body = json.loads(request.body or b"{}")
-    except ValueError:
+    except (ValueError, RecursionError):
         raise ApiError(400, detail="invalid JSON body")
     if not isinstance(body, dict):
         raise ApiError(400, detail="invalid JSON body")

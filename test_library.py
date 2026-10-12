@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import uuid
 from datetime import timedelta
+from urllib.parse import urlencode
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -454,6 +455,52 @@ class RemovalTests(ApiTestCase):
             Entry.objects.filter(collection=shared, key=entry.key).exists())
         self.assertFalse(
             Contribution.objects.filter(user=self.bob, job=pending).exists())
+
+
+class MalformedRequestTests(ApiTestCase):
+    """Malformed bodies never leak framework error pages: /api/ answers JSON."""
+
+    def test_too_many_fields_on_import_is_json_400(self):
+        alice = self._login(self.alice)
+        # TooManyFieldsSent escapes the api wrapper's except chain and must
+        # land in handler400, not Django's default HTML page.
+        fields = urlencode({f"field{i}": "x" for i in range(1500)})
+        response = alice.post(
+            "/api/import",
+            data=fields,
+            content_type="application/x-www-form-urlencoded",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response["Content-Type"].startswith("application/json"))
+        self.assertEqual(response.json()["detail"], "malformed request")
+        self.assertEqual(response["Cache-Control"], "no-store")
+
+    def test_deep_json_on_captures_is_json_400(self):
+        alice = self._login(self.alice)
+        response = alice.post(
+            "/api/captures",
+            data=b"[" * 60000,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response["Content-Type"].startswith("application/json"))
+        self.assertFalse(Capture.objects.exists())
+
+    def test_bad_request_off_api_is_plain_text(self):
+        from django.test import RequestFactory
+
+        from clipshelf import views
+
+        api = RequestFactory().post("/api/captures")
+        self.assertEqual(views.bad_request(api).status_code, 400)
+        self.assertTrue(
+            views.bad_request(api)["Content-Type"].startswith("application/json")
+        )
+        page = RequestFactory().post("/setup")
+        response = views.bad_request(page)
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response["Content-Type"].startswith("text/plain"))
+        self.assertEqual(response.content, b"bad request")
 
 
 class CaptureTests(ApiTestCase):

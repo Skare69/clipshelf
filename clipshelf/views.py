@@ -126,7 +126,7 @@ def _json_body(request):
         raise ApiError(413, detail="request body too large")
     try:
         data = json.loads(body) if body else {}
-    except ValueError:
+    except (ValueError, RecursionError):
         raise ApiError(400, detail="malformed JSON body")
     if not isinstance(data, dict):
         raise ApiError(400, detail="JSON object expected")
@@ -242,6 +242,16 @@ def shell(request):
     response = render(request, "clipshelf/index.html")
     response["Cache-Control"] = "no-store"
     return response
+
+
+def bad_request(request, exception=None):
+    """handler400: SuspiciousOperation (malformed fields/body) escaping a view."""
+    if request.path.startswith("/api/"):
+        # /api contract: no-store even on errors (admin bodies are sensitive).
+        response = json_error(400, detail="malformed request")
+        response["Cache-Control"] = "no-store"
+        return response
+    return HttpResponse("bad request", status=400, content_type="text/plain")
 
 
 def not_found(request, exception=None):

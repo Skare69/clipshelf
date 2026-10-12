@@ -34,5 +34,6 @@ urlpatterns = [
     re_path(r"^static/(?P<path>.*)$", views.static_asset, name="static"),
 ]
 
+handler400 = views.bad_request
 handler404 = views.not_found
 handler500 = views.server_error

@@ -718,6 +718,19 @@ class LlmModelPickerTests(AccountTestCase):
         self.assertEqual(self.requests, [])
 
 
+class MalformedAdminBodyTests(AccountTestCase):
+    def test_deep_json_on_admin_endpoint_is_json_400(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            "/api/admin/invitations",
+            data=b"[" * 60000,
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response["Content-Type"].startswith("application/json"))
+        self.assertIn("detail", response.json())
+
+
 class InvitationUrlOriginTests(AccountTestCase):
     """The copyable invitation link follows the approved canonical origin;
     a spoofed Host header must never choose its destination (finding D3)."""
@@ -827,6 +840,21 @@ class ProductionAdminMountTests(TestCase):
         response = client.get("/api/admin/users")
         self.assertEqual(response.status_code, 200)
         self.assertIn(admin.email, json.dumps(response.json()))
+
+    def test_oversized_admin_body_answers_json_400(self):
+        admin = make_user("mount-admin@clipshelf.test", is_app_admin=True)
+        client = Client()
+        client.force_login(admin)
+        with override_settings(DATA_UPLOAD_MAX_MEMORY_SIZE=1024):
+            response = client.post(
+                "/api/admin/invitations",
+                data=b"x" * 2048,
+                content_type="application/json",
+            )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response["Content-Type"].startswith("application/json"))
+        self.assertEqual(response.json()["detail"], "malformed request")
+        self.assertEqual(response["Cache-Control"], "no-store")
 
 
 class JobPolicyTests(SimpleTestCase):
