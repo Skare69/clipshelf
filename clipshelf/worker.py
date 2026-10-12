@@ -518,11 +518,8 @@ def _sha256_bytes(data):
 
 
 def _sha256_file(path):
-    h = hashlib.sha256()
     with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+        return hashlib.file_digest(fh, "sha256").hexdigest()
 
 
 def _legacy_media_path(rel, cache_dir):
