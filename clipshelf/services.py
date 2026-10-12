@@ -219,7 +219,7 @@ def bind_import_request(user, request_id, record):
 
 
 # Import admission owns the item cap: api_import enforces it before a record
-# exists, worker.import_items re-checks it for import paths without the view.
+# exists, imports.import_items re-checks it for import paths without the view.
 MAX_IMPORT_ITEMS = 5000
 
 

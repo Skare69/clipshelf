@@ -12,7 +12,7 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from clipshelf import lib, models, publication, services, worker
+from clipshelf import imports, lib, models, publication, services
 
 User = get_user_model()
 
@@ -158,7 +158,7 @@ class MergeVariantTests(TestCase):
         models.History.objects.create(
             collection=self.personal, user=self.alice,
             kind=models.History.Kind.REMOVED, url=LEGACY)
-        stats = worker.merge_findings(
+        stats = imports.merge_findings(
             self.alice, [{"source": CASED, "links": [{"url": CASED, "title": "t"}]}])
         self.assertEqual(stats["links"], 0, "extracted merge resurrected a removed link")
         self.assertFalse(
@@ -167,7 +167,7 @@ class MergeVariantTests(TestCase):
     def test_merge_reuses_legacy_entry(self):
         legacy_entry = models.Entry.objects.create(
             collection=self.personal, kind="link", key=LEGACY)
-        worker.merge_findings(
+        imports.merge_findings(
             self.alice, [{"source": CASED, "links": [{"url": CASED, "title": "t"}]}])
         self.assertEqual(
             models.Entry.objects.filter(collection=self.personal, kind="link").count(), 1)
@@ -193,7 +193,7 @@ class ImportVariantTests(TestCase):
                     for item in batch]
         with mock.patch("clipshelf.acquisition.import_export",
                         side_effect=fake_import_export):
-            return worker.import_items(user=self.user, collection_id=None,
+            return imports.import_items(user=self.user, collection_id=None,
                                        items=items, removed=removed or {},
                                        cache_dir=self.tmp)
 

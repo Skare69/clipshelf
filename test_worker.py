@@ -16,7 +16,7 @@ from django.core.management.base import CommandError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
-from clipshelf import cli, models, publication, services, worker
+from clipshelf import cli, imports, models, publication, services, worker
 
 FINDINGS = {"source": "", "summary": "good findings", "repos": [], "prompts": [],
             "links": [], "categories": [], "installs": [], "warnings": []}
@@ -497,7 +497,7 @@ class AddExtractedCommandTests(WorkerMixin, TestCase):
             with self.subTest(field=field, value=value):
                 path.write_text(f'{{"{field}": {value}}}', encoding="utf-8")
                 with mock.patch(
-                        "clipshelf.management.commands.add_extracted.worker.merge_findings"
+                        "clipshelf.management.commands.add_extracted.imports.merge_findings"
                 ) as merge_findings:
                     with self.assertRaisesMessage(CommandError, f"finding {field}"):
                         call_command("add_extracted", "--user", self.user.email, str(path))
@@ -508,7 +508,7 @@ class AddExtractedCommandTests(WorkerMixin, TestCase):
         path.write_text("{}", encoding="utf-8")
         output = io.StringIO()
         with mock.patch(
-                "clipshelf.management.commands.add_extracted.worker.merge_findings",
+                "clipshelf.management.commands.add_extracted.imports.merge_findings",
                 return_value={"links": 2, "prompts": 3, "updated": 4},
         ) as merge_findings:
             call_command("add_extracted", "--user", self.user.email, str(path), stdout=output)
@@ -613,7 +613,7 @@ class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
         models.History.objects.create(
             collection=self.personal, user=self.user,
             kind=models.History.Kind.REMOVED, url=publication.prompt_key(text))
-        worker.merge_findings(
+        imports.merge_findings(
             self.user, [{"source": "https://example.com/a", "prompts": [{"text": text}]}])
         self.assertFalse(models.Entry.objects.filter(kind="prompt").exists())
 
@@ -624,7 +624,7 @@ class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
             kind=models.History.Kind.REMOVED, url=url)
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire):
-            result = worker.import_items(
+            result = imports.import_items(
                 user=self.user, collection_id=self.personal.id,
                 items=[{"url": url, "title": "legacy"}])
 
@@ -689,7 +689,7 @@ class MergeTaggingTests(WorkerMixin, TransactionTestCase):
     """merge_findings tags: screened links, deterministic fallbacks."""
 
     def merge(self, links):
-        worker.merge_findings(self.user, [{"links": links}])
+        imports.merge_findings(self.user, [{"links": links}])
 
     def tags(self, url):
         entry = models.Entry.objects.get(collection=self.personal, key=url)
@@ -774,7 +774,7 @@ class StagingRetentionTests(WorkerMixin, TestCase):
     def test_run_import_stamps_completion_and_retains_the_upload(self):
         path, record = self.stage()
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch("clipshelf.worker.import_items",
+                mock.patch("clipshelf.imports.import_items",
                            return_value={"counts": {}}):
             worker._run_import(record)
         record.refresh_from_db()
@@ -787,7 +787,7 @@ class StagingRetentionTests(WorkerMixin, TestCase):
     def test_failed_import_stamps_error_and_retains_the_upload(self):
         path, record = self.stage()
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch("clipshelf.worker.import_items",
+                mock.patch("clipshelf.imports.import_items",
                            side_effect=ValidationError("boom")):
             worker._run_import(record)
         record.refresh_from_db()
@@ -951,10 +951,10 @@ class StagingCleanupTests(WorkerMixin, TestCase):
             user=self.user, input_digest=uuid.uuid4().hex,
             manifest={"status": "pending"})
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch.object(worker, "_stage_items",
+                mock.patch.object(imports, "_stage_items",
                                   side_effect=ValidationError("boom")):
             with self.assertRaises(ValidationError):
-                worker.import_items(user=self.user, collection_id=self.personal.id,
+                imports.import_items(user=self.user, collection_id=self.personal.id,
                                     record=record,
                                     items=[{"url": "https://example.com/a"}])
         record.refresh_from_db()
@@ -1058,10 +1058,10 @@ class StagingCleanupTests(WorkerMixin, TestCase):
         old_rel, old_path = self.media_dir()
         record = self.record(old_rel, "pending")
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch.object(worker, "_stage_items",
+                mock.patch.object(imports, "_stage_items",
                                   side_effect=ValidationError("boom")):
             with self.assertRaises(ValidationError):
-                worker.import_items(user=self.user, collection_id=self.personal.id,
+                imports.import_items(user=self.user, collection_id=self.personal.id,
                                     record=record,
                                     items=[{"url": "https://example.com/a"}])
             record.refresh_from_db()
@@ -1072,7 +1072,7 @@ class StagingCleanupTests(WorkerMixin, TestCase):
             record.manifest = dict(record.manifest, status="pending")
             record.save(update_fields=["manifest"])
             with self.assertRaises(ValidationError):
-                worker.import_items(user=self.user, collection_id=self.personal.id,
+                imports.import_items(user=self.user, collection_id=self.personal.id,
                                     record=record,
                                     items=[{"url": "https://example.com/a"}])
         record.refresh_from_db()

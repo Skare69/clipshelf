@@ -4,7 +4,7 @@ from pathlib import Path
 
 from django.core.management.base import BaseCommand, CommandError
 
-from clipshelf import worker
+from clipshelf import imports
 from clipshelf.management import user_for
 
 MAX_FINDINGS_BYTES = 32 * 1024 * 1024
@@ -41,7 +41,7 @@ class Command(BaseCommand):
                                for item in values for key in fields)):
                     raise CommandError(
                         f"finding {field} must be a list of objects with string fields")
-        stats = worker.merge_findings(user, findings)
+        stats = imports.merge_findings(user, findings)
         self.stdout.write(self.style.SUCCESS(
             f"merged: {stats['links']} link change(s), "
             f"{stats['prompts']} prompt change(s), "

@@ -1,0 +1,682 @@
+"""Import engine: staged uploads, legacy/tiktok items, and the findings merge.
+
+run_staged_import processes the upload-staged ImportRecords the worker
+coordinator claims; import_items backs the import_library command and
+legacy_payload translates a legacy library.json. merge_findings merges
+interpret-skill findings into the Personal collection for add_extracted.
+"""
+import hashlib
+import json
+import shutil
+import uuid
+from pathlib import Path, PureWindowsPath
+
+from django.conf import settings
+from django.core.exceptions import ValidationError
+from django.db import transaction
+from django.utils import timezone
+
+from clipshelf import (
+    acquisition,
+    asset_files,
+    judgment,
+    lib,
+    models,
+    publication,
+    services,
+)
+
+
+def _data(*parts):
+    return Path(settings.DATA_DIR).joinpath(*parts)
+
+
+IMPORT_BATCH = acquisition.IMPORT_MAX_ITEMS
+
+
+def run_staged_import(record):
+    """Process one upload-staged import record created by the HTTP surface."""
+    manifest = record.manifest or {}
+    staging_rel = manifest.get("staging") or ""
+    path = _data(staging_rel)
+    root = Path(settings.DATA_DIR).resolve()
+    if not path.resolve().is_relative_to(root) or not path.is_file():
+        raise ValidationError("import record staging path is missing or outside DATA_DIR")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if manifest.get("format") == "legacy" or isinstance(payload, dict):
+        # Legacy library.json upload: media referenced as cache/<sha1>.<ext> is
+        # resolved from <DATA_DIR>/import-cache — copy the old installation's
+        # cache/ directory there before importing to retain its media;
+        # unresolved files are recorded in the manifest's missing list.
+        args = legacy_payload(payload)
+        cache = _data("import-cache")
+        return import_items(
+            user=record.user,
+            collection_id=manifest.get("collection_id"),
+            items=args["items"], prompts=args["prompts"],
+            seen=args["seen"], removed=args["removed"],
+            client_request_id=manifest.get("client_request_id"),
+            record=record,
+            cache_dir=str(cache) if cache.is_dir() else None,
+            origin="legacy-import",
+        )
+    if not isinstance(payload, list):
+        raise ValidationError("import payload must be a JSON list")
+    return import_items(
+        user=record.user,
+        collection_id=manifest.get("collection_id"),
+        items=payload,
+        client_request_id=manifest.get("client_request_id"),
+        record=record,
+        origin="browser-import",
+    )
+
+
+def _update_manifest(record, updates):
+    with transaction.atomic():
+        record = models.ImportRecord.objects.select_for_update().get(pk=record.pk)
+        manifest = dict(record.manifest)
+        manifest.update(updates)
+        record.manifest = manifest
+        record.save(update_fields=["manifest"])
+
+
+# ------------------------------------------------------------- import engine
+
+def _canonical(obj):
+    return json.dumps(obj, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _sha256_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def _sha256_file(path):
+    with open(path, "rb") as fh:
+        return hashlib.file_digest(fh, "sha256").hexdigest()
+
+
+def _legacy_media_path(rel, cache_dir):
+    """Existing file for a legacy reference, or None.
+
+    library.json stores repo-relative paths ("cache/<sha1>.<ext>") while
+    --cache points at the cache directory itself, so both spellings resolve.
+    """
+    relative = PureWindowsPath(rel)
+    if relative.drive or relative.root or ".." in relative.parts:
+        raise ValidationError("legacy media must be relative to the cache directory")
+    if not cache_dir:
+        return None
+    base = Path(cache_dir).resolve()
+    for candidate in (base / rel, base / Path(rel).name):
+        candidate = candidate.resolve()
+        if not candidate.is_relative_to(base):
+            raise ValidationError("legacy media is outside the cache directory")
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _media_refs(item):
+    """Yield (field, value) for every media reference in one import item.
+
+    The one enumeration for staging, the dry run and the input digest, so
+    all three agree on which fields hold media. images counts only as a
+    list (per entry), video and cache as single values. The order is the
+    digest's historical enumeration, keeping ImportRecord.input_digest
+    stable.
+    """
+    images = item.get("images")
+    for value in images if isinstance(images, list) else []:
+        yield "images", value
+    yield "video", item.get("video")
+    yield "cache", item.get("cache")
+
+
+def _resolve_media(value, cache_dir, staging, files_record, copy=True):
+    """Normalize one media reference to a Sources-accepted spec.
+
+    Accepts {"path"|"b64"|"url"} dicts (browser shape), http(s) strings, and
+    legacy cache-relative paths ("cache/<sha1>.<ext>") resolved against
+    cache_dir and copied into staging under DATA_DIR. Returns None when a
+    referenced file is missing (recorded honestly in files_record). With
+    copy=False (dry run) the cache file is only hashed in place.
+    """
+    if value is None or value == "" or value == []:
+        return None
+    if isinstance(value, dict):
+        if "path" not in value:
+            return value
+        value = value["path"]
+        if not isinstance(value, str):
+            raise ValidationError("media path must be a relative filename")
+    if isinstance(value, list):  # legacy: images lists handled per entry
+        return None
+    text = str(value).strip()
+    if text.startswith(("http://", "https://")):
+        return {"url": text}
+    rel = text.replace("\\", "/")
+    src = _legacy_media_path(rel, cache_dir)
+    if src is None:
+        files_record["missing"].append(rel)
+        return None
+    digest = _sha256_file(src)
+    files_record["files"][rel] = {"sha256": digest, "size": src.stat().st_size}
+    if not copy:
+        return {"path": str(src)}
+    dest = staging / f"{digest}{src.suffix}"
+    if not dest.exists():
+        shutil.copy2(src, dest)
+    return {"path": str(dest)}
+
+
+def _stage_items(items, cache_dir, staging):
+    """Resolve legacy cache references into staged absolute-path specs."""
+    files_record = {"files": {}, "missing": []}
+    staged = []
+    for item in items:
+        item = dict(item)
+        resolved = {}
+        for field, value in _media_refs(item):
+            spec = _resolve_media(value, cache_dir, staging, files_record)
+            if spec:
+                resolved.setdefault(field, []).append(spec)
+        for field, specs in resolved.items():
+            item[field] = specs if field == "images" else specs[0]
+        for field in ("images", "video", "cache"):
+            if not item.get(field):
+                item.pop(field, None)
+        staged.append(item)
+    return staged, files_record
+
+
+def _append_page_asset(source, item):
+    """Sources validates images/video only; retain the cached page HTML as a
+    page-kind asset with a dense position (Sources expects 0..n)."""
+    spec = item.get("cache")
+    if isinstance(spec, dict) and spec.get("path") and Path(spec["path"]).is_file():
+        assets = source.setdefault("assets", [])
+        assets.append({"path": spec["path"], "kind": "page",
+                       "content_type": "text/html", "position": len(assets)})
+
+
+def _legacy_findings(item, url):
+    """Reconstruct findings-shaped data from legacy merged entry fields.
+
+    The findings contract stores categories/installs as string lists; the
+    legacy per-repo mapping collapses to this entry's own values.
+    """
+    return {"source": url, "summary": item.get("desc") or "", "repos": [],
+            "prompts": [], "links": [],
+            "categories": [item["cat"]] if item.get("cat") else [],
+            "installs": [item["install"]] if item.get("install") else [],
+            "warnings": ["migrated from legacy library; findings merged into entry fields"]}
+
+
+LEGACY_FIELDS = ("title", "desc", "sources", "tags", "found", "interpreted",
+                 "pending", "cat", "install", "archived", "stars")
+
+
+def legacy_payload(data):
+    """Translate a legacy library.json object into import_items arguments."""
+    if not isinstance(data, dict):
+        raise ValidationError("library.json must be a JSON object")
+    links = data.get("links", {})
+    if not isinstance(links, dict):
+        raise ValidationError("library.json links must be a JSON object")
+    items = []
+    for url, entry in links.items():
+        if not isinstance(entry, dict):
+            raise ValidationError("legacy link entries must be JSON objects")
+        item = {"url": url}
+        item.update({k: entry[k] for k in LEGACY_FIELDS if entry.get(k) not in (None, "", [])})
+        for k in ("images", "video", "cache"):
+            if entry.get(k):
+                item[k] = entry[k]
+        items.append(item)
+    prompts = [p for p in data.get("prompts", {}).values() if isinstance(p, dict)]
+    return {"items": items, "prompts": prompts,
+            "seen": data.get("seen", {}), "removed": data.get("removed", {})}
+
+
+def import_items(*, user, collection_id, items, prompts=None, client_request_id=None,
+                 record=None, cache_dir=None, origin="legacy-import",
+                 seen=None, removed=None, dry_run=False):
+    """Validate and import legacy/tiktok items into one collection.
+
+    All-or-nothing: validation (including media staging and public fetch of
+    missing bytes) completes before any database write; the DB commit is one
+    transaction, so a crash or failure leaves no partial contributions and an
+    exact repeat is a no-op keyed by (user, input digest). Raises
+    ValidationError for rejected payloads; returns a result dict.
+    Links without media are not fetched here: their jobs start pending and
+    the job loop fetches them, as for a capture.
+    """
+    if not isinstance(items, list):
+        raise ValidationError("import payload must be a list of items")
+    if len(items) > services.MAX_IMPORT_ITEMS:
+        raise ValidationError(
+            f"too many items ({len(items)} > {services.MAX_IMPORT_ITEMS})")
+    collection, notice = services.destination_for(user, collection_id)
+
+    seen = {} if seen is None else seen
+    removed = {} if removed is None else removed
+    if not isinstance(seen, dict) or not isinstance(removed, dict):
+        raise ValidationError("legacy seen and removed must be JSON objects")
+    for urls in (seen, removed):
+        if any(not isinstance(url, str) or not url.strip() or len(url) > 2048
+               for url in urls):
+            raise ValidationError(
+                "legacy history URLs must be non-empty strings up to "
+                "2048 characters")
+    removed_urls = list(removed)
+    removed_keys = {lib.norm(url) or url for url in removed_urls}
+    items = _dedupe(items, removed_keys)
+    prompts = list(prompts or [])
+
+    digest = _input_digest(items, prompts, seen, removed, cache_dir)
+    existing = (None if dry_run else
+                models.ImportRecord.objects.filter(user=user, input_digest=digest).first())
+    if existing is not None:
+        return {"created": False, "digest": digest, "manifest": existing.manifest,
+                "notice": notice, "collection_id": str(collection.id)}
+
+    staging = _data("staging", f"import-{uuid.uuid4().hex}")
+    if dry_run:
+        files_record = {"files": {}, "missing": []}
+        for item in items:  # read-only: hash referenced cache files in place
+            for _field, value in _media_refs(item):
+                _resolve_media(value, cache_dir, None, files_record, copy=False)
+        manifest = _manifest(items, prompts, seen, removed_keys, files_record, origin)
+        return {"created": False, "dry_run": True, "digest": digest, "manifest": manifest,
+                "notice": notice, "collection_id": str(collection.id)}
+
+    staging.mkdir(parents=True, exist_ok=True)
+    if record is not None:
+        # Own the media directory before any work: a crash anywhere below
+        # still leaves the path recorded for retention-based cleanup. CLI
+        # imports (record=None) own their directory only for the run. A
+        # recovered import keeps its previous directory named under
+        # retained_media_staging instead of orphaning it; cleanup stays
+        # operator-approved.
+        manifest = record.manifest or {}
+        prior = manifest.get("media_staging")
+        new_rel = f"staging/{staging.name}"
+        updates = {"media_staging": new_rel}
+        if isinstance(prior, str) and prior and prior != new_rel:
+            updates["retained_media_staging"] = sorted(
+                {*(manifest.get("retained_media_staging") or []), prior})
+        _update_manifest(record, updates)
+    try:
+        staged, files_record = _stage_items(items, cache_dir, staging)
+        sources = []
+        for i in range(0, len(staged), IMPORT_BATCH):
+            sources.extend(acquisition.import_export(staged[i:i + IMPORT_BATCH], str(staging)))
+        if len(sources) != len(staged):
+            raise ValidationError("import validation returned mismatched results")
+        plans = _plans(staged, sources)
+        prompt_plans = _prompt_plans(prompts)
+        result = _commit_import(user, collection, plans, prompt_plans, digest, origin,
+                                client_request_id, record, notice, staging, files_record,
+                                seen_map=seen, removed_keys=removed_keys,
+                                removed_urls=removed_urls)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return result
+
+
+def _dedupe(items, removed_keys):
+    """Exact-duplicate and removal suppression across both recognized key
+    forms: a cased URL must match a legacy all-lowercase seen/removed key."""
+    seen_keys = set()
+    out = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("url"):
+            raise ValidationError("every import item needs a dict with a url")
+        key = publication.link_key(str(item["url"]))
+        keys = publication.link_keys(key)
+        if keys & removed_keys or keys & seen_keys:
+            continue
+        seen_keys |= keys
+        item = dict(item)
+        item["url"] = key
+        out.append(item)
+    return out
+
+
+def _input_digest(items, prompts, seen, removed, cache_dir):
+    """Digest import data and referenced cache bytes for stable deduplication."""
+    h = hashlib.sha256()
+    h.update(b"clipshelf-import-v2\n")
+    for value in (items, prompts, seen, removed):
+        h.update(_canonical(value).encode())
+        h.update(b"\n")
+    for item in items:
+        # The digest keeps its own per-value rules on purpose: keys stay the
+        # raw reference text and the lookup is unstripped, so a repeat of an
+        # import made by an older version (which hashed padded paths as
+        # sha256=None) still produces the same digest and dedupes.
+        for _field, value in _media_refs(item):
+            path = value.get("path") if isinstance(value, dict) else value
+            if (not isinstance(path, str) or not path
+                    or path.startswith(("http://", "https://"))):
+                continue
+            source = _legacy_media_path(path.replace("\\", "/"), cache_dir)
+            h.update(_canonical({
+                "path": path,
+                "sha256": _sha256_file(source) if source else None,
+            }).encode())
+            h.update(b"\n")
+    h.update((str(cache_dir) if cache_dir else "-").encode())
+    return h.hexdigest()
+
+
+def _manifest(items, prompts, seen, removed_keys, files_record, origin):
+    links = {}
+    for item in items:
+        url = str(item["url"])
+        fields = {k: v for k, v in item.items()
+                  if k not in ("images", "video", "cache", "b64")}
+        links[url] = {
+            "fields_sha256": _sha256_bytes(_canonical(fields).encode()),
+            "title": item.get("title", ""), "found": item.get("found", ""),
+            "interpreted": item.get("interpreted", ""),
+            "pending": bool(item.get("pending")),
+            "sources": item.get("sources", []), "tags": item.get("tags", []),
+            "cat": item.get("cat", ""), "install": item.get("install", ""),
+        }
+    prompt_manifest = {}
+    for p in prompts:
+        key = publication.prompt_key(p.get("text", ""))
+        prompt_manifest[key] = {
+            "fields_sha256": _sha256_bytes(_canonical(p).encode()),
+            "title": p.get("title", ""), "cat": p.get("cat", ""),
+            "found": p.get("found", ""), "interpreted": p.get("interpreted", ""),
+        }
+    return {
+        "generated_at": timezone.now().isoformat(),
+        "origin": origin,
+        "counts": {
+            "links": len(links), "prompts": len(prompt_manifest),
+            "seen": len(seen), "removed": len(removed_keys),
+            "media_files": len(files_record["files"]),
+            "missing_media": len(files_record["missing"]),
+        },
+        "media_files": files_record["files"],
+        "missing_media": files_record["missing"],
+        "seen": seen,  # verbatim: includes redirect aliases recorded as seen
+        "removed": sorted(removed_keys),
+        "legacy_settings": {"interpret_cmd_recorded_only": True},
+        "links": links,
+        "prompts": prompt_manifest,
+    }
+
+
+def _plans(items, sources):
+    """Pair each staged item with its validated source and the target job state."""
+    plans = []
+    for item, source in zip(items, sources):
+        _append_page_asset(source, item)
+        url = str(item["url"])
+        status = source.get("acquisition") or "error"
+        interpreted = bool(item.get("interpreted"))
+        if interpreted:
+            state, interp = "done", "complete"
+            findings = _legacy_findings(item, url)
+        elif status in ("blocked", "error") and not source.get("assets"):
+            state, interp = "blocked", "pending"
+            findings = None
+        else:
+            state, interp = "queued", "pending"  # job loop: fetch if pending, then interpret
+            findings = None
+        warnings = list(source.get("warnings") or [])
+        plans.append({"item": item, "source": source, "url": url, "status": status,
+                      "state": state, "interpretation": interp, "findings": findings,
+                      "warnings": warnings})
+    return plans
+
+
+def _prompt_plans(prompts):
+    plans = []
+    for p in prompts:
+        text = (p.get("text") or "").strip()
+        if not text:
+            continue
+        plans.append({"key": publication.prompt_key(text), "data": {
+            "title": p.get("title", ""), "text": text,
+            "sources": list(p.get("sources") or []), "cat": p.get("cat", ""),
+            "found": p.get("found", ""), "interpreted": p.get("interpreted", ""),
+        }})
+    return plans
+
+
+def _commit_import(user, collection, plans, prompt_plans, digest, origin,
+                   client_request_id, record, notice, staging, files_record,
+                   seen_map=None, removed_keys=(), removed_urls=()):
+    """Publish all files, then create every row in one transaction."""
+    # Publish job files first: complete bytes at final paths before any reference.
+    for plan in plans:
+        plan["published"] = asset_files.publish(plan["source"], staging, move=False)
+
+    # Screen legacy findings OUTSIDE the transaction below: the judgment call
+    # can run for 60s and must never hold the SQLite write lock. A flagged
+    # item becomes one blocked (guardrail) job; the rest of the import
+    # proceeds and the flagged findings are never stored.
+    for plan in plans:
+        if not (plan["findings"] and plan["published"]):
+            continue  # no job will store these findings
+        plan["findings"], withheld = services.screening_gate(
+            services.screening_material(plan["source"]), plan["findings"])
+        if withheld:
+            plan["findings"] = None
+            plan["state"] = "blocked"
+            plan["interpretation"] = "blocked"
+            plan["error"] = withheld
+
+    crid = client_request_id or str(uuid.uuid5(
+        uuid.NAMESPACE_URL, f"clipshelf-import:{user.id}:{digest}"))
+    manifest = _manifest([p["item"] for p in plans],
+                         [p["data"] for p in prompt_plans],
+                         seen_map or {}, removed_keys, files_record, origin)
+    counts = {"entries": 0, "jobs": 0, "assets": 0, "prompts": 0}
+    with transaction.atomic():
+        capture, created = models.Capture.objects.get_or_create(
+            user=user, client_request_id=crid,
+            defaults={
+                "raw_text": f"import {len(plans)} item(s) digest:{digest[:16]}",
+                "requested_collection_id": str(collection.id),
+                "collection": collection, "request_hash": digest,
+                "received_at": timezone.now(), "notice": notice,
+            })
+        if capture.request_hash != digest:
+            raise ValidationError(
+                "client_request_id was already used for a different import payload")
+        publication.record_import_history(
+            collection=collection, user=user,
+            seen=seen_map or {}, removed=removed_urls)
+        for plan in plans:
+            key = publication.link_key(plan["url"])
+            # ponytail: a removed entry never comes back through an import; the
+            # already-published bytes stay as unreferenced files.
+            if publication.tombstoned(collection.id, user.id,
+                                      *publication.link_keys(key)):
+                continue
+            entry, _ = publication.link_entry(collection, key)
+            counts["entries"] += 1
+            job = None
+            if plan["published"] or plan["state"] != "done":
+                job = models.Job.objects.create(
+                    capture=capture, collection=collection, url=key,
+                    final_url=plan["source"].get("url") or plan["url"],
+                    state=plan["state"], acquisition=plan["status"],
+                    interpretation=plan["interpretation"],
+                    source=plan["source"], warnings=plan["warnings"])
+                if plan["published"]:
+                    services.store_source(job, plan["source"])
+                    counts["assets"] += len(plan["published"])
+                if plan["findings"]:
+                    # Screening already ran outside this transaction.
+                    services.store_findings(job, plan["findings"], screen=False)
+                if plan.get("error"):
+                    # store_source clears errors on persist; the screening
+                    # withhold is the job's terminal message.
+                    job.mark_blocked(
+                        error=plan["error"],
+                        interpretation=models.Job.InterpretationStatus.BLOCKED)
+                counts["jobs"] += 1
+            data = _legacy_contribution_data(plan["item"])
+            models.Contribution.objects.get_or_create(
+                entry=entry, user=user, origin=origin,
+                defaults={"capture": capture, "job": job, "data": data})
+        for plan in prompt_plans:
+            entry = publication.prompt_entry(collection, user, plan["data"]["text"])
+            if entry is None:
+                continue  # removed in this collection: an import never resurrects it
+            models.Contribution.objects.get_or_create(
+                entry=entry, user=user, origin=origin,
+                defaults={"capture": capture, "data": plan["data"]})
+            counts["prompts"] += 1
+            counts["entries"] += 1
+        result = {"created": True, "digest": digest, "counts": counts, "manifest": manifest,
+                  "notice": notice, "collection_id": str(collection.id)}
+        if record is None:
+            models.ImportRecord.objects.create(
+                user=user, input_digest=digest, manifest=manifest)
+        else:
+            # Commit the checkpoint with its rows: a restart must not import twice.
+            _update_manifest(record, {"status": "done", "result": result})
+    return result
+
+
+def _legacy_contribution_data(item):
+    """Keep every useful legacy field on the contribution; media now lives in
+    published assets, so drop the transient path specs."""
+    skip = {"images", "video", "cache", "b64", "url"}
+    data = {k: v for k, v in item.items() if k not in skip}
+    data.setdefault("title", "")
+    data.setdefault("desc", "")
+    data.setdefault("sources", [])
+    data.setdefault("tags", [])
+    return data
+
+
+# ------------------------------------------------------- extracted-merge flow
+
+def merge_findings(user, findings, origin="extracted"):
+    """Merge interpret-skill findings into the user's Personal collection with
+    legacy add_extracted semantics (longer text wins, tags/sources union)."""
+    personal = services.personal_collection(user)
+    stats = {"links": 0, "prompts": 0, "updated": 0}
+    now = timezone.now()
+    # One screening pass for every non-structural link, outside the transaction.
+    # Structural tags (github, terminal hosts via lib.tag_for) stay deterministic
+    # and never hit the API; keyword/untagged links go to judgment.tag_links.
+    meta = {}
+    candidates = []
+    for fi, finding in enumerate(findings):
+        for li, link in enumerate(finding.get("links") or []):
+            url = lib.norm(str(link.get("url", "")))
+            title = " ".join(str(link.get("title", "")).split())
+            base = lib.tag_for(url, title)
+            meta[(fi, li)] = (url, title, base or "page")
+            if url and (base is None or base in lib.KEYWORDS):
+                candidates.append((fi, li, url, title))
+    tag_map = {}
+    key = services.screening_key() if candidates else None
+    if candidates and judgment.available(key):
+        try:
+            results = judgment.tag_links(
+                [{"url": u, "title": t} for _, _, u, t in candidates], api_key=key)
+        except judgment.JudgmentError:
+            results = None  # fail-open: keep today's lib.tag_for behavior
+        if results:
+            tag_map = {(fi, li): (r["tag"] if r["keep"] >= judgment.REVIEW_STEER
+                                  else "page")
+                       for (fi, li, _, _), r in zip(candidates, results)}
+    with transaction.atomic():
+        for fi, finding in enumerate(findings):
+            source = lib.norm(str(finding.get("source", "")))
+            cats = finding.get("categories") or {}
+            installs = finding.get("installs") or {}
+            if source:
+                entry = _merge_entry(personal, user, source)
+                if entry and _merge_own(entry, user, origin, summary=finding.get("summary"),
+                                        sources=[source], now=now):
+                    stats["updated"] += 1
+            for repo in finding.get("repos") or []:
+                entry = _merge_entry(personal, user, lib.repo_url(repo))
+                if entry and _merge_own(entry, user, origin,
+                                        sources=[source] if source else [],
+                                        tags=["github"], cat=cats.get(repo),
+                                        install=installs.get(repo), now=now):
+                    stats["links"] += 1
+            for li, link in enumerate(finding.get("links") or []):
+                url, title, tag = meta[(fi, li)]
+                entry = _merge_entry(personal, user, url)
+                if entry and _merge_own(entry, user, origin, title=title,
+                                        sources=[source] if source else [],
+                                        tags=[tag_map.get((fi, li)) or tag],
+                                        now=now):
+                    stats["links"] += 1
+            for prompt in finding.get("prompts") or []:
+                text = (prompt.get("text") or "").strip()
+                if not text:
+                    continue
+                entry = publication.prompt_entry(personal, user, text)
+                if entry and _merge_own(entry, user, origin, prompt_text=text,
+                                        title=prompt.get("title", ""), cat=prompt.get("cat", ""),
+                                        sources=[source] if source else [], now=now):
+                    stats["prompts"] += 1
+    return stats
+
+
+def _merge_entry(personal, user, url):
+    """Personal-collection link entry for an extracted URL, or None when the
+    URL is empty or this user removed it: a merge never resurrects it."""
+    if not url:
+        return None
+    key = publication.link_key(url)
+    if publication.tombstoned(personal.id, user.id, *publication.link_keys(key)):
+        return None
+    entry, _ = publication.link_entry(personal, key)
+    return entry
+
+
+def _merge_own(entry, user, origin, now, title="", summary=None, prompt_text=None,
+               sources=None, tags=None, cat=None, install=None):
+    """Create/update this user's contribution with legacy merge semantics.
+    Returns True when a contribution was created or materially changed."""
+    contribution, created = models.Contribution.objects.get_or_create(
+        entry=entry, user=user, origin=origin,
+        defaults={"data": {"title": "", "desc": "", "sources": [], "tags": []}})
+    data = dict(contribution.data or {})
+    changed = created
+    if prompt_text and not data.get("text"):
+        data["text"] = prompt_text
+        changed = True
+    if title and len(title) > len(data.get("title", "")):
+        data["title"] = title
+        changed = True
+    if summary and len(summary) > len(data.get("desc", "")):
+        data["desc"] = summary
+        changed = True
+    merged_sources = sorted(set(data.get("sources") or []) | {s for s in (sources or []) if s})
+    merged_tags = sorted(set(data.get("tags") or []) | {t for t in (tags or []) if t})
+    if merged_sources != data.get("sources"):
+        data["sources"] = merged_sources
+        changed = True
+    if merged_tags != data.get("tags"):
+        data["tags"] = merged_tags
+        changed = True
+    if cat and not data.get("cat"):
+        data["cat"] = cat
+        changed = True
+    if install and not data.get("install"):
+        data["install"] = install
+        changed = True
+    if changed:
+        data["interpreted"] = now.isoformat()
+        contribution.data = data
+        contribution.save(update_fields=["data"])
+    return changed
+

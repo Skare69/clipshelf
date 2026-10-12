@@ -28,7 +28,7 @@ from django.test import Client, TestCase, TransactionTestCase, override_settings
 from allauth.account.models import EmailAddress
 from PIL import Image
 
-from clipshelf import acquisition, cli, judgment, lib, models, publication, services, worker
+from clipshelf import acquisition, cli, imports, judgment, lib, models, publication, services, worker
 from clipshelf.management.commands.backup import Command as BackupCommand
 
 CACHE_BYTES = b"<html>cached page</html>"
@@ -115,7 +115,7 @@ class MigrationMixin:
         return out.getvalue()
 
     def direct_import(self, items=None, prompts=None, dry_run=False, **kw):
-        """Direct worker.import_items call against this fixture's library."""
+        """Direct imports.import_items call against this fixture's library."""
         items = items if items is not None else [
             {"url": u, **e} for u, e in self.library["links"].items()]
         prompts = prompts if prompts is not None else list(self.library["prompts"].values())
@@ -126,7 +126,7 @@ class MigrationMixin:
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("clipshelf.acquisition.import_export",
                            side_effect=fake_import_export):
-            return worker.import_items(user=self.user, collection_id=None,
+            return imports.import_items(user=self.user, collection_id=None,
                                        items=items, prompts=prompts, **kw)
 
 
@@ -182,14 +182,14 @@ class ManifestTests(MigrationMixin, TestCase):
         # value is computed with the pre-unification media walk (inlined
         # below) against this run's own cache_dir. An exact repeat of an
         # import made before the unification must still dedupe.
-        items = worker._dedupe(
+        items = imports._dedupe(
             [{"url": u, **e} for u, e in self.library["links"].items()],
             {lib.norm(url) or url for url in self.library["removed"]})
         h = hashlib.sha256()
         h.update(b"clipshelf-import-v2\n")
         for value in (items, list(self.library["prompts"].values()),
                       self.library["seen"], self.library["removed"]):
-            h.update(worker._canonical(value).encode())
+            h.update(imports._canonical(value).encode())
             h.update(b"\n")
         for item in items:
             images = item.get("images")
@@ -200,11 +200,11 @@ class ManifestTests(MigrationMixin, TestCase):
                 if (not isinstance(path, str) or not path
                         or path.startswith(("http://", "https://"))):
                     continue
-                source = worker._legacy_media_path(
+                source = imports._legacy_media_path(
                     path.replace("\\", "/"), str(self.cache_dir))
-                h.update(worker._canonical({
+                h.update(imports._canonical({
                     "path": path,
-                    "sha256": worker._sha256_file(source) if source else None,
+                    "sha256": imports._sha256_file(source) if source else None,
                 }).encode())
                 h.update(b"\n")
         h.update(str(self.cache_dir).encode())
@@ -217,7 +217,7 @@ class ManifestTests(MigrationMixin, TestCase):
                  "legacy link entries must be JSON objects")):
             with self.subTest(links=links), \
                     self.assertRaises(ValidationError) as raised:
-                worker.legacy_payload({"links": links})
+                imports.legacy_payload({"links": links})
             self.assertEqual(raised.exception.messages, [message])
 
 
@@ -447,7 +447,7 @@ class ImportTests(MigrationMixin, TestCase):
                 user = models.User.objects.create_user(username=f"image-{i}", email=f"image-{i}@example.com")
                 data = io.BytesIO()
                 Image.new("RGB", (4, 4), color).save(data, "PNG")
-                worker.import_items(user=user, collection_id=None, items=[{
+                imports.import_items(user=user, collection_id=None, items=[{
                     "url": "https://example.com/shared-url",
                     "images": [{"b64": base64.b64encode(data.getvalue()).decode()}],
                 }])
@@ -486,7 +486,7 @@ class ImportTests(MigrationMixin, TestCase):
                           "collection_id": str(self.personal.id)})
             with mock.patch("clipshelf.acquisition.import_export",
                             side_effect=fake_import_export):
-                result = worker.run_staged_import(record)
+                result = imports.run_staged_import(record)
         record.refresh_from_db()
         self.assertEqual(record.manifest["status"], "done")
         self.assertEqual(record.manifest["result"]["counts"], result["counts"])
@@ -799,7 +799,7 @@ class ImportScreeningTests(MigrationMixin, TransactionTestCase):
                            side_effect=fake_import_export), \
                 mock.patch.object(judgment, "available", return_value=True), \
                 mock.patch.object(judgment, "screen_findings", side_effect=screens):
-            return worker.import_items(user=self.user, collection_id=None,
+            return imports.import_items(user=self.user, collection_id=None,
                                        items=items, prompts=[],
                                        cache_dir=str(self.cache_dir))
 
@@ -861,7 +861,7 @@ class DeferredFetchTests(MigrationMixin, TestCase):
                  {"url": cached, "cache": CACHE_NAME}]
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire):
-            worker.import_items(user=self.user, collection_id=None, items=items,
+            imports.import_items(user=self.user, collection_id=None, items=items,
                                 cache_dir=str(self.cache_dir))
             # Interpreted and page-cached legacy entries still fetch inline.
             self.assertEqual(sorted(fetched), [cached, done])

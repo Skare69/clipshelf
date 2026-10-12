@@ -5,7 +5,7 @@ from pathlib import Path
 from django.core.management.base import BaseCommand, CommandError
 from django.core.exceptions import ValidationError
 
-from clipshelf import models, services, worker
+from clipshelf import imports, models, services
 from clipshelf.management import user_for
 
 MAX_LIBRARY_BYTES = 64 * 1024 * 1024  # legacy file guard; upload ceiling is separate
@@ -35,11 +35,11 @@ class Command(BaseCommand):
             raise CommandError(f"input larger than {MAX_LIBRARY_BYTES} bytes; refusing")
         data = json.loads(source.read_text(encoding="utf-8"))
         try:
-            args = worker.legacy_payload(data)
+            args = imports.legacy_payload(data)
         except ValidationError as exc:
             raise CommandError("; ".join(exc.messages)) from exc
 
-        result = worker.import_items(
+        result = imports.import_items(
             user=user, collection_id=services.personal_collection(user).id,
             items=args["items"], prompts=args["prompts"],
             seen=args["seen"], removed=args["removed"],
