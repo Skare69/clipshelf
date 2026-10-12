@@ -118,7 +118,7 @@ def destination_for(user, requested_id):
 # Capture intake
 # ---------------------------------------------------------------------------
 
-def accept_capture(user, client_request_id, text, collection_id, instance_id=None, user_id=None):
+def accept_capture(user, client_request_id, text, collection_id):
     """Validate and durably accept a capture: one transaction writes the
     receipt and queued jobs. Identical retries return the existing capture
     unchanged (created=False); conflicting reuse of the request ID raises
@@ -130,17 +130,6 @@ def accept_capture(user, client_request_id, text, collection_id, instance_id=Non
         raise ValidationError(
             f"Text exceeds {MAX_TEXT_BYTES} UTF-8 bytes.", code="oversized")
 
-    current = get_settings()
-    if instance_id is not None and str(instance_id).strip().lower() != str(current.instance_id):
-        raise ValidationError(
-            "Server identity changed; refresh server details and resend.",
-            code="conflict",
-        )
-    if user_id is not None and str(user_id).strip().lower() != str(user.id):
-        raise ValidationError(
-            "Captures must be submitted by the authenticated account.",
-            code="conflict",
-        )
     try:
         request_id = uuid.UUID(str(client_request_id))
     except (TypeError, ValueError):

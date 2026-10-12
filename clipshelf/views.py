@@ -595,8 +595,6 @@ def api_captures(request):
             str(request_id),
             body.get("text"),
             collection_id,
-            instance_id=str(body.get("instance_id")),
-            user_id=str(body.get("user_id") or user.id),
         )
     except ValidationError as exc:
         if getattr(exc, "code", None) == "oversized":
