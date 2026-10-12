@@ -453,6 +453,17 @@ class AdminBoundaryTests(AccountTestCase):
         for response in responses:
             self.assertEqual(response["Cache-Control"], "no-store")
 
+    def test_oversized_admin_body_answers_json_413(self):
+        # The shared /api body cap: an admin body over 64 KiB is rejected
+        # before any view logic, with a JSON answer and no caching.
+        self.client.force_login(self.admin)
+        response = self.admin_post(
+            "/api/admin/invitations", {"email": "x" * (64 * 1024)}
+        )
+        self.assertEqual(response.status_code, 413)
+        self.assertEqual(response.json(), {"detail": "request body too large"})
+        self.assertEqual(response["Cache-Control"], "no-store")
+
     def test_admin_role_grants_no_content_access(self):
         other = make_user("other@clipshelf.test")
         shared = Collection(name="Family", kind="shared", owner=other)
@@ -841,7 +852,10 @@ class ProductionAdminMountTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(admin.email, json.dumps(response.json()))
 
-    def test_oversized_admin_body_answers_json_400(self):
+    def test_over_memory_limit_admin_body_answers_json_413(self):
+        # A body past DATA_UPLOAD_MAX_MEMORY_SIZE raises RequestDataTooBig;
+        # the shared /api wrapper core maps it to a JSON 413 (never an HTML
+        # framework page), like every other oversized-body answer.
         admin = make_user("mount-admin@clipshelf.test", is_app_admin=True)
         client = Client()
         client.force_login(admin)
@@ -851,9 +865,9 @@ class ProductionAdminMountTests(TestCase):
                 data=b"x" * 2048,
                 content_type="application/json",
             )
-        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.status_code, 413)
         self.assertTrue(response["Content-Type"].startswith("application/json"))
-        self.assertEqual(response.json()["detail"], "malformed request")
+        self.assertEqual(response.json()["detail"], "request body too large")
         self.assertEqual(response["Cache-Control"], "no-store")
 
 

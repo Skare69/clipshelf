@@ -16,10 +16,6 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.http.request import (
-    MultiPartParserError,
-    RequestDataTooBig,
-)
 from django.db import IntegrityError, connection, transaction
 from django.http import (
     FileResponse,
@@ -46,7 +42,6 @@ from clipshelf.models import (
     User,
 )
 
-MAX_BODY_BYTES = 64 * 1024
 DEFAULT_PAGE = 50
 MAX_PAGE = 500
 MAX_NAME_LEN = 200
@@ -72,15 +67,6 @@ def _json(payload, status=200):
     return JsonResponse(payload, status=status)
 
 
-def _vmessage(exc):
-    msg = exc.message_dict if hasattr(exc, "message_dict") else exc.messages
-    if isinstance(msg, dict):
-        return "; ".join(f"{k}: {', '.join(v)}" for k, v in msg.items())
-    return "; ".join(str(m) for m in msg)
-
-
-
-
 def api(view):
     # accounts.api_csrf is the central conditional-CSRF entry: browser
     # mutations re-run the real CSRF check; requests presenting a session
@@ -89,48 +75,13 @@ def api(view):
     protected = accounts.api_csrf(view)
 
     @csrf_exempt
-    @wraps(protected)
+    @wraps(view)
     def wrapper(request, *args, **kwargs):
-        try:
-            user = accounts.api_user(request)
-        except PermissionDenied:
-            return json_error(401, detail="unauthenticated")
-        request.user = user
-        try:
-            response = protected(request, *args, **kwargs)
-        except ApiError as exc:
-            response = exc.response
-        except ValidationError as exc:
-            conflict = getattr(exc, "code", None) == "conflict"
-            response = json_error(
-                409 if conflict else 400,
-                detail=_vmessage(exc),
-            )
-        except PermissionDenied:
-            response = json_error(403, detail="forbidden")
-        except Http404:
-            response = json_error(404, detail="no such resource")
-        except MultiPartParserError:
-            response = json_error(400, detail="malformed multipart body")
-        except RequestDataTooBig:
-            response = json_error(413, detail="request body too large")
-        response["Cache-Control"] = "no-store"
-        return response
+        return accounts.api_guard(
+            request, lambda user, session: protected(request, *args, **kwargs)
+        )
 
     return wrapper
-
-
-def _json_body(request):
-    body = request.body or b""
-    if len(body) > MAX_BODY_BYTES:
-        raise ApiError(413, detail="request body too large")
-    try:
-        data = json.loads(body) if body else {}
-    except (ValueError, RecursionError):
-        raise ApiError(400, detail="malformed JSON body")
-    if not isinstance(data, dict):
-        raise ApiError(400, detail="JSON object expected")
-    return data
 
 
 def _uuid_or_400(value, field):
@@ -324,7 +275,7 @@ def api_collections(request):
                 ]
             }
         )
-    body = _json_body(request)
+    body = accounts.json_body(request)
     name = str(body.get("name") or "").strip()
     if not name or len(name) > MAX_NAME_LEN:
         raise ApiError(400, detail="name must be 1-200 characters")
@@ -360,7 +311,7 @@ def api_collection_members(request, collection_id):
         raise ApiError(403, detail="personal collections have no members")
     if collection.owner_id != user.id:
         raise ApiError(403, detail="only the owner manages members")
-    body = _json_body(request)
+    body = accounts.json_body(request)
     email = str(body.get("email") or "").strip()
     target = User.objects.filter(email__iexact=email, is_active=True).first()
     if target is None:
@@ -406,7 +357,7 @@ def api_collection_member(request, collection_id, user_id):
 @require_http_methods(["POST"])
 def api_settings(request):
     user = request.user
-    body = _json_body(request)
+    body = accounts.json_body(request)
     collection = _accessible_collection(user, body.get("default_collection_id"))
     if not services.can_write(user, collection):
         raise ApiError(403, detail="destination is not writable")
@@ -584,7 +535,7 @@ def api_captures(request):
             captures = captures.filter(collection=collection)
         return _json({"captures": [_capture_json(c) for c in captures]})
 
-    body = _json_body(request)
+    body = accounts.json_body(request)
     request_id = _uuid_or_400(body.get("client_request_id"), "client_request_id")
     _check_identity(body, user)
     collection_id = body.get("collection_id") or None
@@ -598,7 +549,7 @@ def api_captures(request):
         )
     except ValidationError as exc:
         if getattr(exc, "code", None) == "oversized":
-            raise ApiError(413, detail=_vmessage(exc))
+            raise ApiError(413, detail=accounts.vmessage(exc))
         raise
     except PermissionDenied:
         raise ApiError(403, detail="destination not available")

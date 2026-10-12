@@ -6,6 +6,7 @@ entry link. Admin JSON endpoints live in clipshelf.admin_views.
 """
 
 import hashlib
+import json
 import re
 import time
 from datetime import timedelta
@@ -16,7 +17,12 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth import get_user as django_get_user
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.http import HttpResponseNotAllowed, JsonResponse
+from django.http import (
+    Http404,
+    HttpResponseNotAllowed,
+    JsonResponse,
+)
+from django.http.multipartparser import MultiPartParserError, RequestDataTooBig
 from django.middleware.csrf import CsrfViewMiddleware
 from django.shortcuts import redirect
 from django.urls import include, path, reverse
@@ -320,6 +326,67 @@ class ApiError(Exception):
     def __init__(self, status, detail=None, errors=None):
         super().__init__(detail)
         self.response = json_error(status, detail=detail, errors=errors)
+
+
+MAX_BODY_BYTES = 64 * 1024
+
+
+def json_body(request) -> dict:
+    """Parse the request body as a JSON object; oversize bodies answer 413."""
+    body = request.body or b""
+    if len(body) > MAX_BODY_BYTES:
+        raise ApiError(413, detail="request body too large")
+    try:
+        data = json.loads(body) if body else {}
+    except (ValueError, RecursionError):
+        raise ApiError(400, detail="malformed JSON body")
+    if not isinstance(data, dict):
+        raise ApiError(400, detail="JSON object expected")
+    return data
+
+
+def vmessage(exc) -> str:
+    """One-line text form of a ValidationError for JSON error payloads."""
+    msg = exc.message_dict if hasattr(exc, "message_dict") else exc.messages
+    if isinstance(msg, dict):
+        return "; ".join(f"{k}: {', '.join(v)}" for k, v in msg.items())
+    return "; ".join(str(m) for m in msg)
+
+
+def api_guard(request, run):
+    """Shared /api wrapper core: authenticate, run run(), map its errors to
+    JSON answers, and mark every response Cache-Control: no-store.
+
+    run(user, token_session) returns the response. Auth runs before the
+    caller's CSRF check (api_csrf), so unauthenticated requests answer 401
+    and only authenticated unsafe requests ever reach CSRF verification.
+    """
+    try:
+        user, token_session = api_auth(request)
+    except PermissionDenied:
+        response = json_error(401, detail="unauthenticated")
+    else:
+        request.user = user
+        try:
+            response = run(user, token_session)
+        except ApiError as exc:
+            response = exc.response
+        except ValidationError as exc:
+            conflict = getattr(exc, "code", None) == "conflict"
+            response = json_error(
+                409 if conflict else 400,
+                detail=vmessage(exc),
+            )
+        except PermissionDenied:
+            response = json_error(403, detail="forbidden")
+        except Http404:
+            response = json_error(404, detail="no such resource")
+        except MultiPartParserError:
+            response = json_error(400, detail="malformed multipart body")
+        except RequestDataTooBig:
+            response = json_error(413, detail="request body too large")
+    response["Cache-Control"] = "no-store"
+    return response
 
 
 def has_recent_reauthentication(request) -> bool:

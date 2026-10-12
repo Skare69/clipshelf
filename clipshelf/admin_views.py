@@ -5,13 +5,12 @@ Django superuser: these endpoints only manage identity access (accounts,
 invitations, shared-collection succession, LLM connection settings).
 """
 
-import json
 import os
 import secrets
 from functools import wraps
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ValidationError
 from django.core.validators import validate_email
 from django.db import transaction
 from django.db.models import F
@@ -29,11 +28,12 @@ from allauth.core import ratelimit
 from clipshelf.accounts import (
     INVITATION_TTL,
     ApiError,
-    api_auth,
     api_csrf,
+    api_guard,
     canonical_url,
     has_recent_reauthentication,
     invitation_token_hash,
+    json_body,
     json_error,
 )
 from clipshelf import judgment
@@ -41,16 +41,6 @@ from clipshelf.models import Collection, Invitation, Membership
 from clipshelf.services import get_settings, screening_key
 
 _USER = get_user_model()
-
-
-def _json_body(request) -> dict:
-    try:
-        body = json.loads(request.body or b"{}")
-    except (ValueError, RecursionError):
-        raise ApiError(400, detail="invalid JSON body")
-    if not isinstance(body, dict):
-        raise ApiError(400, detail="invalid JSON body")
-    return body
 
 
 def _require_reauth(request, body) -> None:
@@ -75,53 +65,42 @@ def _require_reauth(request, body) -> None:
 
 
 def admin_endpoint(*methods):
-    """Wrap an admin view: conditional CSRF, api_user auth, is_app_admin gate,
-    and JSON error mapping."""
+    """Wrap an admin view on the shared /api wrapper core (accounts.api_guard:
+    auth before CSRF, JSON error mapping, no-store) plus the method gate, the
+    is_app_admin gate and token-session handling."""
 
     def decorate(view):
-        @api_csrf
+        protected = api_csrf(view)
+
+        @wraps(view)
+        def gated(request, user, *args, **kwargs):
+            if request.method not in methods:
+                return json_error(405, detail="method_not_allowed")
+            if not user.is_app_admin:
+                return json_error(403, detail="forbidden")
+            return protected(request, user, *args, **kwargs)
+
         @wraps(view)
         def wrapped(request, *args, **kwargs):
-            if request.method not in methods:
-                response = json_error(405, detail="method_not_allowed")
-            else:
+            def run(user, token_session):
+                original = request.session
+                if token_session is not None:
+                    # api_auth authenticated this request; downstream checks
+                    # (reauth password) need the real user even when a session
+                    # token stood in for the cookie. Run against the session
+                    # the token names so allauth reauthentication records
+                    # persist for token clients; restored below so the
+                    # response never mints a browser session cookie.
+                    request.session = token_session
                 try:
-                    user, token_session = api_auth(request)
-                except PermissionDenied:
-                    response = json_error(401, detail="unauthenticated")
-                else:
-                    if not user.is_app_admin:
-                        response = json_error(403, detail="forbidden")
-                    else:
-                        # api_auth authenticated this request; downstream
-                        # checks (reauth password) need the real user even
-                        # when a session token stood in for the cookie.
-                        request.user = user
-                        original = request.session
-                        if token_session is not None:
-                            # Run against the session the token names so
-                            # allauth reauthentication records persist for
-                            # token clients; restored below so the response
-                            # never mints a browser session cookie.
-                            request.session = token_session
-                        try:
-                            try:
-                                response = view(request, user, *args, **kwargs)
-                            except ApiError as exc:
-                                response = exc.response
-                            except ValidationError as exc:
-                                response = json_error(
-                                    400, errors=[str(m) for m in exc.messages]
-                                )
-                        finally:
-                            if token_session is not None:
-                                request.session = original
-                                if token_session.modified:
-                                    token_session.save()
-            # Same contract as the /api wrapper: admin responses carry user,
-            # invitation and reset-link data and never enter private caches.
-            response["Cache-Control"] = "no-store"
-            return response
+                    return gated(request, user, *args, **kwargs)
+                finally:
+                    if token_session is not None:
+                        request.session = original
+                        if token_session.modified:
+                            token_session.save()
+
+            return api_guard(request, run)
 
         return wrapped
 
@@ -165,7 +144,7 @@ def _target_or_404(user_id):
 def user_status(request, user, user_id):
     """Reversible disable/enable. Disabling revokes existing sessions; later
     re-enabling never revives revoked sessions."""
-    body = _json_body(request)
+    body = json_body(request)
     _require_reauth(request, body)
     active = body.get("active")
     if not isinstance(active, bool):
@@ -190,7 +169,7 @@ def user_recover(request, user, user_id):
     """Issue a maintained allauth/Django reset link for the SAME account,
     revoking its existing sessions. Enrolled MFA is never touched; the
     administrator gains no collection membership or content access."""
-    _require_reauth(request, _json_body(request))
+    _require_reauth(request, json_body(request))
     target = _target_or_404(user_id)
     with transaction.atomic():
         _USER.objects.filter(pk=target.pk).update(
@@ -223,7 +202,7 @@ def invitations(request, user):
     if request.method == "GET":
         rows = Invitation.objects.order_by("-created_at")
         return JsonResponse({"invitations": [_invitation_dict(r) for r in rows]})
-    body = _json_body(request)
+    body = json_body(request)
     _require_reauth(request, body)
     email = str(body.get("email") or "").strip().lower()
     if len(email) > 254:
@@ -294,7 +273,7 @@ def collection_transfer(request, user, collection_id):
     """Move a disabled owner's shared collection to an existing active member.
     Grants the acting admin neither membership nor content access; Personal
     collections are never transferable."""
-    body = _json_body(request)
+    body = json_body(request)
     _require_reauth(request, body)
     collection = Collection.objects.filter(pk=collection_id).first()
     if collection is None:
@@ -360,7 +339,7 @@ def llm_config(request, user):
     s = get_settings()
     if request.method == "GET":
         return JsonResponse({"llm": _llm_dict(s)})
-    body = _json_body(request)
+    body = json_body(request)
     _require_reauth(request, body)
     if "base_url" in body:
         base_url = str(body["base_url"] or "").strip()
@@ -389,7 +368,7 @@ def llm_config(request, user):
 def llm_check(request, user):
     """Probe the values on screen; omission falls back to the saved ones.
     Pure preview: typed values are never persisted."""
-    body = _json_body(request)
+    body = json_body(request)
     _require_reauth(request, body)
     base_url, model, api_key = get_settings().resolve(**_resolve_kwargs(body))
     from clipshelf.interpretation import check_connection
@@ -402,7 +381,7 @@ def llm_check(request, user):
 def llm_models(request, user):
     """List what the endpoint offers, using the typed base URL/key so the admin
     can pick a model before committing the settings. Pure preview."""
-    body = _json_body(request)
+    body = json_body(request)
     _require_reauth(request, body)
     base_url, _model, api_key = get_settings().resolve(**_resolve_kwargs(body))
     if not base_url:
@@ -429,7 +408,7 @@ def screening(request, user):
     s = get_settings()
     if request.method == "GET":
         return JsonResponse({"screening": _screening_dict()})
-    body = _json_body(request)
+    body = json_body(request)
     _require_reauth(request, body)
     if "api_key" not in body:
         raise ApiError(400, detail="api_key is required")
@@ -441,7 +420,7 @@ def screening(request, user):
 @admin_endpoint("POST")
 def screening_check(request, user):
     """One tiny real noul round-trip with the typed, stored, or env key."""
-    body = _json_body(request)
+    body = json_body(request)
     _require_reauth(request, body)
     key = str(body["api_key"] or "").strip() if "api_key" in body else screening_key()
     if not judgment.available(key):
