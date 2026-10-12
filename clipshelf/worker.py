@@ -20,6 +20,7 @@ import logging
 import shutil
 import time
 import uuid
+from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import timedelta
 from pathlib import Path, PureWindowsPath
@@ -269,10 +270,15 @@ def _interpret_phase(job):
 
 
 def _categories(collection):
-    rows = (models.Contribution.objects.filter(entry__collection=collection)
-            .exclude(data__cat__isnull=True).exclude(data__cat="")
-            .values_list("data__cat", flat=True).distinct()[:200])
-    return [c for c in rows if isinstance(c, str)]
+    """The collection's category vocabulary, most used first, so the model
+    reuses a name before it invents one: legacy `cat` plus findings categories."""
+    # ponytail: full scan per job; cache the vocabulary if big collections make it slow
+    counts = Counter()
+    for cat, cats in (models.Contribution.objects.filter(entry__collection=collection)
+                      .values_list("data__cat", "data__categories").iterator()):
+        counts.update(c for c in [cat, *(cats if isinstance(cats, list) else [])]
+                      if isinstance(c, str) and c)
+    return [c for c, _ in counts.most_common()]
 
 
 def _fail(job, exc):

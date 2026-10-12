@@ -73,7 +73,10 @@ _SYSTEM_PROMPT = (
     "URLs or owner/name slugs that literally appear in the material or images - "
     "never invent repositories or titles. prompts: reusable prompt texts found in "
     "the material. links: other worthwhile URLs that appear in the material. "
-    "categories: only values from the provided category list. installs: copyable "
+    "categories: exactly one short label for the material's specific domain (e.g. "
+    "\"Video generation\", \"Claude Code ecosystem\"; never just \"AI\"); reuse a "
+    "value from allowed_categories when one fits and name a new one only when none "
+    "does. installs: copyable "
     "command/text snippets found in the material (never execute anything). "
     "warnings: honest gaps (missing audio, unreadable images). Use [] when a list "
     "is empty. No markdown, no commentary."
@@ -318,7 +321,7 @@ def _parse_json_content(content):
 
 
 def _validated(raw, source_url, categories, warnings):
-    """Full findings validation: types, sizes, URL shapes, category subset."""
+    """Full findings validation: types, sizes, URL shapes, category labels."""
     if not isinstance(raw, dict):
         raise ValueError("findings must be a JSON object")
     required = {"summary", "repos", "prompts", "links", "categories", "installs", "warnings"}
@@ -364,14 +367,19 @@ def _validated(raw, source_url, categories, warnings):
     installs = _clean_list(raw["installs"], INSTALLS_MAX, 500, "installs")
     out_warnings = _clean_list(raw["warnings"], WARNINGS_MAX, 500, "warnings")
 
-    allowed = {str(c).casefold(): str(c) for c in (categories or [])}
+    # reuse before invent: a known category keeps the collection's spelling. A new
+    # name is replayed into later captures' model input, so it must be a short
+    # visible label, never a carrier for hidden or lengthy text.
+    known = {str(c).casefold(): str(c) for c in (categories or [])}
     cats = []
     for text in _clean_list(raw["categories"], CATEGORIES_MAX, 100, "categories"):
-        match = allowed.get(text.casefold())
-        if match:
-            cats.append(match)
-        else:
-            warnings.append(f"category {text[:50]!r} not in collection categories; dropped")
+        if text.casefold() in known:
+            cats.append(known[text.casefold()])
+        elif 0 < len(text) <= 40 and text.isprintable():
+            cats.append(text)
+        elif text:
+            warnings.append(f"category {text[:50]!r} is not a short visible label; dropped")
+    cats = list(dict.fromkeys(cats))
     return {"source": source_url, "summary": summary.strip(), "repos": repos,
             "prompts": prompts, "links": links, "categories": cats,
             "installs": installs, "warnings": out_warnings}

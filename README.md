@@ -197,7 +197,9 @@ Restore prints the secrets to set before you serve the restored data: put
    `tiktok.json` import path.
 3. **Interpret** — one admin-managed OpenAI-compatible endpoint (any local or
    remote vision model) reads the acquired material and returns repos, prompts,
-   links and categories, with warnings for anything it could not see or verify.
+   links and a category, with warnings for anything it could not see or verify.
+   The model reuses the collection's categories and names a new one only when
+   none fits.
    Pick a provider from the list — OpenAI, Anthropic, Gemini, OpenRouter, Groq,
    Mistral, xAI, Z.AI, Ollama, llama.cpp, LM Studio, vLLM, or anything else you type —
    and the model names are fetched from that endpoint rather than guessed.

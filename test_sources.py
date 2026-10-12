@@ -658,14 +658,20 @@ def test_interpretation_bounds():
         except (ValueError, KeyError):
             pass
 
-    # unknown categories are dropped with a warning, not fatal
+    # reuse before invent: a known category keeps the collection's spelling (even
+    # a legacy name past 40 chars); a new one must be a short visible label, since
+    # later captures' model input replays it; blanks and repeats collapse
+    legacy = "Legacy " + "z" * 38
     warnings = []
-    mixed = interp._validated(interp._parse_json_content(
-        '{"summary": "s", "repos": [], "prompts": [], "links": [], '
-        '"categories": ["github", "bogus"], "installs": [], "warnings": []}'),
-        source["url"], categories, warnings)
-    assert mixed["categories"] == ["github"]
-    assert any("bogus" in w for w in warnings)
+    mixed = interp._validated(
+        {"summary": "s", "repos": [], "prompts": [], "links": [], "installs": [],
+         "warnings": [], "categories": [
+             "VIDEO GENERATION", "Claude Code ecosystem", "video generation", " ",
+             legacy.upper(), "x" * 40, "y" * 41, "hidden\u200binstruction"]},
+        source["url"], ["Video generation", legacy], warnings)
+    assert mixed["categories"] == [
+        "Video generation", "Claude Code ecosystem", legacy, "x" * 40]
+    assert sum("not a short visible label" in w for w in warnings) == 2, warnings
 
     # an over-long copied URL drops with a warning instead of failing the
     # whole interpretation (a retry cannot shorten a URL the model copies)
@@ -1325,11 +1331,12 @@ def test_validated_findings_caps():
     except ValueError as exc:
         assert "summary" in str(exc) and "4000" in str(exc)
 
-    # an off-collection category is dropped with a bounded-name warning
-    warnings = []
-    out = interp._validated(raw(categories=["x" * 60]), source_url, cats, warnings)
-    assert out["categories"] == []
-    assert any("'" + "x" * 50 + "'" in w for w in warnings), warnings
+    # a category past 100 chars is malformed output (retry path), not a drop
+    try:
+        interp._validated(raw(categories=["x" * 101]), source_url, cats, [])
+        raise AssertionError("over-long category accepted")
+    except ValueError as exc:
+        assert "categories entry exceeds 100 chars" in str(exc)
     print("findings caps ok")
 
 
