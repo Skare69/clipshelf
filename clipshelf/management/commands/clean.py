@@ -37,9 +37,7 @@ class Command(BaseCommand):
                             help="seconds to wait for the exclusive data lock")
 
     def handle(self, *args, **options):
-        candidates = (worker.job_staging_cleanup_candidates()
-                      + worker.import_media_cleanup_candidates()
-                      + worker.staging_cleanup_candidates())
+        candidates = worker.staging_cleanup_candidates()
         if not candidates:
             self.stdout.write("no staging cleanup candidates")
             return
@@ -55,9 +53,7 @@ class Command(BaseCommand):
         deleted = skipped = 0
         try:
             with data_lock(exclusive=True, timeout=options["wait"]):
-                fresh = set(worker.job_staging_cleanup_candidates()
-                            + worker.import_media_cleanup_candidates()
-                            + worker.staging_cleanup_candidates())
+                fresh = set(worker.staging_cleanup_candidates())
                 for path in candidates:
                     if path not in fresh:
                         self.stdout.write(f"skipped  {path} (no longer a candidate)")

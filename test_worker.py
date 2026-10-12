@@ -888,8 +888,8 @@ class StagingCleanupTests(WorkerMixin, TestCase):
     def candidates(self, days):
         now = timezone.now() + timedelta(days=days)
         with override_settings(DATA_DIR=str(self.tmp)):
-            return (worker.job_staging_cleanup_candidates(now=now),
-                    worker.import_media_cleanup_candidates(now=now))
+            return (worker._job_staging_cleanup_candidates(now=now),
+                    worker._import_media_cleanup_candidates(now=now))
 
     def test_job_dirs_expire_only_after_the_terminal_window(self):
         active = self.make_job(state="queued")
@@ -1082,7 +1082,7 @@ class StagingCleanupTests(WorkerMixin, TestCase):
         self.backdate(keep)
         kept_dir = self.job_dir(keep)
 
-        real = worker.job_staging_cleanup_candidates
+        real = worker._job_staging_cleanup_candidates
 
         def stale_listing(now=None):
             paths = real(now=now)
@@ -1092,7 +1092,7 @@ class StagingCleanupTests(WorkerMixin, TestCase):
 
         listed = io.StringIO()
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch.object(worker, "job_staging_cleanup_candidates",
+                mock.patch.object(worker, "_job_staging_cleanup_candidates",
                                   stale_listing):
             call_command("clean", "--execute", stdout=listed)
         self.assertTrue(expired.exists())

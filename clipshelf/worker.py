@@ -293,20 +293,15 @@ def _fail(job, exc):
 # state nothing reads it again — done jobs moved their assets to final paths;
 # blocked jobs keep only rejected or unpublished bytes, which reach the
 # 256 MiB direct-link ceiling per attempt. Those bytes are retention material,
-# not garbage: terminal jobs keep their directory for STAGING_RETENTION_DAYS
-# after the last state change, then an operator-approved sweep (the clean
-# command) may delete it. Active jobs (queued/running/retry) are never
-# eligible. Nothing here deletes anything.
+# not garbage. Ownership is the Job row, never the directory contents. The one
+# retention rule for every staging kind is stated once on
+# staging_cleanup_candidates. Nothing here deletes anything.
 STAGING_RETENTION_DAYS = 30
 
 
-def job_staging_cleanup_candidates(now=None):
-    """staging/job-<id> directories an approved sweep may delete, sorted.
-
-    Ownership is the Job row, never the directory contents: a directory
-    qualifies only when its job is terminal (done/blocked), updated_at is
-    past the retention window, and the path is a directory directly under
-    DATA_DIR/staging.
+def _job_staging_cleanup_candidates(now=None):
+    """staging/job-<id> directories owned by terminal (done/blocked) Job
+    rows, sorted. Paths must be directories directly under DATA_DIR/staging.
     """
     now = now or timezone.now()
     root = (Path(settings.DATA_DIR) / "staging").resolve()
@@ -373,12 +368,10 @@ def _update_manifest(record, updates):
 # commits (invalid payload, duplicate digest, claim race). Everything else
 # under staging/ (acquisition job-* dirs, import media dirs, stray files) is
 # unrelated to import retention.
-# Retention: pending/running records still read their upload, so those files
-# are live and never eligible. Finished records (done/error) keep the upload
-# for STAGING_RETENTION_DAYS after completion (manifest["completed_at"], else
-# upload time) for replay and audit. staging_cleanup_candidates is the whole
-# definition of what a future operator-approved sweep may delete; nothing
-# here deletes anything.
+# Retention: finished records (done/error) keep the upload for replay and
+# audit (manifest["completed_at"], else upload time); pending/running records
+# still read theirs. The one retention rule for every staging kind is stated
+# once on staging_cleanup_candidates. Nothing here deletes anything.
 
 
 def _staging_finished_at(manifest, created_at):
@@ -421,14 +414,11 @@ def _staging_sweep_candidates(manifest_paths, accepts, now=None):
         and any(finished <= cutoff for _, finished in owners))
 
 
-def staging_cleanup_candidates(now=None):
-    """Staged uploads an approved retention sweep may delete, sorted by path.
-
-    Walks ImportRecord manifests, never the staging directory, so a file no
-    record names is unreachable. A path qualifies only when it is a file
-    under DATA_DIR/staging, every record naming it is finished (done/error),
-    and at least one owner is past the retention window; any live
-    (pending/running) owner keeps the path ineligible at any age.
+def _upload_staging_cleanup_candidates(now=None):
+    """Staged upload JSON files (manifest["staging"]) a sweep may delete,
+    sorted by path. Walks ImportRecord manifests, never the staging
+    directory, so a file no record names is unreachable; paths must be files
+    under DATA_DIR/staging.
     """
     root = (Path(settings.DATA_DIR) / "staging").resolve()
     return _staging_sweep_candidates(
@@ -482,19 +472,12 @@ def run_staged_import(record):
 # an owned, sweepable directory instead of an orphan. A recovered import keeps
 # its previous media directory named under manifest["retained_media_staging"]
 # so it too stays owned and sweepable. Media directories follow
-# the same rule as the spooled uploads: pending/running records keep theirs at
-# any age; finished records (done/error) keep theirs for STAGING_RETENTION_DAYS
-# after completion. Nothing here deletes anything.
-def import_media_cleanup_candidates(now=None):
-    """Staged import media directories an approved sweep may delete, sorted.
-
-    Walks ImportRecord manifests (manifest["media_staging"] plus
-    manifest["retained_media_staging"]), never the
-    staging directory, so an unnamed path is unreachable. A directory
-    qualifies only when it is a directory directly under DATA_DIR/staging,
-    every record naming it is finished (done/error), and at least one owner
-    is past the retention window; any live (pending/running) owner keeps it
-    ineligible at any age.
+# the same ownership as the spooled uploads. Nothing here deletes anything.
+def _import_media_cleanup_candidates(now=None):
+    """Staged import media directories (manifest["media_staging"] plus
+    manifest["retained_media_staging"]) a sweep may delete, sorted. Walks
+    ImportRecord manifests, never the staging directory, so an unnamed path
+    is unreachable; paths must be directories directly under DATA_DIR/staging.
     """
     root = (Path(settings.DATA_DIR) / "staging").resolve()
     return _staging_sweep_candidates(
@@ -502,6 +485,26 @@ def import_media_cleanup_candidates(now=None):
                           *(manifest.get("retained_media_staging") or [])],
         lambda path: path.parent == root and path != root and path.is_dir(),
         now=now)
+
+
+# ------------------------------------------------- staging retention (the rule)
+def staging_cleanup_candidates(now=None):
+    """Every staging path an operator-approved sweep may delete, sorted: the
+    union of job staging dirs, import media dirs and staged upload JSON files.
+
+    The retention rule, stated once for every staging kind: a path is a
+    candidate only when a row owns it by name (the Job row or an
+    ImportRecord manifest — never the directory contents, so a path no row
+    names is unreachable), every owner is finished (done/blocked job,
+    done/error import), and at least one owner is past STAGING_RETENTION_DAYS
+    after the last state change (job updated_at) or completion
+    (manifest["completed_at"], else upload time). A live owner keeps the
+    path ineligible at any age. Nothing here deletes anything; the clean
+    command lists these paths and deletes only with --execute.
+    """
+    return sorted(_job_staging_cleanup_candidates(now=now)
+                  + _import_media_cleanup_candidates(now=now)
+                  + _upload_staging_cleanup_candidates(now=now))
 
 
 # ------------------------------------------------------------- import engine
