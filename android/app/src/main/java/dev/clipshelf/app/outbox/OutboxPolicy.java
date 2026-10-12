@@ -5,7 +5,7 @@ import java.util.regex.Pattern;
 
 /**
  * Pure delivery/share policy with no Android imports, so the invariants are
- * checkable on a host JVM (see android/hostcheck). Mirrors server rules:
+ * covered by the plain-JVM OutboxPolicyTest. Mirrors server rules:
  * text <= 32768 UTF-8 bytes, >= 1 http(s) URL, <= 50 URLs.
  */
 public final class OutboxPolicy {
