@@ -160,6 +160,45 @@ class CheckAndroidTests(unittest.TestCase):
 REAL = (Path(check_licenses.__file__).parent / "Dockerfile").read_text(encoding="utf-8")
 
 
+class FakeDist:
+    def __init__(self, name, version, license_):
+        self._meta = {"Name": name, "License": license_}
+        self.version = version
+
+    @property
+    def metadata(self):
+        return self._meta
+
+
+PY_INV = {
+    "allow": {"ids": ["BSD-3-Clause"], "tooling": ["pip", "setuptools", "wheel"]},
+    "python": {"entries": {
+        "django": {"observed": "5.2.18", "license": "BSD-3-Clause",
+                   "meta": "BSD-3-Clause"},
+    }},
+}
+
+
+class CheckPythonTests(unittest.TestCase):
+    def run_python(self, dists, inv=PY_INV):
+        errors = []
+        with patch.object(check_licenses, "INV", inv), patch.object(
+                check_licenses, "errors", errors), patch.object(
+                check_licenses, "distributions", lambda **kw: dists):
+            check_licenses.check_python(None)
+        return errors
+
+    def test_installed_version_behind_observed_fails(self):
+        errors = self.run_python([FakeDist("Django", "5.2.17", "BSD-3-Clause")])
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("installed 5.2.17 != inventory observed 5.2.18", errors[0])
+        self.assertIn("django", errors[0])
+
+    def test_matching_installed_version_passes(self):
+        self.assertEqual(
+            self.run_python([FakeDist("Django", "5.2.18", "BSD-3-Clause")]), [])
+
+
 def image_errors(dockerfile):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)

@@ -4,8 +4,8 @@
 Enforces license_inventory.toml against reality:
   python  : the installed set (CI and the image install exactly `pip install
             --require-hashes -r requirements.lock`) must equal the inventoried
-            set for this platform, and every entry's license must be
-            allowlisted and unchanged since review.
+            set and versions for this platform, and every entry's license must
+            be allowlisted and unchanged since review.
   android : the gradle-resolved releaseRuntimeClasspath must equal the
             inventoried artifact set (exact versions), and the built APK must
             pack THIRD_PARTY_NOTICES.md.
@@ -116,6 +116,10 @@ def check_python(site: str | None) -> None:
         entry, dist = expected[n], installed[n]
         if entry["license"] not in INV["allow"]["ids"]:
             fail(f"python: {n} license {entry['license']} is not allowlisted")
+        if dist.version != entry["observed"]:
+            fail(f"python: {n} installed {dist.version} != inventory observed "
+                 f"{entry['observed']} — update the inventory and "
+                 "THIRD_PARTY_NOTICES.md on every lock bump")
         raw = raw_license(dist)
         if raw != entry["meta"]:
             fail(f"python: {n} license metadata changed since review: "

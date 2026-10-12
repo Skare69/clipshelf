@@ -40,13 +40,15 @@ is the machine-readable twin of this file; `check_licenses.py` enforces both.
 
 Ground truth: the hash-locked `requirements.lock`, which the image installs
 with `pip install --require-hashes -r requirements.lock` (CPython 3.13,
-linux). `Observed` = the lock pin at review (2026-10-06). PyPI project pages
+linux). `Observed` = the installed (locked) version; `check_licenses.py` fails
+the build when a lock bump leaves it or `license_inventory.toml` behind. PyPI
+project pages
 are the source of record; every wheel ships its license text inside
 `*.dist-info/licenses/`.
 
 | Package | Observed | License | Notes |
 |---|---|---|---|
-| django | 5.2.17 | BSD-3-Clause | |
+| django | 5.2.18 | BSD-3-Clause | |
 | django-allauth | 65.19.7 | MIT | |
 | waitress | 3.0.2 | ZPL-2.1 | |
 | pillow | 12.3.0 | MIT-CMU | |

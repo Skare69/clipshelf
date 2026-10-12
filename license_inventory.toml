@@ -4,10 +4,11 @@
 #   python  : importlib.metadata of the hash-locked install
 #             `pip install --require-hashes -r requirements.lock` (CI and the
 #             image install exactly this set; CPython 3.13, linux). `observed`
-#             is the lock pin at review (2026-10-06), NOT a gate — the lock owns
-#             versions (`scripts/lock_deps.py check` keeps it in step with
-#             requirements.txt); this file gates the NAME SET and the LICENSE
-#             of every shipped distribution.
+#             is gate-checked against the installed (locked) version — every
+#             lock bump must update it here and the row in
+#             THIRD_PARTY_NOTICES.md (`scripts/lock_deps.py check` keeps the
+#             lock in step with requirements.txt); this file gates the NAME
+#             SET, the VERSION and the LICENSE of every shipped distribution.
 #   android : `gradlew :app:dependencies --configuration releaseRuntimeClasspath`
 #             (versions here are resolved pins and ARE gate-checked exactly).
 #   image   : Dockerfile pins (base, apt lines, bundled SQLite), read from the
@@ -38,7 +39,7 @@ tooling = ["pip", "setuptools", "wheel"]
 
 [python.entries]
 
-django            = { observed = "5.2.17",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+django            = { observed = "5.2.18",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 django-allauth    = { observed = "65.19.7", license = "MIT",          meta = "MIT" }
 waitress          = { observed = "3.0.2",   license = "ZPL-2.1",      meta = "ZPL 2.1" }
 pillow            = { observed = "12.3.0",  license = "MIT-CMU",      meta = "MIT-CMU" }
