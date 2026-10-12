@@ -47,7 +47,6 @@ MAX_PAGE = 500
 MAX_NAME_LEN = 200
 MAX_IMPORT_DEPTH = 12
 STAGING_SUBDIR = "staging"
-IMPORT_MAX_BYTES_DEFAULT = 32 * 1024 * 1024
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # Browser export must carry media/data only — never session material or tool options.
@@ -63,8 +62,7 @@ _BANNED_IMPORT_KEYS = {
 _INERT_TYPES = {"text/html", "application/xhtml+xml", "application/xml", "text/xml"}
 
 
-def _json(payload, status=200):
-    return JsonResponse(payload, status=status)
+
 
 
 def api(view):
@@ -93,12 +91,8 @@ def _uuid_or_400(value, field):
         raise ApiError(400, detail=f"{field} must be a UUID")
 
 
-def _import_max_bytes():
-    return getattr(settings, "CLIPSHELF_MAX_IMPORT_BYTES", IMPORT_MAX_BYTES_DEFAULT)
-
-
 def _data_root():
-    return os.path.realpath(getattr(settings, "DATA_DIR", ""))
+    return os.path.realpath(settings.DATA_DIR)
 
 
 def _accessible_map(user):
@@ -246,7 +240,7 @@ def static_asset(request, path):
 @api
 @require_GET
 def api_me(request):
-    return _json(_me_payload(request.user))
+    return JsonResponse(_me_payload(request.user))
 
 
 @require_GET
@@ -257,7 +251,7 @@ def api_instance(request):
     so a match is not proof of origin: the client never sends its enrolled
     session token to the candidate and instead signs in there afresh with the
     account password, so only that fresh login's token is used there."""
-    response = _json({"instance_id": str(services.get_settings().instance_id)})
+    response = JsonResponse({"instance_id": str(services.get_settings().instance_id)})
     response["Cache-Control"] = "no-store"
     return response
 
@@ -267,7 +261,7 @@ def api_instance(request):
 def api_collections(request):
     user = request.user
     if request.method == "GET":
-        return _json(
+        return JsonResponse(
             {
                 "collections": [
                     _collection_json(c, user)
@@ -280,7 +274,7 @@ def api_collections(request):
     if not name or len(name) > MAX_NAME_LEN:
         raise ApiError(400, detail="name must be 1-200 characters")
     collection = Collection.objects.create(name=name, kind="shared", owner=user)
-    return _json({"collection": _collection_json(collection, user)}, status=201)
+    return JsonResponse({"collection": _collection_json(collection, user)}, status=201)
 
 
 @api
@@ -297,7 +291,7 @@ def api_collection_detail(request, collection_id):
         .select_related("user")
         .order_by("created_at")
     ]
-    return _json(
+    return JsonResponse(
         {"collection": _collection_json(collection, user), "members": members}
     )
 
@@ -323,7 +317,7 @@ def api_collection_members(request, collection_id):
             Membership.objects.create(collection=collection, user=target)
     except IntegrityError:
         raise ApiError(409, detail="already a member")
-    return _json(
+    return JsonResponse(
         {
             "member": {
                 "id": str(target.id),
@@ -350,7 +344,7 @@ def api_collection_member(request, collection_id, user_id):
     if membership is None:
         raise Http404("not a member")
     membership.delete()
-    return _json({"removed": True})
+    return JsonResponse({"removed": True})
 
 
 @api
@@ -363,7 +357,7 @@ def api_settings(request):
         raise ApiError(403, detail="destination is not writable")
     user.default_collection = collection
     user.save(update_fields=["default_collection"])
-    return _json(_me_payload(user))
+    return JsonResponse(_me_payload(user))
 
 
 # --- library -----------------------------------------------------------------
@@ -404,7 +398,7 @@ def api_entries(request):
     user = request.user
     accessible = list(services.accessible_collections(user))
     if not accessible:
-        return _json({"entries": [], "count": 0})
+        return JsonResponse({"entries": [], "count": 0})
     qs = Entry.objects.filter(collection__in=accessible)
     kind = request.GET.get("kind")
     if kind:
@@ -439,7 +433,7 @@ def api_entries(request):
     if limit <= 0:
         raise ApiError(400, detail="limit must be positive")
     limit = min(limit, MAX_PAGE)
-    return _json({"entries": filtered[offset : offset + limit], "count": len(filtered)})
+    return JsonResponse({"entries": filtered[offset : offset + limit], "count": len(filtered)})
 
 
 @api
@@ -449,13 +443,13 @@ def api_entry(request, entry_id):
     entry = _entry_or_404(user, entry_id)
     if request.method == "DELETE":
         services.remove_entry(user, entry)
-        return _json({"removed": True})
+        return JsonResponse({"removed": True})
     job_ids = entry.contributions.exclude(job=None).values_list("job_id", flat=True)
     jobs = list(Job.objects.filter(id__in=list(job_ids)).select_related("capture"))
     assets = Asset.objects.filter(collection=entry.collection, job__in=jobs).order_by(
         "position", "id"
     )
-    return _json(
+    return JsonResponse(
         {
             "entry": services.serialize_entry(entry, user),
             "assets": [
@@ -533,7 +527,7 @@ def api_captures(request):
         if collection_id:
             collection = _accessible_collection(user, collection_id)
             captures = captures.filter(collection=collection)
-        return _json({"captures": [_capture_json(c) for c in captures]})
+        return JsonResponse({"captures": [_capture_json(c) for c in captures]})
 
     body = accounts.json_body(request)
     request_id = _uuid_or_400(body.get("client_request_id"), "client_request_id")
@@ -553,7 +547,7 @@ def api_captures(request):
         raise
     except PermissionDenied:
         raise ApiError(403, detail="destination not available")
-    return _json({"receipt": services.receipt(capture)}, status=201 if created else 200)
+    return JsonResponse({"receipt": services.receipt(capture)}, status=201 if created else 200)
 
 
 @api
@@ -565,7 +559,7 @@ def api_capture_detail(request, capture_id):
         raise Http404("no such capture")
     if not services.accessible_collections(user).filter(id=capture.collection_id).exists():
         raise Http404("no such capture")
-    return _json(_capture_json(capture))
+    return JsonResponse(_capture_json(capture))
 
 
 @api
@@ -591,7 +585,7 @@ def api_job_retry(request, job_id):
             current.requeue()
         except ValueError:
             raise ApiError(409, detail="job is already queued or running")
-    return _json({"job": _job_json(current)})
+    return JsonResponse({"job": _job_json(current)})
 
 
 # --- browser tiktok.json import ------------------------------------------------
@@ -622,7 +616,7 @@ def _import_replay(record, spooled):
     # replay is the uploader's only chance to learn why it failed.
     if payload["status"] == "error":
         payload["error"] = str(manifest.get("error") or "import failed")[:300]
-    return _json({"import": payload})
+    return JsonResponse({"import": payload})
 
 
 @api
@@ -632,7 +626,7 @@ def api_import(request):
     upload = request.FILES.get("file")
     if upload is None:
         raise ApiError(400, detail="multipart file required")
-    max_bytes = _import_max_bytes()
+    max_bytes = settings.CLIPSHELF_MAX_IMPORT_BYTES
     if upload.size and upload.size > max_bytes:
         raise ApiError(413, detail="import exceeds the configured ceiling")
     body = request.POST
@@ -704,5 +698,5 @@ def api_import(request):
         except OSError:
             pass
         raise
-    return _json({"import": {"id": str(record.id), "status": "pending"}}, status=201)
+    return JsonResponse({"import": {"id": str(record.id), "status": "pending"}}, status=201)
 
