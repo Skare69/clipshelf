@@ -63,14 +63,15 @@ DEFAULT_TIMEOUT = 120
 # Ratchet: 116 evenly spaced sites of the default scope. The old stride
 # sampler changed both count and membership when the scope grew: 921 sites /
 # stride 8 gave 116; 950 sites / stride 9 gave only 106.
-# Floor = the clean score this harness measures: 77/116 = 66.4% on the
-# 956-site scope (0 timeouts; a non-zero suite exit always kills, so noise
-# only raises scores). The review's 76.7% was inflated by the stale-bytecode
-# defect (false kills) and shared just 17/116 sample sites with that run.
-# ponytail: margin is rounding only — membership drift on the evenly-spaced
-# sampler is large (a 10-site scope change swapped 99/116 sites), so
-# re-measure per scope change; pin the documented survivors to raise it.
-DEFAULT_FAIL_UNDER = 66
+# Floor = the clean score this harness measures: 92/116 = 79.3% on the
+# 971-site scope (0 timeouts; a non-zero suite exit always kills, so noise
+# only raises scores). Re-measure whenever the scope changes: membership
+# drift is large (956 -> 971 sites moved the score from 66.4% to 79.3%),
+# and defect-inflated earlier readings (stale bytecode, 76.7%) are not
+# baselines.
+# ponytail: margin is rounding only; pin the documented survivors to raise
+# the floor further.
+DEFAULT_FAIL_UNDER = 79
 
 CMP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.GtE, ast.GtE: ast.Lt,
        ast.Gt: ast.LtE, ast.LtE: ast.Gt, ast.In: ast.NotIn, ast.NotIn: ast.In,
