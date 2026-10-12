@@ -12,8 +12,10 @@ Enforces license_inventory.toml against reality:
   image   : Dockerfile pins (base, apt, SQLite) must match the inventory and
             the Dockerfile must COPY THIRD_PARTY_NOTICES.md. This reads the
             Dockerfile text, not a built image. Fails closed: any package-
-            manager use it cannot parse, and any external image pulled via
-            COPY --from / RUN --mount=from=, fails unless it is the pinned base.
+            manager use it cannot parse, any external image pulled via
+            COPY --from / RUN --mount=from= fails unless it is the pinned base,
+            any apt source reconfiguration (sources.list, /etc/apt/, apt-key,
+            trusted.gpg) fails, and ADD of a URL/git source fails.
   notices : (every mode) THIRD_PARTY_NOTICES.md must exist; its Python and
             Android tables must list exactly the inventoried entries (name,
             version, license). android mode also requires the built APK to
@@ -202,6 +204,11 @@ PKG_WORD = re.compile(r"(?<![\w.-])(?:%s)(?![\w./-])" % "|".join(PKG_TOOLS))
 APT_ARG_OPTS = {"-o", "--option", "-c", "--config-file", "-t", "--target-release",
                 "--default-release", "-a", "--host-architecture"}
 DEB_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]+")
+# Any apt source reconfiguration breaks the "Debian DFSG set from deb.debian.org"
+# assumption behind the image inventory, so mentioning it fails closed.
+APT_SOURCE = re.compile(r"sources\.list|/etc/apt/|apt-key|trusted\.gpg", re.I)
+# ADD sources that fetch instead of copying from the build context.
+ADD_EXTERNAL = re.compile(r"^[a-z][a-z0-9+.-]*://|^git@|\.git$", re.I)
 
 
 def dockerfile_instructions(text: str):
@@ -284,6 +291,16 @@ def check_image() -> None:
     bases = []
     stage_pkgs = [set()]  # [0]: before any FROM (Docker rejects RUN there anyway)
     for kw, flags, args, bodies in dockerfile_instructions(text):
+        if m := APT_SOURCE.search("\n".join([args, *bodies])):
+            fail(f"image: {kw} touches an apt package source ({m.group(0)}) — the "
+                 "inventory assumes only Debian's own (DFSG) packages; review it, "
+                 "then extend check_licenses.py")
+        if kw == "ADD":
+            for src in args.split():
+                if ADD_EXTERNAL.search(src):
+                    fail(f"image: ADD pulls external content {src} — fetch only "
+                         "pinned, checksum-verified content, then extend "
+                         "check_licenses.py")
         if kw == "FROM":
             words = args.split()
             image = words[0] if words else ""

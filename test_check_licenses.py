@@ -198,6 +198,49 @@ class CheckPythonTests(unittest.TestCase):
         self.assertEqual(
             self.run_python([FakeDist("Django", "5.2.18", "BSD-3-Clause")]), [])
 
+    def test_unlisted_installed_dist_fails(self):
+        errors = self.run_python([
+            FakeDist("Django", "5.2.18", "BSD-3-Clause"),
+            FakeDist("stranger", "1.0", "BSD-3-Clause"),
+        ])
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("installed stranger==1.0 is not in", errors[0])
+        self.assertIn("license_inventory.toml", errors[0])
+
+    def test_inventoried_but_missing_dist_fails(self):
+        errors = self.run_python([])
+        self.assertEqual(errors, [
+            "python: django is inventoried but not installed"])
+
+    def test_non_allowlisted_license_fails(self):
+        inv = {
+            "allow": {"ids": ["BSD-3-Clause"],
+                      "tooling": PY_INV["allow"]["tooling"]},
+            "python": {"entries": {
+                "django": {"observed": "5.2.18", "license": "MIT",
+                           "meta": "BSD-3-Clause"},
+            }},
+        }
+        errors = self.run_python(
+            [FakeDist("Django", "5.2.18", "BSD-3-Clause")], inv=inv)
+        self.assertEqual(errors, [
+            "python: django license MIT is not allowlisted"])
+
+    def test_changed_license_metadata_fails(self):
+        inv = {
+            "allow": {"ids": ["BSD-3-Clause"],
+                      "tooling": PY_INV["allow"]["tooling"]},
+            "python": {"entries": {
+                "django": {"observed": "5.2.18", "license": "BSD-3-Clause",
+                           "meta": "MIT"},
+            }},
+        }
+        errors = self.run_python(
+            [FakeDist("Django", "5.2.18", "BSD-3-Clause")], inv=inv)
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("license metadata changed since review", errors[0])
+        self.assertIn("'BSD-3-Clause' != 'MIT'", errors[0])
+
 
 def image_errors(dockerfile):
     with tempfile.TemporaryDirectory() as directory:
@@ -305,6 +348,82 @@ class CheckImageTests(unittest.TestCase):
         ):
             with self.subTest(snippet=snippet):
                 self.assertEqual(image_errors(runtime_plus(snippet)), [])
+
+    def test_sqlite_arg_pins_are_enforced(self):
+        sqlite = check_licenses.INV["image"]["sqlite"]
+        changed = REAL.replace(
+            f"ARG SQLITE_VERSION={sqlite['version']}",
+            "ARG SQLITE_VERSION=3.44.0", 1)
+        self.assertNotEqual(changed, REAL)
+        missing = REAL.replace(
+            f"ARG SQLITE_SHA256={sqlite['sha256']}\n", "", 1)
+        self.assertNotEqual(missing, REAL)
+        for dockerfile, arg, pinned in (
+                (changed, "SQLITE_VERSION", "3.44.0"),
+                (missing, "SQLITE_SHA256", "missing")):
+            with self.subTest(arg=arg):
+                errors = image_errors(dockerfile)
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn(f"ARG {arg} is {pinned}", errors[0])
+                self.assertIn("inventory pins", errors[0])
+
+    def test_missing_notices_copy_fails(self):
+        dockerfile = REAL.replace(
+            "COPY THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md\n", "", 1)
+        self.assertNotEqual(dockerfile, REAL)
+        errors = image_errors(dockerfile)
+        self.assertEqual(errors, [
+            "image: Dockerfile does not COPY THIRD_PARTY_NOTICES.md"])
+
+    def test_missing_base_image_fails(self):
+        sqlite = check_licenses.INV["image"]["sqlite"]
+        dockerfile = (
+            f"ARG SQLITE_VERSION={sqlite['version']}\n"
+            f"ARG SQLITE_TARBALL={sqlite['tarball']}\n"
+            f"ARG SQLITE_URL={sqlite['url']}\n"
+            f"ARG SQLITE_SHA256={sqlite['sha256']}\n"
+            "COPY THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md\n"
+        )
+        base = check_licenses.INV["image"]["base"]
+        self.assertEqual(image_errors(dockerfile), [
+            f"image: base image is missing, inventory pins {base}",
+            "image: apt stage sets [] != inventoried "
+            "[['ca-certificates', 'gcc', 'libc6-dev', 'make'], "
+            "['ca-certificates', 'ffmpeg']]",
+        ])
+
+    def test_apt_source_reconfiguration_fails_closed(self):
+        for snippet in (
+            "RUN echo 'deb https://www.deb-multimedia.org bookworm main non-free' "
+            "> /etc/apt/sources.list.d/dmo.list",
+            "RUN printf 'deb https://mirror.example.com bookworm main' "
+            "> /etc/apt/sources.list",
+            "RUN sed -i 's/deb.debian.org/mirror.example.com/' "
+            "/etc/apt/sources.list",
+            "RUN apt-key add /tmp/dmo.asc",
+            "COPY dmo.gpg /etc/apt/trusted.gpg.d/",
+            "RUN <<EOF\nprintf 'deb http://x y main' "
+            "| tee /etc/apt/sources.list.d/x.list\nEOF",
+        ):
+            with self.subTest(snippet=snippet):
+                errors = image_errors(runtime_plus(snippet))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("touches an apt package source", errors[0])
+
+    def test_add_external_sources_fail(self):
+        for snippet in (
+            "ADD https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
+            "ffmpeg.tar.xz /opt/",
+            "ADD git@github.com:yt-dlp/FFmpeg-Builds.git /opt/ff",
+            "ADD https://github.com/yt-dlp/FFmpeg-Builds.git /opt/ff",
+            "ADD --chown=0:0 https://example.com/f.tar.xz /opt/",
+        ):
+            with self.subTest(snippet=snippet):
+                errors = image_errors(runtime_plus(snippet))
+                self.assertEqual(len(errors), 1, errors)
+                self.assertIn("ADD pulls external content", errors[0])
+        self.assertEqual(
+            image_errors(runtime_plus("ADD ffmpeg-static.tar.xz /opt/")), [])
 
 
 class CheckNoticesTests(unittest.TestCase):
