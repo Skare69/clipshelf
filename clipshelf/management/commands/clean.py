@@ -29,6 +29,7 @@ class Command(BaseCommand):
             "takes the exclusive data lock (stop web/worker first) and "
             "rechecks each candidate under the lock. Live and unowned staging "
             "paths are never listed.")
+    owns_data_lock = True
 
     def add_arguments(self, parser):
         parser.add_argument("--execute", action="store_true",

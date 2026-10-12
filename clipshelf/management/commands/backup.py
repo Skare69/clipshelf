@@ -22,6 +22,7 @@ class Command(BaseCommand):
     help = ("Back up database, retained media, instance identity, and the "
             "environment config/secrets needed to restore. Takes the exclusive "
             "data lock: stop web/worker first (that is the controlled write pause).")
+    owns_data_lock = True
 
     def add_arguments(self, parser):
         parser.add_argument("--output", required=True, help="directory for the backup")

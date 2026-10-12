@@ -7,8 +7,9 @@ Usage:
   python clipshelf.py serve [host][:port]
       # one-process production Waitress server (default 127.0.0.1:8000)
 
-serve and data-writing commands hold the shared data lock (backup/restore
-take the exclusive one themselves; clean owns its locking); check/test run unlocked.
+serve and ordinary commands hold the shared data lock; a command that takes
+the exclusive one itself declares owns_data_lock = True on its Command class;
+check/test run unlocked.
 """
 import os
 import time
@@ -73,13 +74,20 @@ def main(argv):
         return _serve(*_bind(argv[1] if len(argv) > 1 else ""))
     if argv[:1] == ["worker"]:
         _migrate()
-    # backup/restore/clean own their locking; check/test need no lock
-    unlocked = (argv[0] if argv else "") in ("check", "test", "backup", "restore", "clean")
-    if unlocked:
+    # check/test need no lock. A command that takes the exclusive data lock
+    # itself declares owns_data_lock; wrapping it in the shared lock would
+    # die on the nesting RuntimeError. Unknown commands keep the shared lock.
+    name = argv[0] if argv else ""
+    if name in ("check", "test"):
         lock = nullcontext()
     else:
-        from clipshelf.management.locks import data_lock
-        lock = data_lock()
+        from django.core.management import get_commands, load_command_class
+        app = get_commands().get(name)
+        if app is not None and getattr(load_command_class(app, name), "owns_data_lock", False):
+            lock = nullcontext()
+        else:
+            from clipshelf.management.locks import data_lock
+            lock = data_lock()
     with lock:
         from django.core.management import execute_from_command_line
         execute_from_command_line(["clipshelf.py", *argv])

@@ -34,6 +34,7 @@ class Command(BaseCommand):
     help = ("Restore a clipshelf backup into the current (empty) data directory. "
             "Refuses to touch a live instance. Run only on an isolated instance "
             "with web/worker stopped.")
+    owns_data_lock = True
 
     def add_arguments(self, parser):
         parser.add_argument("--input", required=True, help="backup directory")

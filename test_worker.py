@@ -1027,6 +1027,30 @@ class StagingCleanupTests(WorkerMixin, TestCase):
         self.assertIn(f"deleted  {expired}", output.getvalue())
         self.assertFalse(expired.exists())
 
+    def test_cli_never_wraps_a_lock_owning_command_in_the_shared_lock(self):
+        """v0.10.0 regression: cli.main held the shared data lock while a
+        command took the exclusive one, so `python clipshelf.py <cmd>` died
+        on the nesting RuntimeError. Ownership lives on the Command class,
+        so a new exclusive-lock command is covered without touching cli.py."""
+        import inspect
+        from django.core.management import get_commands, load_command_class
+
+        owners = set()
+        for name, app in get_commands().items():
+            cmd = load_command_class(app, name)
+            exclusive = "data_lock(exclusive=True" in inspect.getsource(type(cmd))
+            self.assertEqual(exclusive, getattr(cmd, "owns_data_lock", False),
+                             f"{name}: exclusive-lock commands declare owns_data_lock")
+            if exclusive:
+                owners.add(name)
+        self.assertEqual(owners, {"backup", "restore", "clean"})
+        for name in sorted(owners):
+            with override_settings(DATA_DIR=str(self.tmp)), \
+                    mock.patch("clipshelf.management.locks.data_lock",
+                               side_effect=AssertionError(f"cli.main locked around {name}")), \
+                    mock.patch("django.core.management.execute_from_command_line"):
+                cli.main([name])
+
     def test_recovered_import_retains_previous_media_dirs(self):
         """A crash retry must not orphan the first crash's staged directory:
         the superseded rel moves to retained_media_staging and every named dir

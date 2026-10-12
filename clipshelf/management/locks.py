@@ -1,8 +1,10 @@
 """Portable process locks coordinating data access across web/worker/operator.
 
 data_lock(exclusive=False): shared holders (serve, worker, write commands) may
-run concurrently; exclusive holders (backup/restore) drain every shared holder
-before proceeding — the controlled write pause for consistent snapshots.
+run concurrently; exclusive holders drain every shared holder before
+proceeding — the controlled write pause for consistent snapshots. Exclusive
+holders (backup, restore, clean) declare owns_data_lock = True on their
+Command class so cli.main does not wrap them in the shared lock.
 coordinator_lock(): exactly one worker coordinator per data directory.
 
 Implementation: byte-range locks on one lock file — POSIX fcntl.lockf and
