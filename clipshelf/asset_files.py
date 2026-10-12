@@ -18,6 +18,7 @@ from pathlib import Path, PureWindowsPath
 from django.conf import settings
 from django.core.exceptions import ValidationError
 
+from clipshelf.lib import _str
 from clipshelf.models import Asset
 
 MAX_ASSETS = 500
@@ -137,10 +138,6 @@ def prepare(assets):
             }
         )
     return prepared
-
-
-def _str(value):
-    return "" if value is None else str(value).strip()
 
 
 def _file_sha256(path):

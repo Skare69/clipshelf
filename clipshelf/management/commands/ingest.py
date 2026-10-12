@@ -10,8 +10,6 @@ from django.core.management.base import BaseCommand, CommandError
 from clipshelf import services
 from clipshelf.management import user_for
 
-MAX_TEXT_BYTES = 32768  # same boundary the capture API enforces
-
 
 class Command(BaseCommand):
     help = ("Ingest a text dump of URLs for an explicit user/collection, "
@@ -29,9 +27,10 @@ class Command(BaseCommand):
         if not path.is_file():
             raise CommandError(f"file not found: {path}")
         with path.open("rb") as source:
-            raw_text = source.read(MAX_TEXT_BYTES + 1)
-        if len(raw_text) > MAX_TEXT_BYTES:
-            raise CommandError(f"file exceeds {MAX_TEXT_BYTES} UTF-8 bytes (capture limit)")
+            raw_text = source.read(services.MAX_TEXT_BYTES + 1)
+        if len(raw_text) > services.MAX_TEXT_BYTES:
+            raise CommandError(
+                f"file exceeds {services.MAX_TEXT_BYTES} UTF-8 bytes (capture limit)")
         try:
             text = raw_text.decode("utf-8")
         except UnicodeDecodeError:

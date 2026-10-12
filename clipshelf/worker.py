@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 CONFIG_ERROR = "llm-not-configured"  # blocked marker; claim resumes when config exists
 # MAX_ATTEMPTS moved to models.Job; the finite-failure policy lives in Job.fail.
 POLL_SECONDS = 5
-IMPORT_BATCH = 500
+IMPORT_BATCH = acquisition.IMPORT_MAX_ITEMS
 
 
 def _data(*parts):

@@ -8,8 +8,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import TestCase
 
-from clipshelf import models
-from clipshelf.management.commands.ingest import MAX_TEXT_BYTES
+from clipshelf import models, services
 
 
 class IngestCommandTests(TestCase):
@@ -52,7 +51,7 @@ class IngestCommandTests(TestCase):
 
     def test_oversize_file_read_is_bounded(self):
         dump = self.root / "large.txt"
-        dump.write_bytes(b"x" * (MAX_TEXT_BYTES + 10))
+        dump.write_bytes(b"x" * (services.MAX_TEXT_BYTES + 10))
         real_open = Path.open
         read_sizes = []
 
@@ -78,7 +77,7 @@ class IngestCommandTests(TestCase):
             with self.assertRaises(CommandError):
                 self.ingest(dump)
 
-        self.assertEqual(read_sizes, [MAX_TEXT_BYTES + 1])
+        self.assertEqual(read_sizes, [services.MAX_TEXT_BYTES + 1])
 
     def test_invalid_utf8_has_clear_command_error(self):
         dump = self.root / "invalid.txt"

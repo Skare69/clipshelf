@@ -19,6 +19,7 @@ from django.db.models import Q
 from django.utils import timezone
 from clipshelf import asset_files, judgment, lib, publication
 from clipshelf.interpretation import GuardrailBlocked
+from clipshelf.lib import _str
 
 from clipshelf.models import (
     Asset,
@@ -693,10 +694,6 @@ def _string_list(value, limit, max_len):
     if not isinstance(value, list):
         raise ValidationError({"list": "Expected a list of strings."}, code="invalid")
     return [_str(v)[:max_len] for v in value[:limit] if _str(v)]
-
-
-def _str(value):
-    return "" if value is None else str(value).strip()
 
 
 def _validate_findings(job, findings):

@@ -63,6 +63,11 @@ def is_terminal(url):
     return host in TERMINAL
 
 
+def _str(value):
+    """None-safe stripped string; the one blank-coercion helper."""
+    return "" if value is None else str(value).strip()
+
+
 def github_repo(url):
     """True for repo-shaped github/gist URLs (owner/name), not GitHub nav chrome."""
     s = urlsplit(url)
