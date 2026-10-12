@@ -28,7 +28,7 @@ from django.test import Client, TestCase, TransactionTestCase, override_settings
 from allauth.account.models import EmailAddress
 from PIL import Image
 
-from clipshelf import acquisition, judgment, lib, models, publication, services, worker
+from clipshelf import acquisition, cli, judgment, lib, models, publication, services, worker
 from clipshelf.management.commands.backup import Command as BackupCommand
 
 CACHE_BYTES = b"<html>cached page</html>"
@@ -624,6 +624,37 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
         self.assertEqual(stat.S_IMODE(secrets_path.stat().st_mode), 0o600,
                          "a crashed backup left SECRETS.json readable by others")
         self.assertNotIn("smtp-password", secrets_path.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
+    def test_backup_directory_and_snapshot_are_private_under_default_umask(self):
+        """Under umask 0022 the backup directory is 0700 and db.sqlite3 0600:
+        a world-readable snapshot leaks session keys and stored API keys."""
+        data_dir = self.tmp / "backup-data"
+        data_dir.mkdir()
+        target = self.tmp / "private-backup"
+        old_umask = os.umask(0o022)
+        try:
+            with override_settings(DATA_DIR=str(data_dir), SECRET_KEY="backup-secret-key"):
+                call_command("backup", "--output", str(target), stdout=io.StringIO())
+        finally:
+            os.umask(old_umask)
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o700,
+                         "the backup directory was readable by others")
+        self.assertEqual(stat.S_IMODE((target / "db.sqlite3").stat().st_mode), 0o600,
+                         "the snapshot database was readable by others")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
+    def test_cli_main_pins_private_umask(self):
+        """cli.main sets umask 077 before anything else, so the data directory,
+        WAL/SHM sidecars and backups are private whatever umask the caller had."""
+        old_umask = os.umask(0o022)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                cli.main(["check"])
+            self.assertEqual(os.umask(old_umask), 0o077,
+                             "cli.main must pin umask 077 before creating files")
+        finally:
+            os.umask(old_umask)
 
     def test_concurrent_backups_publish_one_complete_generation(self):
         data_dir = self.tmp / "backup-data"

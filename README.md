@@ -166,6 +166,11 @@ removes its own fixtures, and the server never scans the OS temp directory.
 `backup` writes a new directory (the path must not exist yet): a SQLite
 backup API snapshot `db.sqlite3`, `assets/`, `manifest.json`, and
 `SECRETS.json` (mode 0600) when the instance has secrets — protect it.
+Everything clipshelf creates is private to the running account: the process
+pins umask 077, so the data directory is 0700 and `db.sqlite3`, the WAL/SHM
+sidecars, assets and backup contents are 0600/0700. Directories created by
+older versions keep their old modes — run `chmod -R go-rwx` on the data
+directory and on existing backups once.
 `restore` accepts only an empty, isolated data directory and refuses one that
 already holds a database. Both take the exclusive data lock: stop web and
 worker first.

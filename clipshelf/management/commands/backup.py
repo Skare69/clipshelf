@@ -49,7 +49,9 @@ class Command(BaseCommand):
                 reject_existing_target()
                 target.parent.mkdir(parents=True, exist_ok=True)
                 try:
-                    target.mkdir()
+                    # Second guard beside cli.main's umask 077: keep the
+                    # backup directory private even under a looser umask.
+                    target.mkdir(mode=0o700)
                 except FileExistsError as exc:
                     raise CommandError(
                         f"refusing to use an existing backup destination: {target}"
@@ -72,6 +74,11 @@ class Command(BaseCommand):
         from django.db import connection
 
         connection.ensure_connection()
+        # Created 0600 before any byte lands, like SECRETS.json below: the
+        # snapshot holds session keys and stored API keys, so it must stay
+        # private even when this command runs under a loose umask.
+        fd = os.open(target / "db.sqlite3", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        os.close(fd)
         dst = sqlite3.connect(str(target / "db.sqlite3"))
         try:
             with dst:

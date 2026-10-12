@@ -66,6 +66,10 @@ def _serve(host, port):
 
 
 def main(argv):
+    # Everything this process writes (database, WAL/SHM sidecars, assets,
+    # backups) is private to the running account; pin the umask so an
+    # operator shell default of 0022 cannot publish it as 0644/0755.
+    os.umask(0o077)
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "clipshelf.project.settings")
     import django
     django.setup()
