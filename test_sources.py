@@ -335,6 +335,90 @@ def test_deadline_bounded_reads():
         net.validate_url = real_validate
 
 
+def test_deadline_bounded_connect():
+    # TCP connect and the TLS handshake must each fit in the remaining
+    # whole-fetch budget: a slow public host cannot stretch one fetch to ~2T
+    timeouts = []
+
+    class SlowSock(FakeSock):
+        def __init__(self, fake):
+            super().__init__(fake)
+            self.timeouts = timeouts
+
+        def settimeout(self, t):
+            self.timeouts.append(t)
+
+        def gettimeout(self):
+            return self.timeouts[-1] if self.timeouts else None
+
+        def connect(self, sa):
+            self.fake.connected.append(sa[0])
+            time.sleep(0.5)             # slow public host: SYN answered late
+
+    class StuckSock(SlowSock):
+        def connect(self, sa):
+            self.fake.connected.append(sa[0])
+            time.sleep(1.2)             # overruns the whole budget
+
+    class SlowHandshake:
+        def wrap_socket(self, sock, server_hostname=None):
+            time.sleep(sock.gettimeout() or 0.0)    # honors the budget we set
+            raise TimeoutError                       # real handshakes time out too
+
+    class ConnectNet(FakeNet):
+        def __init__(self, sock_cls):
+            super().__init__({"media.example": [PUBLIC]}, [])
+            self.sock_cls = sock_cls
+
+        def socket(self, family, type):
+            return self.sock_cls(self)
+
+    real_socket, real_validate, real_tls = net.socket, net.validate_url, net._TLS
+    net.validate_url = lambda url: ("https", "media.example", 443, "/",
+                                    [(socket.AF_INET, (PUBLIC, 443))])
+    net._TLS = {"https": SlowHandshake()}
+    try:
+        # handshake gets the remaining budget (1.0 - 0.5), not the full 1.0
+        net.socket = ConnectNet(SlowSock)
+        start = time.monotonic()
+        try:
+            net.fetch_public("https://media.example/x", timeout=1.0)
+            raise AssertionError("slow connect + handshake accepted past deadline")
+        except net.NetworkError as exc:
+            elapsed = time.monotonic() - start
+            assert "time bound" in str(exc), str(exc)
+            assert elapsed < 1.3, f"slow connect held the fetch {elapsed:.2f}s"
+            assert len(timeouts) == 2, timeouts
+            assert timeouts[1] < timeouts[0] - 0.4, timeouts
+
+        # a connect that burns the whole budget dies before the handshake
+        timeouts.clear()
+        net.socket = ConnectNet(StuckSock)
+        start = time.monotonic()
+        try:
+            net.fetch_public("https://media.example/x", timeout=1.0)
+            raise AssertionError("overrunning connect accepted past deadline")
+        except net.NetworkError as exc:
+            elapsed = time.monotonic() - start
+            assert "time bound" in str(exc), str(exc)
+            assert elapsed < 1.5, f"stuck connect held the fetch {elapsed:.2f}s"
+
+        # a spent deadline refuses to open a socket at all
+        conn = net._PinnedHTTP("media.example", 443, socket.AF_INET,
+                               (PUBLIC, 443), time.monotonic() - 1, None)
+        try:
+            conn.connect()
+            raise AssertionError("spent deadline connected")
+        except TimeoutError as exc:
+            assert "fetch exceeded time bound" in str(exc), str(exc)
+        finally:
+            conn.close()
+    finally:
+        net.socket = real_socket
+        net.validate_url = real_validate
+        net._TLS = real_tls
+
+
 def test_import_media_bounds(tmp=None):
     tmp = tmp or tempfile.mkdtemp(prefix="cs-src-")
     good = base64.b64encode(png_bytes()).decode()
@@ -1688,6 +1772,8 @@ def test():
     print("redirect/bounds ok")
     test_deadline_bounded_reads()
     print("deadline bounds ok")
+    test_deadline_bounded_connect()
+    print("deadline connect ok")
     tmp = tempfile.mkdtemp(prefix="cs-src-")
     try:
         test_import_media_bounds(tmp)

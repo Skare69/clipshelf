@@ -148,13 +148,21 @@ class _PinnedHTTP(http.client.HTTPConnection):
         self._family, self._sockaddr, self._tls_ctx = family, sockaddr, tls_ctx
         self._deadline = deadline
 
+    def _left(self):
+        """Remaining whole-fetch budget; a spent budget refuses to proceed."""
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("fetch exceeded time bound")
+        return left
+
     def connect(self):
         self.sock = socket.socket(self._family, socket.SOCK_STREAM)
-        self.sock.settimeout(self.timeout)
+        self.sock.settimeout(self._left())
         self.sock.connect(self._sockaddr)
         if self._tls_ctx is not None:
+            # CPython bounds the whole TLS handshake by the socket timeout.
+            self.sock.settimeout(self._left())
             self.sock = self._tls_ctx.wrap_socket(self.sock, server_hostname=self.host)
-            self.sock.settimeout(self.timeout)
 
     def response_class(self, sock, **kwargs):
         """HTTPResponse whose every read is bounded by the whole-fetch deadline."""
