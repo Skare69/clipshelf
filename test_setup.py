@@ -58,6 +58,46 @@ class SetupWizardTests(TestCase):
         self.assertEqual(address.email, "owner@example.com")
         self.assertEqual(client.get("/").status_code, 200)
 
+    def test_cross_site_post_without_token_is_rejected(self):
+        # Any web page can auto-submit this form on a LAN; without the token
+        # check the first POST would create the attacker's admin.
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(
+            "/setup",
+            data={
+                "email": "attacker@evil.example",
+                "password1": PASSWORD,
+                "password2": PASSWORD,
+            },
+            HTTP_HOST="192.168.1.10:8000",
+            HTTP_ORIGIN="http://evil.example",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(User.objects.count(), 0)
+
+    def test_get_then_post_with_token_creates_admin_and_logs_in(self):
+        client = Client(enforce_csrf_checks=True)
+        page = client.get("/setup")
+        self.assertEqual(page.status_code, 200)
+        response = client.post(
+            "/setup",
+            data={
+                "csrfmiddlewaretoken": str(page.context["csrf_token"]),
+                "email": "owner@example.com",
+                "password1": PASSWORD,
+                "password2": PASSWORD,
+            },
+            HTTP_HOST="192.168.1.10:8000",
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], "/")
+        user = User.objects.get()
+        self.assertTrue(user.check_password(PASSWORD))
+        address = EmailAddress.objects.get(user=user, primary=True)
+        self.assertTrue(address.verified)
+        # The wizard logs the operator in, like it did before the token check.
+        self.assertEqual(client.get("/").status_code, 200)
+
     def test_after_setup_wizard_is_closed(self):
         self._signup(Client())
         client = Client()

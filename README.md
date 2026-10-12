@@ -84,7 +84,8 @@ confirmation, reset and signup mails carry path-only links, and
 `clipshelf.py check` warns. `CLIPSHELF_ALLOWED_HOSTS`
 defaults to `*` because the expected deployment is a LAN with remote access
 behind a VPN. CSRF protection is off by default, like Jellyfin and the *arr
-services; cookie mutations stay protected by `SameSite=Lax` sessions
+services; the setup wizard always checks its own CSRF token, and other cookie
+mutations stay protected by `SameSite=Lax` sessions
 regardless. Setting `CLIPSHELF_CSRF=1` turns CSRF verification on and then
 requires `CLIPSHELF_ORIGIN` or a concrete `CLIPSHELF_ALLOWED_HOSTS`. Setting
 `CLIPSHELF_ORIGIN` to an `https://` URL additionally enables the HTTPS

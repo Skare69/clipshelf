@@ -7,6 +7,7 @@ from django.core.exceptions import ValidationError
 from django.core.validators import EmailValidator
 from django.db import transaction
 from django.shortcuts import redirect, render
+from django.views.decorators.csrf import csrf_protect
 
 from clipshelf.models import User
 
@@ -42,6 +43,9 @@ class SetupMiddleware:
         return self.get_response(request)
 
 
+# Enforces the token check even without CsrfViewMiddleware, which only runs
+# when CLIPSHELF_CSRF=1; /setup must not accept cross-site POSTs by default.
+@csrf_protect
 def setup_view(request):
     if not needs_setup():
         return redirect(settings.LOGIN_URL)
