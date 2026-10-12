@@ -14,6 +14,7 @@ import threading
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +22,8 @@ from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.recorder import MigrationRecorder
 from django.test import Client, TestCase, TransactionTestCase, override_settings
 from allauth.account.models import EmailAddress
 from PIL import Image
@@ -773,3 +776,76 @@ class DeferredFetchTests(MigrationMixin, TestCase):
         # The export's preview title and note survive a page without them.
         self.assertEqual((job.source["title"], job.source["desc"]),
                          ("Preview", f"my note {note}"))
+
+
+class LegacyBindingBackfillTests(TransactionTestCase):
+    """The 0004 bind_legacy_ids backfill: every accepted legacy request id
+    must be bound to its ImportRecord before the retired client_request_id
+    column is dropped (the migration is irreversible). The test database
+    migrates from empty, so without replaying the upgrade the backfill runs
+    over zero rows and a broken loop or a dropped RunPython ships undetected.
+    """
+
+    def test_0004_backfills_bindings_from_column_and_manifest(self):
+        # Simulate a pre-upgrade server. The migration cannot be reversed, so
+        # undo only its schema footprint by hand (the three statements mirror
+        # 0003's schema exactly) and mark it unapplied: the forward run below
+        # then re-executes the real migration, RunPython included.
+        with connection.cursor() as cursor:
+            cursor.execute("DROP TABLE clipshelf_importrequest")
+            cursor.execute(
+                "ALTER TABLE clipshelf_importrecord "
+                "ADD COLUMN client_request_id uuid NULL")
+            cursor.execute(
+                "CREATE UNIQUE INDEX clipshelf_import_user_request_unique "
+                "ON clipshelf_importrecord (user_id, client_request_id)")
+        MigrationRecorder(connection).record_unapplied(
+            "clipshelf", "0004_import_request_identity")
+
+        executor = MigrationExecutor(connection)
+        legacy = executor.loader.project_state(
+            [("clipshelf", "0003_import_client_request_id")]).apps
+        LegacyRecord = legacy.get_model("clipshelf", "ImportRecord")
+        first = models.User.objects.create_user(username="mig1",
+                                                email="mig1@example.com")
+        second = models.User.objects.create_user(username="mig2",
+                                                 email="mig2@example.com")
+
+        def record(user_id, manifest, client_request_id=None):
+            return LegacyRecord.objects.create(
+                user_id=user_id, input_digest=uuid.uuid4().hex,
+                manifest=manifest, client_request_id=client_request_id)
+
+        col_id, man_id, both_id = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+        collide_id, junk_id = uuid.uuid4(), uuid.uuid4()
+        r_col = record(first.id, {}, col_id)  # id in the column only
+        r_man = record(first.id, {"client_request_id": str(man_id)})
+        r_both = record(first.id, {"client_request_id": str(both_id)}, both_id)
+        r_early = record(first.id, {}, collide_id)
+        # Hand-edited manifest colliding with an earlier record's column id.
+        r_late = record(first.id, {"client_request_id": str(collide_id)})
+        r_junk = record(first.id, {"client_request_id": "not-a-uuid"}, junk_id)
+        r_second = record(second.id, {}, col_id)  # same id, different user
+        # auto_now_add stamps near-simultaneous creates with identical clock
+        # reads; pin the collision pair so "earliest record wins" is exact.
+        LegacyRecord.objects.filter(id=r_late.id).update(
+            created_at=r_early.created_at + timedelta(seconds=1))
+
+        executor.migrate([("clipshelf", "0004_import_request_identity")])
+
+        bindings = {(b.user_id, b.request_id): b.record_id
+                    for b in models.ImportRequest.objects.all()}
+        self.assertEqual(bindings, {
+            (first.id, col_id): r_col.id,
+            (first.id, man_id): r_man.id,
+            (first.id, both_id): r_both.id,
+            (first.id, collide_id): r_early.id,  # earliest record wins
+            (first.id, junk_id): r_junk.id,  # manifest junk skipped
+            (second.id, col_id): r_second.id,  # request ids are per user
+        })
+
+    def tearDown(self):
+        # Restore the latest migration state whatever happened above (assert
+        # failures included), so no other test ever sees the old schema.
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
