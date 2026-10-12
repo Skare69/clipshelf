@@ -5,8 +5,9 @@ separate trust path from public fetch policy; only the current capture's
 material is sent. Findings shape, types, sizes, and URL validity are enforced;
 one malformed retry; never invents findings on configuration failure.
 
-Transport seam: post() below is the ONE http adapter. Tests fake it instead
-of reaching further in; the worker owns retries and policy around it.
+Transport seam: _request() below is the ONE http adapter; post() and
+list_models() wrap it. Tests fake _request instead of reaching further in;
+the worker owns retries and policy around post().
 """
 import base64
 import io
@@ -104,53 +105,77 @@ def _config(config):
 
 
 # ------------------------------------------------------------- HTTP core
-def post(base, key, payload, timeout):
-    """One bounded request. The worker owns transport retries and backoff."""
-    body = json.dumps(payload).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+class _TransportError(InterpretationError):
+    """The ONE transport failure of _request(). The message is post()'s
+    surface wording; the attributes carry what other wrappers re-word."""
+
+    def __init__(self, kind, code=None, detail=""):
+        self.kind, self.code, self.detail = kind, code, detail
+        if kind == "creds":
+            message = f"endpoint rejected credentials (HTTP {code})"
+        elif kind == "unreachable":
+            message = f"endpoint unreachable: {detail}"
+        elif kind == "size":
+            message = "model response exceeds size bound"
+        elif kind == "json":
+            message = "endpoint returned invalid JSON"
+        else:  # http: the endpoint answered with a non-ok status
+            message = f"endpoint rejected request (HTTP {code}): {detail}"
+        super().__init__(message)
+
+
+def _request(method, url, key, payload, timeout):
+    """ONE http adapter: bounded request -> parsed JSON, or _TransportError."""
+    headers = {"Content-Type": "application/json"} if payload is not None else {}
     if key:
         headers["Authorization"] = f"Bearer {key}"
-    req = urllib.request.Request(base + "/chat/completions", data=body,
-                                 headers=headers, method="POST")
+    body = None if payload is None else json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read(LLM_RESPONSE_MAX + 1)
     except urllib.error.HTTPError as exc:
         detail = _redact(exc.read(4096).decode(errors="replace"), key)[:300]
         if exc.code in (401, 403):
-            raise InterpretationError(f"endpoint rejected credentials (HTTP {exc.code})") from None
-        raise InterpretationError(f"endpoint rejected request (HTTP {exc.code}): {detail}") from None
+            raise _TransportError("creds", exc.code) from None
+        raise _TransportError("http", exc.code, detail) from None
     except (urllib.error.URLError, OSError) as exc:
-        raise InterpretationError(f"endpoint unreachable: {_redact(str(exc), key)[:300]}") from None
+        raise _TransportError("unreachable",
+                              detail=_redact(str(exc), key)[:300]) from None
     if len(raw) > LLM_RESPONSE_MAX:
-        raise InterpretationError("model response exceeds size bound")
+        raise _TransportError("size")
     try:
         return json.loads(raw)
     except (ValueError, UnicodeError):
-        raise InterpretationError("endpoint returned invalid JSON") from None
+        raise _TransportError("json") from None
+
+
+def post(base, key, payload, timeout):
+    """One bounded request. The worker owns transport retries and backoff."""
+    try:
+        return _request("POST", base + "/chat/completions", key, payload, timeout)
+    except _TransportError as exc:
+        raise InterpretationError(str(exc)) from None
 
 
 def list_models(config, timeout=30):
     """Fetch model IDs for the picker; unsupported endpoints allow manual entry."""
     base, _, key = _config({**config, "model": config.get("model") or "-"})
-    headers = {"Authorization": f"Bearer {key}"} if key else {}
-    req = urllib.request.Request(base + "/models", headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read(LLM_RESPONSE_MAX + 1)
-    except urllib.error.HTTPError as exc:
-        if exc.code in (401, 403):
-            raise ConfigurationError(f"endpoint rejected credentials (HTTP {exc.code})") from None
-        raise ConfigurationError(f"endpoint cannot list models (HTTP {exc.code})") from None
-    except (urllib.error.URLError, OSError) as exc:
-        raise ConfigurationError(f"endpoint unreachable: {_redact(str(exc), key)[:200]}") from None
-    if len(raw) > LLM_RESPONSE_MAX:
-        raise ConfigurationError("model list exceeds size bound")
-    try:
-        data = json.loads(raw)["data"]
+        data = _request("GET", base + "/models", key, None, timeout)["data"]
         if not isinstance(data, list):
             raise ValueError("data must be a list")
-    except (ValueError, UnicodeError, KeyError, TypeError):
+    except _TransportError as exc:
+        if exc.kind == "creds":
+            raise ConfigurationError(f"endpoint rejected credentials (HTTP {exc.code})") from None
+        if exc.kind == "unreachable":
+            raise ConfigurationError(f"endpoint unreachable: {exc.detail[:200]}") from None
+        if exc.kind == "size":
+            raise ConfigurationError("model list exceeds size bound") from None
+        if exc.kind == "http":
+            raise ConfigurationError(f"endpoint cannot list models (HTTP {exc.code})") from None
+        raise ConfigurationError("endpoint returned an invalid model list") from None
+    except (ValueError, KeyError, TypeError):
         raise ConfigurationError("endpoint returned an invalid model list") from None
     return sorted({m["id"] for m in data if isinstance(m, dict)
                    and isinstance(m.get("id"), str) and m["id"].strip()})[:500]

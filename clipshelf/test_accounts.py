@@ -4,14 +4,12 @@ Invitation replay, native token login and session revocation, admin boundary
 (never content access), and shared-collection transfer limits.
 """
 
-import io
 import json
 import re
 import secrets
 from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
-from urllib.error import URLError
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -33,6 +31,7 @@ from clipshelf.accounts import (
     json_error,
 )
 from clipshelf.models import Collection, Invitation, Job, Membership, ServerSettings
+from clipshelf.interpretation import _TransportError
 from clipshelf.services import accessible_collections
 from django.core import mail
 
@@ -572,11 +571,11 @@ class LlmModelPickerTests(AccountTestCase):
         self.client.force_login(self.admin)
         self.requests = []
 
-        def respond(request, **kwargs):
-            self.requests.append((request.full_url, request.get_header("Authorization")))
-            return io.BytesIO(b'{"data":[{"id":"vision-a"}]}')
+        def fake_request(method, url, key, payload, timeout):
+            self.requests.append((url, f"Bearer {key}" if key else None))
+            return {"data": [{"id": "vision-a"}]}
 
-        patcher = patch("urllib.request.urlopen", side_effect=respond)
+        patcher = patch("clipshelf.interpretation._request", side_effect=fake_request)
         patcher.start()
         self.addCleanup(patcher.stop)
 
@@ -704,7 +703,8 @@ class LlmModelPickerTests(AccountTestCase):
 
     def test_no_endpoint_is_a_request_error_and_an_unreachable_one_is_a_gateway_error(self):
         self.assertEqual(self.admin_post("/api/admin/llm/models", {}, reauth=True).status_code, 400)
-        with patch("urllib.request.urlopen", side_effect=URLError("connection refused")):
+        with patch("clipshelf.interpretation._request",
+                   side_effect=_TransportError("unreachable", detail="connection refused")):
             response = self.admin_post("/api/admin/llm/models", {"base_url": "http://dead/v1"})
         self.assertEqual(response.status_code, 502)
 
