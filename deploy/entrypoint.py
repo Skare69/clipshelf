@@ -12,21 +12,24 @@ Ops (first argument, default `serve`):
                      automatically by serve/worker; kept for operators)
   bootstrap          create an administrator via CLI (requires
                      CLIPSHELF_ADMIN_EMAIL; recovery path beside the wizard)
-  check              run Django system checks (diagnostics, no production gates)
+  check              run Django system checks (diagnostics; app settings
+                     still enforce the SQLite floor unless CLIPSHELF_DEBUG=1)
 
-Production gates (skipped only with CLIPSHELF_DEBUG=1):
-  - runtime SQLite >= 3.51.3 (WAL-reset fix); never assumed from the image tag
+The SQLite >= 3.51.3 floor is enforced once, at django.setup() in app
+settings, which every op runs through clipshelf.py; the in-image build is
+proven at publish time by deploy/check_sqlite.py. Production gate here
+(skipped only with CLIPSHELF_DEBUG=1): a warning when CLIPSHELF_SMTP_HOST
+is unset.
 
-Origin/secret-key/allowed-hosts validation lives in app settings, which fail
-with a precise message. No anonymous or automatic administrator is ever
-created.
+Origin/secret-key/allowed-hosts validation also lives in app settings,
+which fail with a precise message. No anonymous or automatic administrator
+is ever created.
 """
 import os
 import sqlite3
 import sys
 import tempfile
 
-MIN_SQLITE = (3, 51, 3)
 DATA_DIR = os.environ.get("CLIPSHELF_DATA_DIR", "/data")
 BIND = "0.0.0.0:8000"  # inside the container always all interfaces; compose maps the port
 
@@ -68,15 +71,6 @@ def production_gates():
             "password-recovery mail cannot send (ordinary login still works)",
             file=sys.stderr,
         )
-    version = tuple(int(part) for part in sqlite3.sqlite_version.split("."))
-    if version < MIN_SQLITE and os.environ.get("CLIPSHELF_SQLITE_VERIFIED") != "1":
-        fail(
-            f"runtime SQLite {sqlite3.sqlite_version} lacks the WAL-reset fix "
-            f"(need >= {'.'.join(map(str, MIN_SQLITE))}); see "
-            "https://www.sqlite.org/wal.html. This image builds a pinned fixed "
-            "SQLite; if you swapped it, install a verified fixed build, then — "
-            "and only then — set CLIPSHELF_SQLITE_VERIFIED=1."
-        )
 
 
 def main():
@@ -85,8 +79,7 @@ def main():
     rest = argv[1:]
     ensure_data_dir()
     print(
-        f"entrypoint: runtime SQLite {sqlite3.sqlite_version} "
-        f"(minimum {'.'.join(map(str, MIN_SQLITE))}, uid {os.getuid()})"
+        f"entrypoint: runtime SQLite {sqlite3.sqlite_version} (uid {os.getuid()})"
     )
 
     launcher = [sys.executable, "clipshelf.py"]
