@@ -469,6 +469,14 @@ impBtn.addEventListener("click", () => {
     impBtn.disabled = false;
     let data = null; try { data = JSON.parse(xhr.responseText); } catch {}
     if (xhr.status === 200 || xhr.status === 201) {
+      if (data?.import?.status === "error") {
+        // Same-digest replays answer 200 with the stored failure; the file is
+        // never reprocessed, so the uploader must see the error, not a banner.
+        impProg.hidden = true;
+        impErr.textContent = `The server could not process this import: ${String(data.import.error || "unknown error").slice(0, 300)}. Re-export the file and upload it again, or check the server log.`;
+        impErr.hidden = false;
+        return;
+      }
       impProg.hidden = true; impFill.style.width = "0";
       impStat.textContent = "";
       impFile.value = ""; $("#impName").textContent = ""; impBtn.disabled = true;

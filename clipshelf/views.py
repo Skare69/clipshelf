@@ -662,14 +662,16 @@ def _scan_import_keys(node, depth=0):
 def _import_replay(record, spooled):
     """Same-digest retry: discard the re-spooled copy and replay the receipt."""
     os.remove(spooled)
-    return _json(
-        {
-            "import": {
-                "id": str(record.id),
-                "status": (record.manifest or {}).get("status", "pending"),
-            }
-        }
-    )
+    manifest = record.manifest or {}
+    payload = {
+        "id": str(record.id),
+        "status": manifest.get("status", "pending"),
+    }
+    # The digest dedupe means a failed import is never reprocessed, so the
+    # replay is the uploader's only chance to learn why it failed.
+    if payload["status"] == "error":
+        payload["error"] = str(manifest.get("error") or "import failed")[:300]
+    return _json({"import": payload})
 
 
 @api

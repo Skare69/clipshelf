@@ -144,3 +144,59 @@ await renderEntry(unsafe.map((u, i) => ({ kind: "image", content_type: "image/pn
 }
 
 console.log(`ok: retained assets render only as absolute same-origin ${ORIGIN}/api/assets/<uuid> URLs`);
+
+/* ---------- 3. failed import replay shows the stored error, not the success banner ---------- */
+const { S } = await import("./clipshelf/static/clipshelf/core.js");
+S.me = { user: { id: "u1" }, instance_id: "inst", collections: [], default_collection_id: "c1" };
+const impFile = bySel.get("#impFile");
+const uploadFile = new Blob(["{}"], { type: "application/json" });
+uploadFile.name = "tiktok.json";
+impFile.files = [uploadFile];
+bySel.get("#impFill").style = {}; // success path resets the bar width
+const addDlg = bySel.get("#addDlg");
+let dialogClosed = false;
+addDlg.close = () => { dialogClosed = true; };
+class FakeUploadXhr {
+  static sent = [];
+  constructor() {
+    this.listeners = {};
+    this.upload = { addEventListener() {} };
+    this.status = 0; this.responseText = "";
+    FakeUploadXhr.sent.push(this);
+  }
+  open() {} setRequestHeader() {} send() {}
+  addEventListener(t, fn) { (this.listeners[t] ||= []).push(fn); }
+}
+globalThis.XMLHttpRequest = FakeUploadXhr;
+const impClick = (bySel.get("#impBtn").listeners.click || [])[0];
+assert.ok(impClick, "panels.js did not register the import click handler");
+const bannerEl = bySel.get("#banner");
+const impErr = bySel.get("#impErr");
+const respond = (status, payload) => {
+  const xhr = FakeUploadXhr.sent.at(-1);
+  xhr.status = status;
+  xhr.responseText = JSON.stringify(payload);
+  for (const fn of xhr.listeners.load) fn({});
+};
+
+// 200 replay of a failed import: error element, no dialog close, no ok banner.
+impClick();
+respond(200, { import: { id: "r1", status: "error", error: "too many items (5001 > 5000)" } });
+assert.equal(impErr.hidden, false, "failed replay must surface the error element");
+assert.match(impErr.textContent, /too many items \(5001 > 5000\)/,
+  "error element must carry the stored server error");
+assert.match(impErr.textContent, /Re-export|server log/,
+  "error element must carry the recovery hint");
+assert.equal(dialogClosed, false, "failed replay must not close the dialog");
+assert.ok(!bannerEl.className.includes("ok"),
+  `failed replay must not raise the success banner, got class "${bannerEl.className}"`);
+
+// Control: a pending import still takes the success path.
+impClick();
+respond(201, { import: { id: "r2", status: "pending" } });
+assert.equal(dialogClosed, true, "accepted import still closes the dialog");
+assert.ok(bannerEl.className.includes("ok"), "accepted import still shows the ok banner");
+assert.equal(impErr.hidden, true, "accepted import shows no error");
+clearTimeout(S.libTimer); // drop the deferred library refresh so node exits
+
+console.log("ok: failed import replay shows the stored error and never the success banner");

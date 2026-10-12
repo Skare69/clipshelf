@@ -1000,6 +1000,23 @@ class ImportTests(ApiTestCase):
             staged,
         )
 
+    def test_import_replay_reports_stored_error(self):
+        alice = self._login(self.alice)
+        content = json.dumps([{"id": "1", "desc": "clip one"}]).encode()
+        self.assertEqual(self._post_import(alice, content).status_code, 201)
+        record = ImportRecord.objects.get()
+        # The shape the worker stores when run_staged_import raises.
+        record.manifest["status"] = "error"
+        record.manifest["error"] = "x" * 400
+        record.save(update_fields=["manifest"])
+        replay = self._post_import(alice, content)
+        self.assertEqual(replay.status_code, 200)
+        payload = replay.json()["import"]
+        self.assertEqual(payload["id"], str(record.id))
+        self.assertEqual(payload["status"], "error")
+        # Bounded on the wire, never replayed as a bare success receipt.
+        self.assertEqual(payload["error"], "x" * 300)
+
     def test_same_import_cannot_target_a_different_collection(self):
         alice = self._login(self.alice)
         other = Collection.objects.create(
