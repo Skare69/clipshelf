@@ -6,6 +6,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.core.exceptions import ValidationError
 
 from clipshelf import models, services, worker
+from clipshelf.management import user_for
 
 MAX_LIBRARY_BYTES = 64 * 1024 * 1024  # legacy file guard; upload ceiling is separate
 
@@ -26,9 +27,7 @@ class Command(BaseCommand):
                             help="build the manifest and compare, import nothing")
 
     def handle(self, *args, **options):
-        user = models.User.objects.filter(email__iexact=options["user"].strip()).first()
-        if user is None:
-            raise CommandError(f"no account for {options['user']}")
+        user = user_for(options["user"])
         source = Path(options["input"])
         if not source.is_file():
             raise CommandError(f"input not found: {source}")

@@ -1,8 +1,9 @@
 """Report a user's pending jobs and staged imports."""
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 from django.db.models import F
 
 from clipshelf import models
+from clipshelf.management import user_for
 
 
 class Command(BaseCommand):
@@ -13,9 +14,7 @@ class Command(BaseCommand):
         parser.add_argument("--collection", default=None, help="restrict to collection UUID")
 
     def handle(self, *args, **options):
-        user = models.User.objects.filter(email__iexact=options["user"].strip()).first()
-        if user is None:
-            raise CommandError(f"no account for {options['user']}")
+        user = user_for(options["user"])
         jobs = models.Job.objects.filter(capture__user=user)
         if options["collection"]:
             jobs = jobs.filter(collection_id=options["collection"])

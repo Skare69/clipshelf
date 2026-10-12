@@ -7,7 +7,8 @@ from pathlib import Path
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 
-from clipshelf import models, services
+from clipshelf import services
+from clipshelf.management import user_for
 
 MAX_TEXT_BYTES = 32768  # same boundary the capture API enforces
 
@@ -23,9 +24,7 @@ class Command(BaseCommand):
         parser.add_argument("file")
 
     def handle(self, *args, **options):
-        user = models.User.objects.filter(email__iexact=options["user"].strip()).first()
-        if user is None:
-            raise CommandError(f"no account for {options['user']}")
+        user = user_for(options["user"])
         path = Path(options["file"])
         if not path.is_file():
             raise CommandError(f"file not found: {path}")
