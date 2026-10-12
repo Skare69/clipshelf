@@ -43,7 +43,7 @@ public final class PendingLogout {
 
     /**
      * Revokes the server session. Returns null when revoked (or already gone:
-     * 401), otherwise a user-facing notice — either pending-revocation kept
+     * 401 or 410), otherwise a user-facing notice — either pending-revocation kept
      * for automatic retry, or a permanent server rejection (nothing kept).
      */
     public static String signOut(Context ctx, String endpoint, String email, String token) {

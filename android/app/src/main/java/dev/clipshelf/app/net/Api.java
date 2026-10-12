@@ -232,12 +232,16 @@ public final class Api {
         return token;
     }
 
-    /** Allauth session deletion. 401 counts as already signed out; other failures throw. */
+    /**
+     * Allauth session deletion. 401 and 410 count as already signed out
+     * (allauth answers 410 when the token's session no longer exists, e.g.
+     * after a password change or a session_version bump); other failures throw.
+     */
     public static void logout(String endpoint, String token) throws IOException {
         try {
             requestJson(endpoint + "/_allauth/app/v1/auth/session", "DELETE", token, null);
         } catch (ApiException e) {
-            if (e.code != 401) {
+            if (e.code != 401 && e.code != 410) {
                 throw e;
             }
         }
