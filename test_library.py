@@ -1075,6 +1075,59 @@ class ImportTests(ApiTestCase):
             record=ImportRecord.objects.create(user=self.bob, input_digest="b" * 64),
         )
 
+    def test_admit_import_lost_race_follows_one_conflict_policy(self):
+        # A record created between the pre-insert pass and admit_import
+        # (the lost uniqueness race) must replay the winner or raise the
+        # same conflicts as the first pass.
+        digest = "d" * 64
+        other = Collection.objects.create(name="Other", kind="shared", owner=self.alice)
+        winner = ImportRecord.objects.create(
+            user=self.alice,
+            input_digest=digest,
+            manifest={"collection_id": str(self.alice_personal.id)},
+        )
+        # Same digest race, same collection: replay and bind the request id.
+        crid = str(uuid.uuid4())
+        record, created = services.admit_import(
+            self.alice, crid, digest, self.alice_personal, "staging/x", "tiktok"
+        )
+        self.assertFalse(created)
+        self.assertEqual(record.id, winner.id)
+        self.assertTrue(
+            ImportRequest.objects.filter(
+                user=self.alice, request_id=crid, record=winner
+            ).exists()
+        )
+        # Same digest race, different collection: conflict, no binding.
+        crid2 = str(uuid.uuid4())
+        with self.assertRaises(services.ValidationError) as raised:
+            services.admit_import(
+                self.alice, crid2, digest, other, "staging/y", "tiktok"
+            )
+        self.assertEqual(raised.exception.code, "conflict")
+        self.assertFalse(
+            ImportRequest.objects.filter(user=self.alice, request_id=crid2).exists()
+        )
+        # Request-id race with a different payload: conflict, and the
+        # losing record insert rolls back with its failed binding.
+        crid3 = str(uuid.uuid4())
+        prior = ImportRecord.objects.create(
+            user=self.alice,
+            input_digest="f" * 64,
+            manifest={"collection_id": str(self.alice_personal.id)},
+        )
+        ImportRequest.objects.create(user=self.alice, request_id=crid3, record=prior)
+        with self.assertRaises(services.ValidationError) as raised:
+            services.admit_import(
+                self.alice, crid3, "e" * 64, self.alice_personal, "staging/z", "tiktok"
+            )
+        self.assertEqual(raised.exception.code, "conflict")
+        self.assertFalse(ImportRecord.objects.filter(input_digest="e" * 64).exists())
+        self.assertEqual(
+            ImportRequest.objects.get(user=self.alice, request_id=crid3).record_id,
+            prior.id,
+        )
+
     def test_import_conflict_detected_via_ledger(self):
         alice = self._login(self.alice)
         crid = str(uuid.uuid4())

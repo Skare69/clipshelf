@@ -269,26 +269,12 @@ def admit_import(user, request_id, input_digest, collection, staging_rel, fmt):
             ImportRequest.objects.create(user=user, request_id=request_id, record=record)
     except IntegrityError:
         # A concurrent upload won the digest or the request-id uniqueness
-        # race; both inserts above rolled back together.
-        record = ImportRecord.objects.filter(
-            user=user, input_digest=input_digest
-        ).first()
+        # race; both inserts above rolled back together. Re-run the first
+        # admission pass: it replays the winner or raises the matching
+        # conflict under the same policy as the pre-insert check.
+        record = import_for_request(user, request_id, input_digest, collection)
         if record is None:
-            binding = (
-                ImportRequest.objects.select_related("record")
-                .filter(user=user, request_id=request_id)
-                .first()
-            )
-            if binding is not None and binding.record.input_digest != input_digest:
-                raise ValidationError(
-                    "request id reused with a different payload", code="conflict"
-                )
             raise
-        if (record.manifest or {}).get("collection_id") != str(collection.id):
-            raise ValidationError(
-                "file was already imported to a different collection", code="conflict"
-            )
-        bind_import_request(user, request_id, record)
         return record, False
     return record, True
 
