@@ -15,6 +15,7 @@ Usage:
   python mutate.py                          # default scope: DEFAULT_TARGETS
   python mutate.py --targets clipshelf/lib.py
   python mutate.py --diff origin/main       # changed in-scope modules only
+  python mutate.py --diff v0.9.0            # release review: everything since the tag
   python mutate.py --max-mutants 20         # evenly sampled smoke run
   python mutate.py --fail-under 70          # gate; exit 1 below the score
   python mutate.py self-check               # fast harness self-test, no repo
@@ -33,9 +34,10 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent
 TEMP_ROOT = Path(tempfile.gettempdir()) / "clipshelf-mutation"
 
-# Scope policy: pure-logic domain modules first. Request handlers and command
-# modules join the scope per change via --diff; wiring (settings, urls,
-# migrations, tests, this harness) is never mutated.
+# Scope policy: pure-logic domain modules first. Request handlers, command
+# modules and the gate scripts (scripts/, deploy/, check_licenses.py) join the
+# scope per change via --diff; wiring (settings, urls, migrations, tests, this
+# harness) is never mutated.
 DEFAULT_TARGETS = [
     "clipshelf/lib.py",
     "clipshelf/judgment.py",
@@ -43,7 +45,10 @@ DEFAULT_TARGETS = [
     "clipshelf/asset_files.py",
     "clipshelf/interpretation.py",
 ]
-EXCLUDED_PARTS = ("migrations/", "project/wsgi", "project/apps", "project/signals")
+EXCLUDED_PARTS = ("migrations/", "project/wsgi", "project/apps", "project/signals",
+                  "project/settings", "clipshelf/urls")
+SCOPE_ROOTS = ("clipshelf/", "scripts/", "deploy/")
+GATE_SCRIPTS = ("check_licenses.py",)  # repo root; the launcher and this harness stay out
 
 # Per-mutant test commands: the full CI suite (ci.yml) = Django unittest
 # discovery plus the two standalone script suites it runs separately. Tests
@@ -58,9 +63,14 @@ DEFAULT_TIMEOUT = 120
 # Ratchet: 116 evenly spaced sites of the default scope. The old stride
 # sampler changed both count and membership when the scope grew: 921 sites /
 # stride 8 gave 116; 950 sites / stride 9 gave only 106.
-# ponytail: sample floor leaves room for Windows restore-file lock noise;
-# rerun in a quiet environment for the full, unsampled score.
-DEFAULT_FAIL_UNDER = 72
+# Floor = the clean score this harness measures: 77/116 = 66.4% on the
+# 956-site scope (0 timeouts; a non-zero suite exit always kills, so noise
+# only raises scores). The review's 76.7% was inflated by the stale-bytecode
+# defect (false kills) and shared just 17/116 sample sites with that run.
+# ponytail: margin is rounding only — membership drift on the evenly-spaced
+# sampler is large (a 10-site scope change swapped 99/116 sites), so
+# re-measure per scope change; pin the documented survivors to raise it.
+DEFAULT_FAIL_UNDER = 66
 
 CMP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.GtE, ast.GtE: ast.Lt,
        ast.Gt: ast.LtE, ast.LtE: ast.Gt, ast.In: ast.NotIn, ast.NotIn: ast.In,
@@ -177,6 +187,10 @@ def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
         env = dict(os.environ)
         env["CLIPSHELF_DATA_DIR"] = str(temp_root / f"data-{n}")
         env["CLIPSHELF_DEBUG"] = "1"
+        # CPython reuses a __pycache__ entry when source mtime (whole seconds)
+        # and size match, so without this a fast-crashing mutant can leave its
+        # bytecode to the next same-size mutant of the same file.
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         start = time.monotonic()
         code, out = run_suites(ws, env, timeout)
         dt = time.monotonic() - start
@@ -201,11 +215,16 @@ def report_survivors(survived, log):
 
 
 def changed_targets(base_ref):
-    out = subprocess.run(["git", "diff", "--name-only", f"{base_ref}...HEAD"],
+    """In-scope modules changed vs base_ref. Deleted files are dropped (--diff-filter=d)
+    so a branch that removes a module cannot fail the run; tests and wiring are
+    never mutated."""
+    out = subprocess.run(["git", "diff", "--name-only", "--diff-filter=d",
+                          f"{base_ref}...HEAD"],
                          cwd=REPO, capture_output=True, text=True, check=True)
     targets = []
     for name in out.stdout.splitlines():
-        if (name.startswith("clipshelf/") and name.endswith(".py")
+        if (name.endswith(".py")
+                and (name.startswith(SCOPE_ROOTS) or name in GATE_SCRIPTS)
                 and not Path(name).name.startswith("test")
                 and not any(part in name for part in EXCLUDED_PARTS)):
             targets.append(name)
@@ -260,6 +279,7 @@ def run(args, log=print):
     env = dict(os.environ)
     env["CLIPSHELF_DATA_DIR"] = str(temp_root / "data-baseline")
     env["CLIPSHELF_DEBUG"] = "1"
+    env["PYTHONDONTWRITEBYTECODE"] = "1"  # see score_run: stale pyc skews scores
     log(f"baseline: {SUITE_CMDS}")
     code, out = run_suites(ws, env, args.timeout)
     if code != 0:
@@ -328,21 +348,57 @@ def self_check():
     assert code == 1 and "stderr diagnostic" in out, out
 
     # target confinement: an absolute in-repo target mutates only the copy,
-    # and a ../ target is refused before anything is copied or written
+    # and a ../ target is refused before anything is copied or written. The
+    # same fake repo pins --diff: a deleted module is skipped, the wiring
+    # exclusions hold, and neither the baseline nor a mutant env may let
+    # CPython write bytecode (a stale __pycache__ entry skews scores).
     fake_repo = (ws.parent / "repo").resolve()
-    fake_repo.mkdir()
-    source = fake_repo / "mod.py"
-    source.write_text("def f(a):\n    return a + 1\n", encoding="utf-8")
-    for cmd in (["init", "-q"], ["add", "mod.py"]):  # workspace copies tracked files only
+    files = {
+        "mod.py": "def f(a):\n    return a + 1\n",
+        "clipshelf/lib.py": "LIMIT = 9\n",
+        "clipshelf/gone.py": "GONE = 1\n",
+        "clipshelf/urls.py": "urlpatterns = []\n",
+        "clipshelf/project/settings.py": "DEBUG = True\n",
+        "clipshelf/migrations/0001_init.py": "operations = []\n",
+        "scripts/lock_deps.py": "PINNED = {}\n",
+        "deploy/check_build_tools.py": "TOOLS = []\n",
+        "check_licenses.py": "LICENSES = ()\n",
+        "test_thing.py": "X = 1\n",
+        "mutate.py": "HARNESS = 1\n",
+        "clipshelf.py": "main()\n",
+    }
+    git_id = ["-c", "user.email=h@c", "-c", "user.name=h"]
+    for rel, text in files.items():
+        path = fake_repo / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    for cmd in (["init", "-q"], ["add", "-A"],
+                git_id + ["commit", "-qm", "base"], ["tag", "base"]):
         subprocess.run(["git", *cmd], cwd=fake_repo, check=True, capture_output=True)
+    for rel, text in files.items():  # every module changes; one module is deleted
+        (fake_repo / rel).write_text(text + "# changed\n", encoding="utf-8")
+    (fake_repo / "clipshelf" / "gone.py").unlink()
+    subprocess.run(["git", *git_id, "commit", "-aqm", "head"], cwd=fake_repo,
+                   check=True, capture_output=True)
     outside = ws.parent / "x.py"
     outside.write_text("X = 1\n", encoding="utf-8")
+    source = fake_repo / "mod.py"
     original = source.read_bytes(), outside.read_bytes()
-    seen = []
+    seen, envs = [], []
     real = run_suite, REPO, TEMP_ROOT
     try:
-        run_suite = lambda *_args: (seen.append(source.read_bytes()), (0, ""))[1]
+        run_suite = lambda _ws, env, _cmd, _timeout: (
+            seen.append(source.read_bytes()), envs.append(dict(env)), (0, ""))[2]
         REPO, TEMP_ROOT = fake_repo, ws.parent / "runs"
+        scope = changed_targets("base")
+        assert set(scope) == {"clipshelf/lib.py", "scripts/lock_deps.py",
+                              "deploy/check_build_tools.py",
+                              "check_licenses.py"}, scope
+        args = argparse.Namespace(diff="base", targets=None, timeout=60,
+                                  max_mutants=0, fail_under=0)
+        logs = []
+        assert run(args, logs.append) == 0, logs  # deleted module must not exit 2
+        assert not any("not found" in line for line in logs), logs
         args = argparse.Namespace(diff=None, targets=[str(source)], timeout=60,
                                   max_mutants=0, fail_under=0)
         logs = []
@@ -355,6 +411,9 @@ def self_check():
     finally:
         run_suite, REPO, TEMP_ROOT = real
     assert (source.read_bytes(), outside.read_bytes()) == original
+    baseline = [e for e in envs if e["CLIPSHELF_DATA_DIR"].endswith("data-baseline")]
+    assert baseline and len(envs) > len(baseline), (len(baseline), len(envs))
+    assert all(e.get("PYTHONDONTWRITEBYTECODE") == "1" for e in envs), envs
     print(f"self-check ok ({ws})")
 
 
