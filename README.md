@@ -275,7 +275,9 @@ only; the original files are never modified and a repeated import is a no-op.
 
 Tests: `python clipshelf.py test` plus `python test_clipshelf.py` and
 `python test_sources.py` (both use project dependencies and avoid external network).
-For the web DOM checks, run `node test_dom_events.mjs` and `node test_web_assets.mjs`.
+CI runs the same suite plus the JS regression checks (`node test_dom_events.mjs`,
+`node test_web_assets.mjs`, `node tiktok-extract.js`, `node whatsapp-extract.js`)
+and the mutation harness self-check (`python mutate.py self-check`), all with Node 24.
 
 ### Mutation testing
 

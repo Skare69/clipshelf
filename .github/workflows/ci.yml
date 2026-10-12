@@ -24,6 +24,9 @@ jobs:
           python-version: "3.13"
           cache: pip
           cache-dependency-path: requirements.lock
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
       # Hash-locked install: CI tests and audits exactly the resolution the
       # published image ships (requirements.lock covers the full closure).
       - run: pip install --require-hashes -r requirements.lock
@@ -43,6 +46,13 @@ jobs:
       - run: python clipshelf.py test --verbosity 1
       - run: python test_clipshelf.py
       - run: python test_sources.py
+      # JS regression checks pinning the v0.10.0 fixes, plus the mutation
+      # harness's own target-confinement/sampling asserts.
+      - run: node test_dom_events.mjs
+      - run: node test_web_assets.mjs
+      - run: node tiktok-extract.js
+      - run: node whatsapp-extract.js
+      - run: python mutate.py self-check
 
   android:
     # Debug-build gate for the Android client. Versions are stamped from the
