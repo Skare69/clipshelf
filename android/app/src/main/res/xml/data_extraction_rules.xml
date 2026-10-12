@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Full data extraction is intentionally disabled (review: D2D transfer).
+     On some vendors' Android 12+ devices allowBackup="false" alone does not
+     stop device-to-device migration, so both domains below exclude every
+     storage domain: prefs hold identity + Keystore-encrypted token,
+     outbox.db holds undelivered shared text. allowBackup="false" stays in
+     the manifest for API < 31. -->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>
