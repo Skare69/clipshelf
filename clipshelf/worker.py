@@ -546,13 +546,30 @@ def _legacy_media_path(rel, cache_dir):
     return None
 
 
-def _resolve_media(value, cache_dir, staging, files_record):
+def _media_refs(item):
+    """Yield (field, value) for every media reference in one import item.
+
+    The one enumeration for staging, the dry run and the input digest, so
+    all three agree on which fields hold media. images counts only as a
+    list (per entry), video and cache as single values. The order is the
+    digest's historical enumeration, keeping ImportRecord.input_digest
+    stable.
+    """
+    images = item.get("images")
+    for value in images if isinstance(images, list) else []:
+        yield "images", value
+    yield "video", item.get("video")
+    yield "cache", item.get("cache")
+
+
+def _resolve_media(value, cache_dir, staging, files_record, copy=True):
     """Normalize one media reference to a Sources-accepted spec.
 
     Accepts {"path"|"b64"|"url"} dicts (browser shape), http(s) strings, and
     legacy cache-relative paths ("cache/<sha1>.<ext>") resolved against
     cache_dir and copied into staging under DATA_DIR. Returns None when a
-    referenced file is missing (recorded honestly in files_record).
+    referenced file is missing (recorded honestly in files_record). With
+    copy=False (dry run) the cache file is only hashed in place.
     """
     if value is None or value == "" or value == []:
         return None
@@ -573,10 +590,12 @@ def _resolve_media(value, cache_dir, staging, files_record):
         files_record["missing"].append(rel)
         return None
     digest = _sha256_file(src)
+    files_record["files"][rel] = {"sha256": digest, "size": src.stat().st_size}
+    if not copy:
+        return {"path": str(src)}
     dest = staging / f"{digest}{src.suffix}"
     if not dest.exists():
         shutil.copy2(src, dest)
-    files_record["files"][rel] = {"sha256": digest, "size": src.stat().st_size}
     return {"path": str(dest)}
 
 
@@ -586,20 +605,15 @@ def _stage_items(items, cache_dir, staging):
     staged = []
     for item in items:
         item = dict(item)
-        for field in ("images",):
-            values = item.get(field)
-            if isinstance(values, list):
-                specs = [s for s in (_resolve_media(v, cache_dir, staging, files_record)
-                                     for v in values) if s]
-                if specs:
-                    item[field] = specs
-                else:
-                    item.pop(field, None)
-        for field in ("video", "cache"):
-            spec = _resolve_media(item.get(field), cache_dir, staging, files_record)
+        resolved = {}
+        for field, value in _media_refs(item):
+            spec = _resolve_media(value, cache_dir, staging, files_record)
             if spec:
-                item[field] = spec
-            else:
+                resolved.setdefault(field, []).append(spec)
+        for field, specs in resolved.items():
+            item[field] = specs if field == "images" else specs[0]
+        for field in ("images", "video", "cache"):
+            if not item.get(field):
                 item.pop(field, None)
         staged.append(item)
     return staged, files_record
@@ -699,15 +713,9 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     staging = _data("staging", f"import-{uuid.uuid4().hex}")
     if dry_run:
         files_record = {"files": {}, "missing": []}
-        for item in items:  # read-only: digest referenced cache files in place
-            for value in ([*(item.get("images") or []), item.get("video"), item.get("cache")]):
-                if isinstance(value, str) and not value.startswith(("http://", "https://")):
-                    src = _legacy_media_path(value.replace("\\", "/"), cache_dir)
-                    if src is not None:
-                        files_record["files"][value] = {
-                            "sha256": _sha256_file(src), "size": src.stat().st_size}
-                    else:
-                        files_record["missing"].append(value)
+        for item in items:  # read-only: hash referenced cache files in place
+            for _field, value in _media_refs(item):
+                _resolve_media(value, cache_dir, None, files_record, copy=False)
         manifest = _manifest(items, prompts, seen, removed_keys, files_record, origin)
         return {"created": False, "dry_run": True, "digest": digest, "manifest": manifest,
                 "notice": notice, "collection_id": str(collection.id)}
@@ -773,10 +781,11 @@ def _input_digest(items, prompts, seen, removed, cache_dir):
         h.update(_canonical(value).encode())
         h.update(b"\n")
     for item in items:
-        images = item.get("images")
-        values = [*(images if isinstance(images, list) else []),
-                  item.get("video"), item.get("cache")]
-        for value in values:
+        # The digest keeps its own per-value rules on purpose: keys stay the
+        # raw reference text and the lookup is unstripped, so a repeat of an
+        # import made by an older version (which hashed padded paths as
+        # sha256=None) still produces the same digest and dedupes.
+        for _field, value in _media_refs(item):
             path = value.get("path") if isinstance(value, dict) else value
             if (not isinstance(path, str) or not path
                     or path.startswith(("http://", "https://"))):

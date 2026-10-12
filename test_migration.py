@@ -28,7 +28,7 @@ from django.test import Client, TestCase, TransactionTestCase, override_settings
 from allauth.account.models import EmailAddress
 from PIL import Image
 
-from clipshelf import acquisition, judgment, models, publication, services, worker
+from clipshelf import acquisition, judgment, lib, models, publication, services, worker
 from clipshelf.management.commands.backup import Command as BackupCommand
 
 CACHE_BYTES = b"<html>cached page</html>"
@@ -176,6 +176,40 @@ class ManifestTests(MigrationMixin, TestCase):
         self.assertTrue(second["created"])
         self.assertEqual(models.ImportRecord.objects.filter(user=self.user).count(), 2)
 
+    def test_legacy_fixture_digest_stable_across_resolver_unification(self):
+        # The digest keys ImportRecord dedupe. cache_dir is part of the
+        # digest, so no cross-run constant can pin it; instead the expected
+        # value is computed with the pre-unification media walk (inlined
+        # below) against this run's own cache_dir. An exact repeat of an
+        # import made before the unification must still dedupe.
+        items = worker._dedupe(
+            [{"url": u, **e} for u, e in self.library["links"].items()],
+            {lib.norm(url) or url for url in self.library["removed"]})
+        h = hashlib.sha256()
+        h.update(b"clipshelf-import-v2\n")
+        for value in (items, list(self.library["prompts"].values()),
+                      self.library["seen"], self.library["removed"]):
+            h.update(worker._canonical(value).encode())
+            h.update(b"\n")
+        for item in items:
+            images = item.get("images")
+            values = [*(images if isinstance(images, list) else []),
+                      item.get("video"), item.get("cache")]
+            for value in values:
+                path = value.get("path") if isinstance(value, dict) else value
+                if (not isinstance(path, str) or not path
+                        or path.startswith(("http://", "https://"))):
+                    continue
+                source = worker._legacy_media_path(
+                    path.replace("\\", "/"), str(self.cache_dir))
+                h.update(worker._canonical({
+                    "path": path,
+                    "sha256": worker._sha256_file(source) if source else None,
+                }).encode())
+                h.update(b"\n")
+        h.update(str(self.cache_dir).encode())
+        self.assertEqual(self.direct_import(dry_run=True)["digest"], h.hexdigest())
+
     def test_legacy_links_shapes_raise_validation_error(self):
         for links, message in (
                 ([], "library.json links must be a JSON object"),
@@ -185,6 +219,39 @@ class ManifestTests(MigrationMixin, TestCase):
                     self.assertRaises(ValidationError) as raised:
                 worker.legacy_payload({"links": links})
             self.assertEqual(raised.exception.messages, [message])
+
+
+class MediaParityTests(MigrationMixin, TestCase):
+    """The dry run and the real import must report the same media set for
+    every reference shape: dict specs, padded paths, backslash paths."""
+
+    def assert_parity(self, extra):
+        items = [{"url": "https://parity.example/1", **extra}]
+        dry = self.direct_import(items=items, dry_run=True)["manifest"]
+        real = self.direct_import(items=items)["manifest"]
+        self.assertEqual(dry["media_files"], real["media_files"])
+        self.assertEqual(dry["missing_media"], real["missing_media"])
+        return dry
+
+    def test_dict_path_reference_matches_real_import(self):
+        manifest = self.assert_parity({"cache": {"path": CACHE_NAME}})
+        self.assertEqual(list(manifest["media_files"]), [CACHE_NAME])
+        self.assertEqual(manifest["counts"]["missing_media"], 0)
+
+    def test_padded_path_matches_real_import(self):
+        manifest = self.assert_parity({"cache": CACHE_NAME + " "})
+        self.assertEqual(list(manifest["media_files"]), [CACHE_NAME])
+        self.assertEqual(manifest["counts"]["missing_media"], 0)
+
+    def test_backslash_path_matches_real_import(self):
+        manifest = self.assert_parity({"cache": CACHE_NAME.replace("/", "\\")})
+        self.assertEqual(list(manifest["media_files"]), [CACHE_NAME])
+        self.assertEqual(manifest["counts"]["missing_media"], 0)
+
+    def test_missing_padded_reference_is_missing_in_both(self):
+        manifest = self.assert_parity({"cache": "cache/gone.html "})
+        self.assertEqual(manifest["missing_media"], ["cache/gone.html"])
+        self.assertEqual(manifest["counts"]["media_files"], 0)
 
 
 class ImportTests(MigrationMixin, TestCase):
