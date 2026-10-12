@@ -1,67 +1,64 @@
 ---
 name: clipshelf-interpret
-description: Interpret pending clipshelf items (TikTok screenshots, cached web pages) into github repos, verbatim prompts, and guide links, then merge them into the library. Use after ingesting a tiktok.json export, or when the user says "interpret", "process pending", or "run clipshelf".
+description: Interpret collected clipshelf captures (TikTok screenshots, cached web pages, local video files) into github repos, verbatim prompts, and guide links, then merge them into the library with add_extracted. Use after ingesting a tiktok.json export, or after collecting captures the operator wants interpreted offline, or when the user says "interpret", "process pending", or "run clipshelf".
 ---
 
 # clipshelf-interpret
 
-Turn pending library items into structured findings. Never edit `library.json` by
-hand. Merging, dedup, and re-rendering are `clipshelf.py`'s job.
+Produce OFFLINE findings from material the operator hands you (screenshots,
+URLs, local video files, page text) and merge them into the library. The server
+no longer runs a per-item agent pool; the worker interprets jobs itself, so this
+skill only adds findings from outside the server. Never edit `library.json` by
+hand - merging and dedup are `clipshelf.py`'s job.
 
 All paths are relative to the repo root (where `clipshelf.py` lives).
 
-## Single-entry mode
-
-The server's interpret pool runs one agent per pending entry. In that mode
-the prompt names an entry file (`_interp/entry_<hash>.json`) and an output
-file (`_interp/findings_<hash>.json`):
-
-1. Read the entry file: `{url, desc, images, video, cache}` - the same fields
-   as one `pending` item.
-2. Gather findings from its sources (step 2 below), for that one entry only.
-3. Write **exactly one findings entry** (the step-3 schema) as a JSON array to
-   the output file.
-4. Stop. Do not run `add-extracted`, do not edit `library.json`, do not delete
-   files - the pool merges all findings once, after every entry finishes.
-
-
 ## Steps
 
-1. Run `python clipshelf.py pending`. Output: JSON array of
-   `{url, desc, images: [image paths], video: <mp4 path or null>, cache: <html path or null>}`.
-   Empty array: report "nothing pending" and stop.
-2. For each item, gather findings from all three sources:
-   - **Each image path**: inspect with vision, asking: "Transcribe all readable
-     text. Then list: github repos mentioned (owner/name or full URL), verbatim
-     prompt text if the image shows a prompt, and any other tool/guide URLs.
-     Only report what is clearly readable; say 'unclear' otherwise."
-   - **`video` path** (local mp4 saved by the browser export): use the `watch`
-     skill on the local file path to get frames + transcript, then read the
-     frames like slide images with the same question. Local files never touch
-     yt-dlp/download, so tiktok bot-detection is not an issue. No Whisper key
-     configured means no-caption videos come back frames-only; that is fine.
-     If `watch` is unavailable, extract frames directly:
+1. Run `python clipshelf.py pending --user you@example.com` to see what the
+   operator has queued. It prints plain text rows (one per pending, retrying,
+   or blocked job, plus open imports and a summary) - NOT JSON. Use it for
+   orientation only. Then work from the material the operator gives you for
+   the items they choose.
+2. For each item, gather findings from its sources:
+   - **Images** (screenshots): inspect with vision, asking: "Transcribe all
+     readable text. Then list: github repos mentioned (owner/name or full URL),
+     verbatim prompt text if the image shows a prompt, and any other tool/guide
+     URLs. Only report what is clearly readable; say 'unclear' otherwise."
+   - **Local mp4 video**: use the `watch` skill on the local file path to get
+     frames + transcript, then read the frames like slide images with the same
+     question. Local files never touch yt-dlp/download, so tiktok
+     bot-detection is not an issue. No Whisper key configured means no-caption
+     videos come back frames-only; that is fine. If `watch` is unavailable,
+     extract frames directly:
      `ffmpeg -i <mp4> -vf "select='gt(scene,0.3)',scale=512:-1" -vsync vfr -frames:v 20 f%02d.jpg`.
-   - **`cache` path** (raw HTML of a fetched page): read it and extract prompt
-     text, repo mentions, and guide links from the page content.
-   - **`desc`**: the post's own caption text.
+   - **Page text / cached HTML**: read it and extract prompt text, repo
+     mentions, and guide links from the content.
+   - **Captions**: the post's own caption text.
 3. Write `findings.json` in the repo root:
 
    ```json
    [
      {
-       "source": "<item url exactly as given by pending>",
+       "source": "<URL identifying where this finding came from>",
        "summary": "<one line: what this item was about>",
        "repos": ["owner/name or full github URL"],
        "links": [{ "url": "https://...", "title": "..." }],
-     "prompts": [{ "title": "...", "text": "<verbatim prompt text>", "cat": "<category>" }],
-      "categories": { "<repo as listed in repos>": "<category>" },
-      "installs": { "<repo as listed in repos>": "<one shell command>" }
+       "prompts": [{ "title": "...", "text": "<verbatim prompt text>", "cat": "<category>" }],
+       "categories": { "<repo as listed in repos>": "<category>" },
+       "installs": { "<repo as listed in repos>": "<one shell command>" }
      }
    ]
    ```
 
    Rules:
+   - `source` is optional. When set, it must be the captured item's URL: the
+     merge normalizes it (`lib.norm` drops fragments, tracking params, and the
+     trailing slash) and matches it to an existing entry in the operator's
+     Personal collection, attaching your summary and source link to that entry.
+     Nothing matches when the entry does not exist or the user removed it - a
+     merge never resurrects a removed entry; the finding's repos, links, and
+     prompts are still merged as new entries.
    - Repos only when clearly readable. A wrong repo name pollutes the library
      permanently. Unsure: leave it out and mention it in the report instead.
    - Prompts verbatim, never paraphrased. Give each prompt a `cat` too, by
@@ -79,9 +76,10 @@ file (`_interp/findings_<hash>.json`):
      single non-interactive command that works on Windows. The library UI runs it
      verbatim on an "install" click - no `curl | sh`, no multi-step scripts.
      Curated lists, datasets, or repos without a clear install command: omit.
-   - Omit empty fields, but include every pending item (even if only a summary)
-     so its pending flag gets cleared.
-4. Run `python clipshelf.py add-extracted findings.json`. This merges findings,
-   fetches titles for newly found repos, and re-renders `library.html`.
+   - Omit empty fields. Include an entry for every item you interpreted, even
+     if it only has a summary.
+4. Merge: `python clipshelf.py add_extracted --user you@example.com findings.json`.
+   This validates the schema, merges findings into the user's Personal
+   collection, and prints merge stats.
 5. Report counts (items interpreted, repos/prompts/links added) and anything
    skipped as unreadable. Delete `findings.json`.

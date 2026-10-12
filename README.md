@@ -20,7 +20,7 @@ needs no third-party service when optional screening is off.
 | Android app (`android/`) | share-sheet capture with a durable outbox, background delivery, online browsing |
 | Container (`Dockerfile`, `compose.yaml`) | one image, web + worker roles, SQLite and retained media on one data volume |
 | `tiktok-extract.js` | browser export for login-required posts; the server never takes TikTok cookies |
-| `whatsapp-extract.js` | browser export of one WhatsApp Web chat (links, images, notes) as a `library.json` import; re-runs export only new messages |
+| `whatsapp-extract.js` | browser export of one WhatsApp Web chat as a `library.json` file for the web Import dialog: links, images, and URL-free notes (imported as prompts); re-runs export only new messages |
 
 The Android outbox holds at most 500 rows and 8 MiB of UTF-8 share text across
 all accounts on the phone. One share may hold at most 32768 UTF-8 bytes and 50
@@ -51,14 +51,16 @@ relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery.
 ## Deploy on the NAS
 
 Published image (linux/amd64 + linux/arm64), built and verified by CI:
-`ghcr.io/skare69/clipshelf:0.9.0`. The signed Android APK is attached to each
+`ghcr.io/skare69/clipshelf:0.10.0`. The signed Android APK is attached to each
 [release](https://github.com/Skare69/clipshelf/releases) — there is no app
 store, you sideload it.
 
 Android APK versions come from the release tag: `versionName` is the tag
 without its `v`, and `versionCode` is `major*1_000_000 + minor*1_000 + patch`
-so later tags always sort above earlier installs. Untagged builds must pass
-`-PversionName=X.Y.Z` or the build fails.
+so later tags always sort above earlier installs. An untagged commit takes the
+nearest reachable `vX.Y.Z` tag; `-PversionName=X.Y.Z` overrides it, and the
+build fails only when neither gives a valid version (for example a clone
+without tags).
 
 ```
 cp deploy/clipshelf.env.example .env      # fill in image, UID/GID, data dir, port

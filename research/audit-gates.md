@@ -134,9 +134,11 @@ shipped artifact.)
   venv, then `python check_licenses.py` — the enforced python license gate (a
   dev venv with extra tooling installed trips it by design; CI installs only
   the lock).
-- `cd android && ./gradlew :app:dependencies --configuration
-  releaseRuntimeClasspath --no-daemon -q > app/build/license-deps.txt && python
-  ../check_licenses.py android --deps android/app/build/license-deps.txt` —
-  the enforced android license gate, as CI runs it.
+- `cd android && mkdir -p app/build && ./gradlew :app:dependencies
+  --configuration releaseRuntimeClasspath --no-daemon -q >
+  app/build/license-deps.txt && ./gradlew :app:assembleDebug --no-daemon &&
+  python ../check_licenses.py android --deps app/build/license-deps.txt --apk
+  app/build/outputs/apk/debug/app-debug.apk` — the enforced android license
+  gate, as CI runs it.
 - `git ls-files | grep -iE 'package\.json|bun\.lock|.*lock'` — must return
   nothing for the JS gates to stay "not applicable".
