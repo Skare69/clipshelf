@@ -386,8 +386,9 @@ def test():
               "notifications", "login", "join", "signup", "contact", "new",
               "why-github", "edu", "open-source", "orgs", "enterprise", "security"):
         assert cs.tag_for(f"https://github.com/{w}/x") is None, w
-    assert cs.is_terminal("https://gist.github.com/x/1")
-    assert cs.is_terminal("https://github.com/a/b") and not cs.is_terminal("https://example.com")
+    # GitHub pages are interpreted (README); other catalogue hosts stay metadata only
+    assert not cs.is_terminal("https://github.com/a/b")
+    assert not cs.is_terminal("https://gist.github.com/x/1") and not cs.is_terminal("https://example.com")
     for word in ("features", "pricing", "topics", "collections", "trending", "marketplace",
                  "sponsors", "about", "site", "orgs", "enterprise", "security",
                  "customer-stories", "readme", "events", "explore", "settings",

@@ -199,7 +199,8 @@ Restore prints the secrets to set before you serve the restored data: put
    remote vision model) reads the acquired material and returns repos, prompts,
    links and a category, with warnings for anything it could not see or verify.
    The model reuses the collection's categories and names a new one only when
-   none fits.
+   none fits. GitHub READMEs are interpreted too; Hugging Face, arXiv and Colab
+   pages stay metadata only.
    Pick a provider from the list — OpenAI, Anthropic, Gemini, OpenRouter, Groq,
    Mistral, xAI, Z.AI, Ollama, llama.cpp, LM Studio, vLLM, or anything else you type —
    and the model names are fetched from that endpoint rather than guessed.

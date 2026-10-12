@@ -7,9 +7,9 @@ from html.parser import HTMLParser
 from urllib.parse import urlsplit, urlunsplit
 
 
-# terminal hosts: catalogued with metadata, never sent for AI interpretation
-TERMINAL = ("github.com", "gist.github.com", "huggingface.co", "arxiv.org",
-            "colab.research.google.com")
+# terminal hosts: catalogued with metadata, never sent for AI interpretation.
+# GitHub is not one: the rendered README is what summarizes and categorizes a repo.
+TERMINAL = ("huggingface.co", "arxiv.org", "colab.research.google.com")
 # keywords that make a harvested <a> link worth keeping
 KEYWORDS = ("prompt", "guide", "tutorial", "awesome", "cheatsheet", "workflow", "docs")
 TRACKING = ("utm_", "fbclid", "gclid", "si=", "igsh")

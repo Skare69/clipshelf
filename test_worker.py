@@ -234,6 +234,26 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.assertEqual((job.state, job.interpretation), ("done", "complete"))
         self.assertEqual(job.findings["summary"], "fresh findings")
 
+    def test_github_repo_is_interpreted_with_the_collection_vocabulary(self):
+        other = models.Collection.objects.create(name="o", kind="shared", owner=self.user)
+        for collection, data in ((self.personal, {"cat": "ml"}),
+                                 (self.personal, {"categories": ["Video generation"]}),
+                                 (self.personal, {"categories": ["Video generation", 7]}),
+                                 (self.personal, {"cat": "", "categories": "junk"}),
+                                 (other, {"categories": ["Secret"]})):
+            entry = models.Entry.objects.create(collection=collection, key=str(uuid.uuid4()))
+            models.Contribution.objects.create(entry=entry, user=self.user, data=data)
+        seen = []
+
+        def interpret(source, config, cats, **kw):
+            seen.append(cats)
+            return {**FINDINGS, "source": source["url"]}
+
+        job = self.make_job(url="https://github.com/owner/repo")
+        self.run_worker(interpret=interpret)
+        self.assertEqual(self.refresh(job).interpretation, "complete")
+        self.assertEqual(seen, [["Video generation", "ml"]])  # most used first, own collection
+
     def test_interpretation_failure_preserves_last_good_findings(self):
         job = self.make_job()
         self.run_worker()
