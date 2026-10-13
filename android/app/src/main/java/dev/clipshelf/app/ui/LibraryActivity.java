@@ -275,6 +275,11 @@ public class LibraryActivity extends AppCompatActivity {
             String label = e.catLabel();
             counts.put(label, counts.getOrDefault(label, 0) + 1);
         }
+        // A category picked before a reload may no longer exist: fall back to
+        // All, or the stale filter empties the list behind an unchecked chip.
+        if (!cat.isEmpty() && !counts.containsKey(cat)) {
+            cat = "";
+        }
         cats.removeAllViews();
         addChip(cats, "", counts.values().stream().mapToInt(Integer::intValue).sum());
         for (Map.Entry<String, Integer> c : counts.entrySet()) {
