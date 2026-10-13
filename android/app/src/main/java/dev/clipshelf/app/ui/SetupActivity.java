@@ -108,8 +108,13 @@ public class SetupActivity extends AppCompatActivity {
                     return;
                 }
                 setResult(RESULT_OK);
-                // MainActivity has already finished; land straight in the library.
-                startActivity(new Intent(this, LibraryActivity.class));
+                // MainActivity has already finished; land straight in the
+                // library. CLEAR_TASK makes it the root: any pre-sign-in
+                // screen behind this task dies, and Back from the library
+                // exits instead of returning to it.
+                startActivity(new Intent(this, LibraryActivity.class)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                | Intent.FLAG_ACTIVITY_CLEAR_TASK));
                 finish();
             });
         });

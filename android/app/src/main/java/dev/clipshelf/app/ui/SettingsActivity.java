@@ -234,7 +234,14 @@ public class SettingsActivity extends AppCompatActivity {
                         if (notice != null) {
                             Toast.makeText(this, notice, Toast.LENGTH_LONG).show();
                         }
-                        startActivity(new Intent(this, SetupActivity.class));
+                        // Ui.bottomNav keeps Library alive in the back stack
+                        // below Settings; CLEAR_TASK destroys it, so Back from
+                        // setup exits instead of showing the signed-out
+                        // library, whose token may still be valid while
+                        // revocation is pending.
+                        startActivity(new Intent(this, SetupActivity.class)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                                        | Intent.FLAG_ACTIVITY_CLEAR_TASK));
                         finish();
                     });
                 })
