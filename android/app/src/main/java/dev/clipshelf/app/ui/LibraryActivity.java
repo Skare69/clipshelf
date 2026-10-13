@@ -139,6 +139,15 @@ public class LibraryActivity extends AppCompatActivity {
     }
 
     private void reload() {
+        // Re-read the session: Settings can adopt a new endpoint+token and
+        // revoke the old one while this activity instance stays alive
+        // (CLEAR_TOP|SINGLE_TOP returns here without onCreate).
+        Creds.Session now = Creds.session(this);
+        if (now == null) {
+            Ui.sessionExpired(this);
+            return;
+        }
+        session = now;
         final int gen = pages.reload();
         entries.clear();
         applyFilter();
