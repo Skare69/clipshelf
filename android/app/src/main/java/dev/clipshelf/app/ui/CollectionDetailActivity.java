@@ -114,7 +114,7 @@ public class CollectionDetailActivity extends AppCompatActivity {
             }
             Api.Member m = getItem(position);
             TextView email = v.findViewById(R.id.member_email);
-            email.setText(m.email + (m.isOwner ? getString(R.string.member_owner_suffix) : ""));
+            email.setText(m.isOwner ? getString(R.string.member_owner, m.email) : m.email);
             Button remove = v.findViewById(R.id.member_remove);
             // The server rejects removing the owner or non-members; hide what cannot work.
             remove.setVisibility(m.isOwner ? View.GONE : View.VISIBLE);

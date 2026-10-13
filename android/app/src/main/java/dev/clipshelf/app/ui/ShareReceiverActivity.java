@@ -80,8 +80,13 @@ public class ShareReceiverActivity extends AppCompatActivity {
         }
         String problem = OutboxPolicy.validateShare(text);
         if (problem != null) {
-            int resId = getResources().getIdentifier(problem, "string", getPackageName());
-            String msg = resId != 0 ? getString(resId, text.getBytes().length) : problem;
+            String msg = switch (problem) {
+                case "share_empty" -> getString(R.string.share_empty);
+                case "share_too_large" -> getString(R.string.share_too_large);
+                case "share_no_url" -> getString(R.string.share_no_url);
+                case "share_too_many_urls" -> getString(R.string.share_too_many_urls);
+                default -> problem;
+            };
             reject(title, detail, open, msg);
             return;
         }
@@ -98,8 +103,7 @@ public class ShareReceiverActivity extends AppCompatActivity {
         }
         if (OutboxPolicy.outboxFull((int) usage[0], usage[1],
                 text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)) {
-            reject(title, detail, open, getString(R.string.share_outbox_full,
-                    usage[0], OutboxPolicy.MAX_OUTBOX_ROWS));
+            reject(title, detail, open, getString(R.string.share_outbox_full));
             return;
         }
 

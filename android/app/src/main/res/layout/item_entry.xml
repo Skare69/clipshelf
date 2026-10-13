@@ -49,7 +49,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:paddingEnd="4dp"
+                android:layout_marginEnd="4dp"
                 android:text="@string/from_label"
                 android:textAppearance="@style/TextAppearance.Parcel.T1"
                 android:textColor="@color/ink3" />

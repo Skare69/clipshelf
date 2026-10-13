@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Included at the top of each screen, not a screen root: the label strip
+     must paint over the ground window background, so this overdraw is intended. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:id="@+id/appbar_container"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:background="@color/label"
-    android:orientation="vertical">
+    android:orientation="vertical"
+    tools:ignore="Overdraw">
 
     <com.google.android.material.appbar.MaterialToolbar
         android:id="@+id/toolbar"

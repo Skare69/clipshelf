@@ -101,7 +101,7 @@ public class LibraryActivity extends AppCompatActivity {
             return false;
         });
         toolbar.inflateMenu(R.menu.menu_library);
-        toolbar.getMenu().getItem(0).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_ALWAYS);
+        toolbar.getMenu().getItem(0).setShowAsAction(android.view.MenuItem.SHOW_AS_ACTION_IF_ROOM);
         toolbar.setOnMenuItemClickListener(this::onMenuItem);
         sortItem = toolbar.getMenu().findItem(R.id.menu_sort);
         kindItem = toolbar.getMenu().findItem(R.id.menu_kind);

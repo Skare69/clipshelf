@@ -31,10 +31,10 @@
     <string name="share_saved_detail">Queued for %1$s. Delivers automatically when online.</string>
     <string name="share_rejected_title">Not saved</string>
     <string name="share_empty">Nothing was shared.</string>
-    <string name="share_too_large">Shared text is too large (%1$d bytes; limit is 32768 bytes).</string>
+    <string name="share_too_large">Shared text is too large (limit is 32768 bytes).</string>
     <string name="share_no_url">No http(s) link found in the shared text.</string>
     <string name="share_too_many_urls">Too many links in shared text (limit is 50).</string>
-    <string name="share_outbox_full">The outbox is full (%1$d of %2$d entries). Open Clipshelf, open the Outbox, and clear delivered entries to make room.</string>
+    <string name="share_outbox_full">The outbox is full. Open Clipshelf, open the Outbox, and clear delivered entries to make room.</string>
     <string name="share_wrong_mime">Only text shares are supported.</string>
     <string name="share_not_setup">Clipshelf is not set up yet. Open the app to choose your server and sign in first.</string>
     <string name="share_storage_error">Could not save the share locally. Please try again.</string>
@@ -55,6 +55,7 @@
     <string name="outbox_requeue">Requeue</string>
     <string name="outbox_clear_delivered">Clear delivered</string>
     <string name="outbox_other_account">Saved for %1$s — sign in as that account on %2$s to deliver.</string>
+    <string name="outbox_destination_endpoint">"Destination: %1$s  ·  %2$s"</string>
     <string name="outbox_toast_requeued">Requeued for delivery.</string>
     <string name="outbox_toast_cleared">Delivered entries cleared.</string>
     <string name="outbox_toast_deleted">Entry deleted.</string>
@@ -63,7 +64,10 @@
 
     <!-- Platform limits disclosure (plan section 4) -->
     <string name="limits_title">Background delivery limits</string>
-    <string name="limits_capacity">Capacity: %1$d rows · %2$d MiB per account</string>
+    <plurals name="limits_capacity">
+        <item quantity="one">Capacity: %1$d row · %2$d MiB per account</item>
+        <item quantity="other">Capacity: %1$d rows · %2$d MiB per account</item>
+    </plurals>
     <string name="limits_text">Delivery runs in the background when the phone is online. Ordinary app closure and reboots do not stop it, but: “Force stop” in Android settings blocks delivery until you open Clipshelf again; aggressive battery savers can delay it; clearing app data or uninstalling permanently deletes shares that were saved but not yet delivered. Nothing is lost on the server for shares already delivered.</string>
 
     <!-- Library -->
@@ -94,6 +98,7 @@
     <string name="contents_label">Contents</string>
     <string name="install_label">Install</string>
     <string name="entry_sources_label">Sources</string>
+    <string name="entry_source_item">• %1$s</string>
     <string name="entry_assets_label">Saved material</string>
     <string name="entry_jobs_label">Processing</string>
     <string name="entry_contributors_label">Contributors: %1$s</string>
@@ -106,10 +111,14 @@
     <string name="job_interpretation_label">Interpretation: %1$s</string>
     <string name="job_error_label">Error: %1$s</string>
     <string name="job_guardrail_label">Guardrail blocked — findings withheld</string>
-    <string name="job_screened_label">Screened · %1$d warning(s)</string>
+    <plurals name="job_screened_label">
+        <item quantity="one">Screened · %1$d warning</item>
+        <item quantity="other">Screened · %1$d warnings</item>
+    </plurals>
     <string name="setup_missing_fields">Enter your server address, email, and password.</string>
     <string name="entry_open_url">Open link</string>
     <string name="asset_view">View</string>
+    <string name="asset_view_named">"View  ·  %1$s  (%2$s)"</string>
     <string name="asset_not_viewable">This material type is not viewable in the app. Use the web UI to inspect it.</string>
     <string name="asset_load_failed">Could not load material: %1$s</string>
 
@@ -126,7 +135,7 @@
     <string name="member_add_hint">Add member by email</string>
     <string name="member_add">Add</string>
     <string name="member_remove">Remove</string>
-    <string name="member_owner_suffix"> (owner)</string>
+    <string name="member_owner">%1$s (owner)</string>
     <string name="collection_default_set">Default destination updated.</string>
 
     <!-- Settings -->

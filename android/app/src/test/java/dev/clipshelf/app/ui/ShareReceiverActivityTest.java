@@ -16,9 +16,11 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 import java.io.File;
+import java.util.Arrays;
 
 import dev.clipshelf.app.Creds;
 import dev.clipshelf.app.R;
+import dev.clipshelf.app.outbox.OutboxPolicy;
 import dev.clipshelf.app.outbox.OutboxStore;
 
 /**
@@ -83,5 +85,29 @@ public class ShareReceiverActivityTest {
                 ((TextView) activity.findViewById(R.id.share_title)).getText());
         assertEquals(ctx.getString(R.string.share_storage_error),
                 ((TextView) activity.findViewById(R.id.share_detail)).getText());
+    }
+
+    /** Each refused share shows its reason and leaves the outbox empty. */
+    @Test
+    public void refusedSharesShowTheirReason() {
+        char[] big = new char[OutboxPolicy.MAX_TEXT_BYTES + 1];
+        Arrays.fill(big, 'x');
+        StringBuilder links = new StringBuilder();
+        for (int i = 0; i <= OutboxPolicy.MAX_URLS; i++) {
+            links.append("https://e.io/").append(i).append(' ');
+        }
+        Object[][] cases = {
+                {"   ", R.string.share_empty},
+                {new String(big), R.string.share_too_large},
+                {"just some words", R.string.share_no_url},
+                {links.toString(), R.string.share_too_many_urls},
+        };
+        for (Object[] c : cases) {
+            ShareReceiverActivity activity = Robolectric.buildActivity(
+                    ShareReceiverActivity.class, shareIntent((String) c[0])).setup().get();
+            assertEquals(ctx.getString((Integer) c[1]),
+                    ((TextView) activity.findViewById(R.id.share_detail)).getText());
+        }
+        assertEquals(0, new OutboxStore(ctx).listNewest(10).size());
     }
 }

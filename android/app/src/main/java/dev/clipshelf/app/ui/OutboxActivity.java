@@ -68,7 +68,8 @@ public class OutboxActivity extends AppCompatActivity {
         loadOlder = footer.findViewById(R.id.outbox_load_older);
         loadOlder.setOnClickListener(v -> loadOlder());
         TextView capacity = footer.findViewById(R.id.outbox_limits_capacity);
-        capacity.setText(getString(R.string.limits_capacity,
+        capacity.setText(getResources().getQuantityString(R.plurals.limits_capacity,
+                dev.clipshelf.app.outbox.OutboxPolicy.MAX_OUTBOX_ROWS,
                 dev.clipshelf.app.outbox.OutboxPolicy.MAX_OUTBOX_ROWS,
                 dev.clipshelf.app.outbox.OutboxPolicy.MAX_OUTBOX_TOTAL_TEXT_BYTES / (1024 * 1024)));
         list.addFooterView(footer);
@@ -208,7 +209,7 @@ public class OutboxActivity extends AppCompatActivity {
             }
             String err0 = row.lastError == null ? "" : row.lastError;
             state.setText(sentenceRes == R.string.outbox_state_rejected
-                    ? getString(sentenceRes, err0)
+                    ? getString(R.string.outbox_state_rejected, err0)
                     : getString(sentenceRes));
             state.setTextColor(getColor(sentenceColor));
             dotA.setBackgroundResource(dotARes);
@@ -225,9 +226,9 @@ public class OutboxActivity extends AppCompatActivity {
                         && row.requestedCollectionId.equals(profile.defaultCollectionId)
                         && profile.defaultCollectionName != null && !profile.defaultCollectionName.isEmpty()
                         ? profile.defaultCollectionName : row.requestedCollectionId;
-                String dest = destName != null
-                        ? getString(R.string.share_default_destination, destName) + "  ·  " : "";
-                meta.setText(dest + row.endpoint);
+                meta.setText(destName != null
+                        ? getString(R.string.outbox_destination_endpoint, destName, row.endpoint)
+                        : row.endpoint);
                 meta.setTextColor(getColor(R.color.ink2));
             }
 

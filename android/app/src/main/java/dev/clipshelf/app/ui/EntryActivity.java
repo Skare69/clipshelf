@@ -164,8 +164,8 @@ public class EntryActivity extends AppCompatActivity {
             for (Api.Asset asset : detail.assets) {
                 Button b = new Button(new android.view.ContextThemeWrapper(this,
                         R.style.Widget_Parcel_Button_Text));
-                b.setText(getString(R.string.asset_view) + "  ·  " + (asset.name.isEmpty()
-                        ? asset.id : asset.name) + "  (" + asset.kind + ")");
+                b.setText(getString(R.string.asset_view_named,
+                        asset.name.isEmpty() ? asset.id : asset.name, asset.kind));
                 b.setOnClickListener(v -> {
                     Intent i = new Intent(this, AssetActivity.class);
                     i.putExtra("url", asset.url);
@@ -182,7 +182,7 @@ public class EntryActivity extends AppCompatActivity {
             addHeading(containers, getString(R.string.entry_sources_label));
             for (String source : e.sources) {
                 TextView tv = new TextView(this);
-                tv.setText("• " + source);
+                tv.setText(getString(R.string.entry_source_item, source));
                 tv.setTextAppearance(this, R.style.TextAppearance_Parcel_T3);
                 tv.setTextIsSelectable(true);
                 containers.addView(tv);
@@ -208,7 +208,8 @@ public class EntryActivity extends AppCompatActivity {
             sb.append('\n').append(getString(R.string.job_guardrail_label));
         }
         if (job.screeningWarnings > 0) {
-            sb.append('\n').append(getString(R.string.job_screened_label, job.screeningWarnings));
+            sb.append('\n').append(getResources().getQuantityString(
+                    R.plurals.job_screened_label, job.screeningWarnings, job.screeningWarnings));
         }
         if (job.error != null && !job.error.isEmpty()) {
             sb.append('\n').append(getString(R.string.job_error_label, job.error));
