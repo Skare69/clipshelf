@@ -37,6 +37,10 @@ ids = [
 # Tooling excluded from the shipped-set check: never application dependencies.
 tooling = ["pip", "setuptools", "wheel"]
 
+# Licenses permitted for bundled font files only (operator approval
+# 2026-10-13). Fonts are data, not code: these never join `ids`.
+fonts = ["OFL-1.1"]
+
 [python.entries]
 
 django            = { observed = "5.2.18",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
@@ -131,3 +135,15 @@ tarball = "sqlite-autoconf-3530100.tar.gz"
 url = "https://sqlite.org/2026/sqlite-autoconf-3530100.tar.gz"
 sha256 = "83e6b2020a034e9a7ad4a72feea59e1ad52f162e09cbd26735a3ffb98359fc4f"
 license = "LicenseRef-Public-Domain"
+
+[fonts.entries]
+# Bundled font files. check_licenses.py does not find fonts: change this
+# table and the "Bundled fonts" table in THIRD_PARTY_NOTICES.md together.
+"Archivo" = { observed = "2.001", license = "OFL-1.1", files = [
+    "clipshelf/static/clipshelf/fonts/archivo.woff2",
+    "android/app/src/main/res/font/archivo_regular.ttf",
+    "android/app/src/main/res/font/archivo_semibold.ttf",
+    "android/app/src/main/res/font/archivo_bold.ttf",
+    "android/app/src/main/res/font/archivo_display.ttf",
+    "android/app/src/main/res/font/archivo_routing.ttf",
+] }
