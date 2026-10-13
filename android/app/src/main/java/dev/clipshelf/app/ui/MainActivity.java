@@ -34,10 +34,22 @@ public class MainActivity extends AppCompatActivity {
         if (signedIn) {
             WorkScheduler.ensurePeriodic(this);
             WorkScheduler.drainNow(this);
-            startActivity(new Intent(this, LibraryActivity.class));
+            startActivity(route(LibraryActivity.class));
         } else {
-            startActivity(new Intent(this, SetupActivity.class));
+            startActivity(route(SetupActivity.class));
         }
         finish();
+    }
+
+    /**
+     * The router finishes at once, so with launchMode="singleTask" a relaunch
+     * (launcher icon, share-sheet "Open") finds no live MainActivity to clear
+     * to and stacks a fresh one on top of the old task. CLEAR_TOP|SINGLE_TOP
+     * makes the target reuse the running instance, so Back still exits at the
+     * root and the Library keeps its place.
+     */
+    private Intent route(Class<?> cls) {
+        return new Intent(this, cls)
+                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
     }
 }
