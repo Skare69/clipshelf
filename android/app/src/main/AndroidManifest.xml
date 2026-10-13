@@ -9,10 +9,12 @@
          export ciphertext + identity. No OS backup, no device transfer.
          allowBackup="false" covers API < 31; on API 31+ some vendors keep
          D2D transfer alive despite it, so @xml/data_extraction_rules
-         excludes every domain for both cloud backup and device transfer. -->
+         excludes every domain for both cloud backup and device transfer.
+         @xml/backup_rules repeats the exclusion for API < 31. -->
     <application
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.Clipshelf"

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- API < 31 counterpart of data_extraction_rules.xml. allowBackup="false"
+     already blocks backup there; these rules keep every storage domain
+     excluded even if that flag changes, and lint asks for them while
+     minSdk is below 31. -->
+<full-backup-content>
+    <exclude domain="root" />
+    <exclude domain="file" />
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="external" />
+</full-backup-content>
