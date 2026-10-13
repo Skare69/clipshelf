@@ -1,108 +1,82 @@
 {% extends "clipshelf/base.html" %}
 {% load static %}
 {% block body %}
-<div id="scrim" hidden></div>
 <header class="top">
-  <button id="navBtn" class="iconbtn navbtn" aria-label="Menu" aria-controls="toc" aria-expanded="false">
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+  <a class="brand" href="/" aria-label="clipshelf library">
+    <img class="mark" src="{% static 'clipshelf/favicon.svg' %}" alt="" width="28" height="28">
+    <span class="brand-name">clipshelf</span>
+  </a>
+  <div class="find" role="search">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
+    <input id="q" type="search" placeholder="Find a saved item" aria-label="Find a saved item by title, text, or link" autocomplete="off" enterkeyhint="search">
+    <kbd class="key" aria-hidden="true">/</kbd>
+    <button id="qclear" class="iconbtn" type="button" aria-label="Clear search" hidden>
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    </button>
+  </div>
+  <button id="addBtn" class="btn signal add" type="button">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+    <span>Add</span>
   </button>
-  <a class="brand" href="/">clipshelf</a>
-  <div class="qwrap">
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19zm-6 0A4.5 4.5 0 1 1 14 9.5 4.5 4.5 0 0 1 9.5 14z"/></svg>
-    <input id="q" type="search" placeholder="Search titles, text, urls&#8230;  ( / )" aria-label="Search titles, text, and urls" autocomplete="off">
-    <button id="qclear" class="iconbtn" aria-label="Clear search" hidden>
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-    </button>
-  </div>
-  <label class="selwrap"><span class="vh">Filter by tag</span>
-    <select id="tag"><option value="">all tags</option></select>
-  </label>
-  <label class="selwrap"><span class="vh">Filter by kind</span>
-    <select id="kind">
-      <option value="">links + prompts</option>
-      <option value="link">links</option>
-      <option value="prompt">prompts</option>
-    </select>
-  </label>
-  <div class="vt" role="group" aria-label="Layout">
-    <button class="vtb" data-vt="grid" aria-pressed="true" title="Card grid">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h7v7H4V4zm9 0h7v7h-7V4zM4 13h7v7H4v-7zm9 0h7v7h-7v-7z"/></svg><span class="vh">Grid</span>
-    </button>
-    <button class="vtb" data-vt="list" aria-pressed="false" title="List">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3V5zm0 6h18v2H3v-2zm0 6h18v2H3v-2z"/></svg><span class="vh">List</span>
-    </button>
-  </div>
-  <div class="vt" role="group" aria-label="Sort">
-    <button class="stb" data-srt="new" aria-pressed="false">Newest</button>
-    <button class="stb" data-srt="az" aria-pressed="true">A-Z</button>
-  </div>
 </header>
 <div class="shell">
-  <aside id="toc" class="toc" aria-label="Navigation">
-    <nav class="vnav" aria-label="Views">
-      <a href="#library" class="vw on" data-nav="library"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M21 5c-1.11-.35-2.33-.5-3.5-.5-1.95 0-4.05.4-5.5 1.5-1.45-1.1-3.55-1.5-5.5-1.5S2.45 4.9 1 6v14.65c0 .25.25.5.5.5.1 0 .15-.05.25-.05C3.1 20.45 5.05 20 6.5 20c1.95 0 4.05.4 5.5 1.5 1.35-.85 3.8-1.5 5.5-1.5 1.65 0 3.35.3 4.75 1.05.1.05.15.05.25.05.25 0 .5-.25.5-.5V6c-.6-.45-1.25-.75-2-1zm0 13.5c-1.1-.35-2.3-.5-3.5-.5-1.7 0-4.15.65-5.5 1.5V8c1.35-.85 3.8-1.5 5.5-1.5 1.2 0 2.4.15 3.5.5v11.5z"/></svg>Library <span class="count" id="nLib"></span></a>
-      <a href="#inbox" class="vw" data-nav="inbox"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 12h-4c0 1.66-1.34 3-3 3s-3-1.34-3-3H5V5h14v10z"/></svg>Inbox <span class="count" id="nInbox"></span></a>
-      <a href="#collections" class="vw" data-nav="collections"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>Collections</a>
-      <a href="#settings" class="vw" data-nav="settings"><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg>Settings</a>
-      <a href="#admin" id="adminNav" class="vw" data-nav="admin" hidden><svg viewBox="0 0 24 24" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg>Admin</a>
-    </nav>
-    <div class="tsep"></div>
-    <div class="tsec" id="tsec"></div>
-    <footer class="ver"><a href="https://github.com/Skare69/clipshelf">clipshelf</a> v{{ CLIPSHELF_VERSION }}</footer>
-  </aside>
+  <nav class="rail" aria-label="Main">
+    <ul class="views">
+      <li><a href="#library" class="vw on" data-nav="library" aria-current="page"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12zM10 9h8v2h-8zm0 3h4v2h-4zm0-6h8v2h-8z"/></svg><span>Library</span><span class="count" id="nLib"></span></a></li>
+      <li><a href="#inbox" class="vw" data-nav="inbox"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 12h-4c0 1.66-1.34 3-3 3s-3-1.34-3-3H5V5h14v10z"/></svg><span>Inbox</span><span class="count" id="nInbox"></span></a></li>
+      <li><a href="#collections" class="vw" data-nav="collections"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg><span>Collections</span></a></li>
+      <li><a href="#settings" class="vw" data-nav="settings"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/></svg><span>Settings</span></a></li>
+      <li class="adm" hidden><a href="#admin" class="vw" data-nav="admin"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg><span>Admin</span></a></li>
+    </ul>
+    <div class="cats" id="tsec"></div>
+    <p class="ver"><a href="https://github.com/Skare69/clipshelf">clipshelf</a> v{{ CLIPSHELF_VERSION }}</p>
+  </nav>
   <main id="main" tabindex="-1">
-    <div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
+    <div id="vhead"></div>
     <div id="out"></div>
   </main>
 </div>
-<div class="fabs">
-  <button id="topBtn" class="fab sub" aria-label="Back to top" hidden>
-    <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8-8 8z"/></svg>
-  </button>
-  <button id="addFab" class="fab" aria-label="Add capture or import">
-    <svg viewBox="0 0 24 24" width="24" height="24" fill="currentColor" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-  </button>
-</div>
+<div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
 <dialog id="addDlg" aria-labelledby="addHead">
   <header class="dhead">
-    <h2 id="addHead">Add capture</h2>
-    <button class="iconbtn" data-close aria-label="Close">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    <h2 id="addHead">New capture</h2>
+    <button class="iconbtn" type="button" data-close aria-label="Close">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
     </button>
   </header>
-  <section>
-    <label for="capText">Paste links or notes</label>
-    <textarea id="capText" rows="6" placeholder="Paste anything containing one or more http(s) links &#8212; notes, a share text, a single url."></textarea>
-    <p class="err" id="capErr" role="alert" hidden></p>
-    <div class="row2">
-      <label class="grow">Destination
-        <select id="capCol"></select>
-      </label>
-      <button id="capBtn" class="btn primary">Save capture</button>
-    </div>
-    <p class="hint">Saved to the inbox immediately; acquisition and interpretation run on the server.</p>
-  </section>
-  <hr>
-  <section>
-    <h3>Import TikTok export or library.json</h3>
-    <div class="row2">
-      <label class="filebtn">Choose tiktok.json or library.json<input id="impFile" type="file" accept=".json,application/json"></label>
+  <div class="field">
+    <label for="capText">Links or notes</label>
+    <textarea id="capText" rows="6" placeholder="Paste one or more http(s) links. Notes and share text are fine."></textarea>
+  </div>
+  <p class="err" id="capErr" role="alert" hidden></p>
+  <div class="field">
+    <label for="capCol">Save to</label>
+    <select id="capCol"></select>
+  </div>
+  <div class="dactions">
+    <p class="hint">The capture goes to the Inbox at once. The server then fetches and reads each link.</p>
+    <button id="capBtn" class="btn signal" type="button">Save capture</button>
+  </div>
+  <details class="imp">
+    <summary>Import a TikTok export or a library.json</summary>
+    <div class="row">
+      <label class="filebtn">Choose a file<input id="impFile" type="file" accept=".json,application/json"></label>
       <span id="impName" class="hint"></span>
     </div>
     <div class="prog" id="impProg" hidden role="progressbar" aria-label="Import upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="impFill"></div></div>
     <p class="err" id="impErr" role="alert" hidden></p>
-    <div class="row2">
-      <button id="impBtn" class="btn tonal" disabled>Import</button>
+    <div class="row">
+      <button id="impBtn" class="btn primary" type="button" disabled>Import</button>
       <span id="impStat" class="hint"></span>
     </div>
-    <p class="hint">Accepts a TikTok browser media/data export (tiktok.json) or a legacy library.json. Server ceiling applies; oversized imports are rejected whole, never truncated. A legacy library imports with its cached media only if the old <code>cache/</code> directory was copied to <code>import-cache/</code> in the server data directory first; otherwise entries import without media and the manifest lists what was missing.</p>
-  </section>
+    <p class="hint">Accepts a TikTok browser export (<code>tiktok.json</code>) or a legacy <code>library.json</code>. The server rejects an export above its import ceiling as a whole and never cuts it. A legacy library keeps its media only if its old <code>cache/</code> directory was first copied to <code>import-cache/</code> in the server data directory. Otherwise the entries come in without media, and the manifest lists what is missing.</p>
+  </details>
 </dialog>
-<dialog id="detailDlg" aria-labelledby="detHead">
+<dialog id="detailDlg" class="sheet" aria-labelledby="detHead">
   <header class="dhead">
     <h2 id="detHead"></h2>
-    <button class="iconbtn" data-close aria-label="Close">
-      <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+    <button class="iconbtn" type="button" data-close aria-label="Close">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
     </button>
   </header>
   <div id="detBody"></div>
@@ -113,8 +87,8 @@
   <div id="cfExtra"></div>
   <p class="err" id="cfErr" role="alert" hidden></p>
   <div class="dactions">
-    <button class="btn" id="cfCancel">Cancel</button>
-    <button class="btn danger" id="cfOk">Confirm</button>
+    <button class="btn" type="button" id="cfCancel">Cancel</button>
+    <button class="btn danger" type="button" id="cfOk">Confirm</button>
   </div>
 </dialog>
 <script type="module" src="{% static 'clipshelf/app.js' %}"></script>

@@ -2,12 +2,15 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>{% block title %}{% block head_title %}clipshelf{% endblock %}{% endblock %}</title>
-<meta name="description" content="clipshelf — private link and prompt library">
+<meta name="description" content="clipshelf: private link and prompt library">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#E9EBEE" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0E1013" media="(prefers-color-scheme: dark)">
 <meta name="robots" content="noindex">
 <link rel="icon" href="{% static 'clipshelf/favicon.svg' %}" type="image/svg+xml">
+<link rel="preload" href="{% static 'clipshelf/fonts/archivo.woff2' %}" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="{% static 'clipshelf/app.css' %}">
 {% block head %}{% endblock %}
 </head>
@@ -16,7 +19,10 @@
 {% block body %}
 <div class="acct">
   <header class="acct-top">
-    <a class="brand" href="/">clipshelf</a>
+    <a class="brand" href="/" aria-label="clipshelf library">
+      <img class="mark" src="{% static 'clipshelf/favicon.svg' %}" alt="" width="28" height="28">
+      <span class="brand-name">clipshelf</span>
+    </a>
   </header>
   {% if messages %}
   <ul class="messages" role="status">
@@ -27,7 +33,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="foot">
-    <p><a href="/">&#8592; Library</a> · <a href="https://github.com/Skare69/clipshelf">clipshelf</a> v{{ CLIPSHELF_VERSION }}</p>
+    <p><a href="/">Library</a> · <a href="https://github.com/Skare69/clipshelf">clipshelf</a> v{{ CLIPSHELF_VERSION }}</p>
   </footer>
 </div>
 {% endblock %}

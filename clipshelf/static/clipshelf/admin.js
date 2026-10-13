@@ -1,18 +1,22 @@
 /* clipshelf web app — admin panel: users, invitations, collections, LLM, screening. */
 "use strict";
 
-import { S, api, banner, confirmDialog, el, fmtDate, onEnter, out, sensitive, toast } from "./core.js";
+import { ICONS, S, api, banner, confirmDialog, el, fmtDate, icon, onEnter, out, sensitive, toast, vhead } from "./core.js";
 import { renderToc } from "./panels.js";
 
 const errNode = e => el("p", { class: "err", text: e.message });
+// A head written as "#Joined" is a number or date column: right-aligned, tabular.
+const table = (heads, rows) => el("div", { class: "tablewrap" }, el("table", {},
+  el("thead", {}, el("tr", {}, ...heads.map(h => h.startsWith("#")
+    ? el("th", { class: "num", text: h.slice(1) }) : el("th", { text: h })))),
+  el("tbody", {}, ...rows)));
 /* ---------- admin ---------- */
 async function renderAdmin() {
   if (!S.me?.user.is_app_admin) return;
-  const frag = document.createDocumentFragment();
-  frag.append(el("h1", { text: "Server administration" }));
-  const wrap = el("div", {});
-  frag.append(wrap);
-  out.replaceChildren(frag);
+  vhead.replaceChildren(el("div", { class: "vhead" }, el("div", { class: "vtitle" }, el("h1", { text: "Admin" }),
+    el("div", { class: "vsub", text: "Accounts, invitations, shared collections, and the model endpoint for this server." }))));
+  const wrap = el("div", {}, el("p", { class: "hint", role: "status", text: "Loading…" }));
+  out.replaceChildren(wrap);
   renderToc();
   const [users, invs, cols, llm, scr] = await Promise.allSettled([
     api("/api/admin/users"), api("/api/admin/invitations"),
@@ -31,7 +35,7 @@ async function renderAdmin() {
     scr.status === "rejected" ? scr.reason : null));
 }
 function adminUsers(users, err) {
-  const p = el("section", { class: "panel" }, el("h3", { text: "Accounts" }));
+  const p = el("section", { class: "panel" }, el("h2", { text: "Accounts" }));
   if (err) return p.append(errNode(err)), p;
   const rows = (users || []).map(u => {
     const acts = el("div", { class: "acts" });
@@ -67,27 +71,25 @@ function adminUsers(users, err) {
     acts.append(toggle, rec);
     return el("tr", {},
       el("td", {}, el("b", { text: u.email }),
-        u.is_app_admin ? el("span", { class: "badge run", text: "admin", style: "margin-left:6px" }) : null),
-      el("td", { text: u.is_verified ? "yes" : "no" }),
-      el("td", { text: fmtDate(u.date_joined) }),
+        u.is_app_admin ? el("span", { class: "badge ink", text: "Admin", style: "margin-left:8px" }) : null),
+      el("td", { text: u.is_verified ? "Yes" : "No" }),
+      el("td", { class: "num", text: fmtDate(u.date_joined) }),
       el("td", {}, el("span", { class: "badge " + (u.is_active ? "ok" : "err"),
-        text: u.is_active ? "active" : "disabled" })),
+        text: u.is_active ? "Active" : "Disabled" })),
       el("td", {}, acts));
   });
-  p.append(el("table", {},
-    el("thead", {}, el("tr", {},
-      ...["Email", "Verified", "Joined", "Status", "Actions"].map(h => el("th", { text: h })))),
-    el("tbody", {}, ...rows)));
+  p.append(table(["Email", "Verified", "#Joined", "Status", ""], rows));
   p.append(el("p", { class: "hint", text: "Recovery uses the framework's reset tokens under the same account id and never removes MFA. Disabling never deletes content." }));
   return p;
 }
 function adminInvitations(invs, err) {
-  const p = el("section", { class: "panel" }, el("h3", { text: "Invitations" }));
+  const p = el("section", { class: "panel" }, el("h2", { text: "Invitations" }));
   if (err) return p.append(errNode(err)), p;
-  const form = el("form", { class: "row2" },
-    el("input", { type: "email", required: true, placeholder: "invitee@example.com",
-      "aria-label": "Email to invite", style: "flex:1;min-width:200px" }),
-    el("button", { class: "btn primary", type: "submit", text: "Create invitation" }));
+  const form = el("form", { class: "field" },
+    el("label", { for: "invEmail", text: "Invite by email" }),
+    el("div", { class: "row" },
+      el("input", { type: "email", id: "invEmail", required: true, class: "grow", autocomplete: "off" }),
+      el("button", { class: "btn primary", type: "submit", text: "Create invitation" })));
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     const email = form.querySelector("input").value.trim();
@@ -102,27 +104,23 @@ function adminInvitations(invs, err) {
     } catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
   });
   const rows = (invs || []).map(v => {
-    const status = v.used_at ? "used" : (new Date(v.expires_at) < new Date() ? "expired" : "pending");
+    const status = v.used_at ? "Used" : (new Date(v.expires_at) < new Date() ? "Expired" : "Pending");
     return el("tr", {},
       el("td", { text: v.email }),
-      el("td", { text: fmtDate(v.created_at) }),
-      el("td", { text: fmtDate(v.expires_at) }),
-      el("td", {}, el("span", { class: "badge " + ({ used: "", expired: "err", pending: "ok" }[status]), text: status })));
+      el("td", { class: "num", text: fmtDate(v.created_at) }),
+      el("td", { class: "num", text: fmtDate(v.expires_at) }),
+      el("td", {}, el("span", { class: "badge " + ({ Used: "", Expired: "err", Pending: "ok" }[status]), text: status })));
   });
   p.append(form,
-    el("table", {},
-      el("thead", {}, el("tr", {}, ...["Email", "Created", "Expires", "Status"].map(h => el("th", { text: h })))),
-      el("tbody", {}, ...rows)),
+    rows.length ? table(["Email", "#Created", "#Expires", "Status"], rows) : null,
     el("p", { class: "hint", text: "Invitations are single-use, expiring links; the recipient picks their own password and verifies the email. SMTP is not involved. The full link is shown only once, at creation." }));
   return p;
 }
 function adminCollections(cols, err) {
-  const p = el("section", { class: "panel" }, el("h3", { text: "Shared collections" }));
+  const p = el("section", { class: "panel" }, el("h2", { text: "Shared collections" }));
   if (err) return p.append(errNode(err)), p;
   if (!(cols || []).length) return p.append(el("p", { class: "hint", text: "No shared collections exist. Personal collections are never listed here." })), p;
-  p.append(el("table", {},
-    el("thead", {}, el("tr", {}, ...["Collection", "Owner", "Members", "Succession"].map(h => el("th", { text: h })))),
-    el("tbody", {}, ...(cols || []).map(c => {
+  p.append(table(["Collection", "Owner", "#Members", "Succession"], (cols || []).map(c => {
       const activeMembers = (c.members || []).filter(m => m.is_active && m.id !== c.owner.id);
       const sel = el("select", { "aria-label": "New owner for " + c.name },
         ...activeMembers.map(m => el("option", { value: m.id, text: m.email })));
@@ -146,10 +144,10 @@ function adminCollections(cols, err) {
         el("td", { text: c.name }),
         el("td", {}, c.owner.email, " ",
           el("span", { class: "badge " + (c.owner.is_active ? "ok" : "err"),
-            text: c.owner.is_active ? "active" : "disabled" })),
-        el("td", { text: String((c.members || []).length + 1) }),
+            text: c.owner.is_active ? "Active" : "Disabled" })),
+        el("td", { class: "num", text: String((c.members || []).length + 1) }),
         el("td", {}, el("div", { class: "acts" }, sel, btn)));
-    }))),
+    })),
     el("p", { class: "hint", text: "Succession requires a disabled owner and an existing active member. The admin never gains content access through a transfer." }));
   return p;
 }
@@ -172,7 +170,7 @@ const LLM_PROVIDERS = [
   { id: "vllm", label: "vLLM (local)", url: "http://localhost:8000/v1", local: true },
 ];
 function adminLlm(llm, err, scr, scrErr) {
-  const p = el("section", { class: "panel" }, el("h3", { text: "Shared interpretation endpoint" }));
+  const p = el("section", { class: "panel" }, el("h2", { text: "Model endpoint" }));
   if (err) return p.append(errNode(err)), p;
   const base = el("input", { type: "url", id: "llmBase", value: llm.base_url || "", placeholder: "https://llm.example.internal/v1" });
   let modelCtl = el("input", { type: "text", id: "llmModel", class: "grow",
@@ -198,7 +196,7 @@ function adminLlm(llm, err, scr, scrErr) {
     });
     modelCtl.replaceWith(sel); modelCtl = sel;
   };
-  const load = el("button", { class: "btn small", type: "button", text: "Load models" });
+  const load = el("button", { class: "btn", type: "button", text: "Load models" });
   const conc = el("input", { type: "number", id: "llmConc", min: 1, max: 8, value: llm.concurrency ?? 2 });
   const key = el("input", { type: "password", id: "llmKey", placeholder: llm.has_api_key ? "Saved — leave blank to keep" : "No key set (optional for local endpoints)", autocomplete: "new-password" });
   const clear = el("input", { type: "checkbox", id: "llmClearKey" });
@@ -221,13 +219,13 @@ function adminLlm(llm, err, scr, scrErr) {
     note.textContent = text;
     note.hidden = false;
   };
-  const check = el("button", { class: "btn tonal", type: "button", text: "Check connection" });
+  const check = el("button", { class: "btn", type: "button", text: "Check connection" });
   const setCheck = s => {
     check.disabled = s === "busy";
-    check.className = "btn tonal" + (s === "ok" ? " ok" : "");
-    if (s === "busy") check.replaceChildren(el("span", { class: "spin" }), " Checking…");
-    else if (s === "ok") { check.replaceChildren("✓"); check.setAttribute("aria-label", "Connection verified"); }
-    else { check.replaceChildren("Check connection"); check.removeAttribute("aria-label"); }
+    check.className = "btn" + (s === "ok" ? " done" : "");
+    if (s === "busy") check.replaceChildren(el("span", { class: "spin" }), "Checking…");
+    else if (s === "ok") check.replaceChildren(icon(ICONS.check), "Connection works");
+    else check.replaceChildren("Check connection");
   };
   setCheck(llm.verified_at ? "ok" : "idle");
   const form = el("form", {},
@@ -235,13 +233,13 @@ function adminLlm(llm, err, scr, scrErr) {
       el("p", { class: "help", text: "Presets fill the base URL. Any OpenAI-compatible endpoint works; vision is required." })),
     el("div", { class: "field" }, el("label", { for: "llmBase", text: "Base URL" }), base, localHint),
     el("div", { class: "field" }, el("label", { for: "llmModel", text: "Model" }),
-      el("div", { class: "row2" }, modelCtl, load),
+      el("div", { class: "row" }, modelCtl, load),
       el("p", { class: "help", text: "Load models asks the endpoint which models it has and turns this into a list to pick from." })),
     el("div", { class: "field" }, el("label", { for: "llmConc", text: "Concurrent requests" }), conc),
     el("div", { class: "field" }, el("label", { for: "llmKey", text: "API key" }), key,
       el("p", { class: "help", text: "Write-only: never returned by the server. Leave blank to keep a key for this endpoint; changing the URL clears it." })),
     el("div", { class: "field" },
-      el("label", { for: "llmClearKey" }, clear, " Clear the saved key")),
+      el("label", { class: "check", for: "llmClearKey" }, clear, "Clear the saved key")),
     el("div", { class: "acts" },
       el("button", { class: "btn primary", type: "submit", text: "Save settings" }),
       check),
@@ -275,7 +273,7 @@ function adminLlm(llm, err, scr, scrErr) {
       toast("Interpretation settings saved."); renderAdmin(); }
     catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
   });
-  form.querySelector(".tonal").addEventListener("click", async () => {
+  check.addEventListener("click", async () => {
     const b = { base_url: base.value.trim(), model: modelValue() };
     if (clear.checked) b.api_key = "";
     else if (key.value) b.api_key = key.value;
@@ -303,14 +301,15 @@ function adminLlm(llm, err, scr, scrErr) {
   const sBody = () => sClear.checked ? { api_key: "" } : sKey.value ? { api_key: sKey.value } : {};
   const sNote = el("p", { class: "hint", hidden: true });
   const sShowNote = (ok, text) => { sNote.className = ok ? "hint" : "err"; sNote.textContent = text; sNote.hidden = false; };
+  const sTest = el("button", { class: "btn", type: "button", text: "Test" });
   const sForm = el("form", {},
     el("div", { class: "field" }, el("label", { for: "scrKey", text: "API key" }), sKey,
       el("p", { class: "help", text: "Optional guard rail against prompt injection in captured pages. Without a key, interpretation runs unguarded." })),
     el("div", { class: "field" },
-      el("label", { for: "scrClearKey" }, sClear, " Clear the saved key")),
+      el("label", { class: "check", for: "scrClearKey" }, sClear, "Clear the saved key")),
     el("div", { class: "acts" },
       el("button", { class: "btn primary", type: "submit", text: "Save" }),
-      el("button", { class: "btn tonal", type: "button", text: "Test" })),
+      sTest),
     sNote);
   sForm.addEventListener("submit", async ev => {
     ev.preventDefault();
@@ -318,7 +317,7 @@ function adminLlm(llm, err, scr, scrErr) {
       toast("Screening settings saved."); renderAdmin(); }
     catch (e) { if (e.status !== 401 && !e.cancelled) sShowNote(false, e.message); }
   });
-  sForm.querySelector(".tonal").addEventListener("click", async () => {
+  sTest.addEventListener("click", async () => {
     sNote.hidden = true;
     try {
       const j = await sensitive("/api/admin/screening/check", sBody());

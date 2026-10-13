@@ -25,7 +25,10 @@ const ICONS = {
   check: "M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z",
   retry: "M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-8 8s3.57 8 8 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z",
   ext: "M19 19H5V5h7V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z",
-  eye: "M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"
+  eye: "M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
+  close: "M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z",
+  link: "M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z",
+  prompt: "M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h18v-2H3v2z"
 };
 const icon = (d, size) => {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -35,11 +38,11 @@ const icon = (d, size) => {
   const p = document.createElementNS(s.namespaceURI, "path");
   p.setAttribute("d", d); s.append(p); return s;
 };
-const HUE = s => { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) % 360; return h; };
-const avatar = seed => el("span", { class: "avatar", "aria-hidden": "true",
-  style: `--av:hsl(${HUE(seed)} 42% 52%)` }, (String(seed).trim()[0] || "?").toUpperCase());
+// The year only shows when it differs from this year: labels stay short.
 const fmtDate = s => { if (!s) return ""; const d = new Date(s);
-  return isNaN(d) ? String(s) : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }); };
+  if (isNaN(d)) return String(s);
+  const year = d.getFullYear() === new Date().getFullYear() ? undefined : "numeric";
+  return d.toLocaleDateString(undefined, { year, month: "short", day: "numeric" }); };
 const fmtWhen = s => { if (!s) return ""; const d = new Date(s);
   return isNaN(d) ? String(s) : d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }); };
 const safeUrl = u => { try { const p = new URL(u); return p.protocol === "http:" || p.protocol === "https:" ? p.href : null; } catch { return null; } };
@@ -63,13 +66,14 @@ async function copyText(t) {
     ta.remove(); return ok;
   }
 }
-const copyBtn = (getText, label) => {
-  const b = el("button", { class: "btn small", type: "button", title: `Copy ${label}` }, icon(ICONS.copy), label);
+const copyBtn = (getText, label, cls = "btn small") => {
+  const b = el("button", { class: cls, type: "button" }, icon(ICONS.copy), label);
   b.addEventListener("click", async () => {
     if (await copyText(String(getText()))) {
-      b.replaceChildren(icon(ICONS.check), "copied");
-      setTimeout(() => b.replaceChildren(icon(ICONS.copy), label), 1200);
-    }
+      b.classList.add("done");
+      b.replaceChildren(icon(ICONS.check), "Copied");
+      setTimeout(() => { b.classList.remove("done"); b.replaceChildren(icon(ICONS.copy), label); }, 1400);
+    } else banner("err", "The browser did not allow the copy. Select the text and copy it by hand.", { sticky: true });
   });
   return b;
 };
@@ -150,7 +154,7 @@ const captureActive = c => (c.jobs || []).some(j => j.active);
 const captureBad = c => (c.jobs || []).some(j => j.needs_attention);
 
 /* ---------- chrome: banner, dialogs, nav ---------- */
-const out = $("#out"), bannerEl = $("#banner");
+const out = $("#out"), vhead = $("#vhead"), bannerEl = $("#banner");
 let bannerTimer = 0;
 function banner(kind, text, opts = {}) {
   clearTimeout(bannerTimer);
@@ -159,7 +163,7 @@ function banner(kind, text, opts = {}) {
     ...(opts.actions || []).map(a => el("button", { class: "btn small", type: "button",
       onclick: () => { a.onclick?.(); if (!a.keep) hideBanner(); } }, a.label)),
     el("button", { class: "iconbtn", type: "button", "aria-label": "Dismiss",
-      onclick: hideBanner }, "✕"));
+      onclick: hideBanner }, icon(ICONS.close, 20)));
   bannerEl.hidden = false;
   if (!opts.sticky && !opts.actions?.length)
     bannerTimer = setTimeout(hideBanner, opts.ms || 4000);
@@ -210,19 +214,17 @@ $("#cfOk").addEventListener("click", () => {
   if (!bad) confirmDlg.close("ok");
 });
 
-const toc = $("#toc"), scrim = $("#scrim"), navBtn = $("#navBtn");
-const closeDrawer = () => { toc.classList.remove("open"); scrim.hidden = true; navBtn.setAttribute("aria-expanded", "false"); };
-navBtn.addEventListener("click", () => {
-  const open = !toc.classList.contains("open");
-  toc.classList.toggle("open", open); scrim.hidden = !open;
-  navBtn.setAttribute("aria-expanded", String(open));
-});
-scrim.addEventListener("click", closeDrawer);
-for (const d of document.querySelectorAll("dialog [data-close]"))
-  d.addEventListener("click", () => d.closest("dialog").close());
-const topBtn = $("#topBtn");
-addEventListener("scroll", () => { topBtn.hidden = scrollY < 600; }, { passive: true });
-topBtn.addEventListener("click", () => scrollTo({ top: 0, behavior: "smooth" }));
+// Sheets close from their close button, Escape (native), or a click on the backdrop.
+for (const b of document.querySelectorAll("dialog [data-close]")) {
+  const d = b.closest("dialog");
+  b.addEventListener("click", () => d.close());
+  d.addEventListener("click", e => {
+    if (e.target !== d) return;
+    const r = d.getBoundingClientRect();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
+  });
+}
+const rail = $(".rail");
 
 /* ---------- auth loss: drop private state, let the server route to login ---------- */
 function onAuthLoss() {
@@ -237,8 +239,12 @@ function onAuthLoss() {
 function setView(v) {
   S.view = v;
   clearInterval(S.capTimer);
-  for (const a of toc.querySelectorAll("a.vw")) a.classList.toggle("on", a.dataset.nav === v);
-  closeDrawer();
+  for (const a of rail.querySelectorAll("a.vw")) {
+    const on = a.dataset.nav === v;
+    a.classList.toggle("on", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+  }
+  vhead.replaceChildren();
   out.replaceChildren();
   $("#main").focus({ preventScroll: true });
   scrollTo({ top: 0 });
@@ -248,7 +254,7 @@ function setView(v) {
 
 const ENTER = {};
 const onEnter = (view, fn) => { ENTER[view] = fn; };
-toc.addEventListener("click", e => {
+rail.addEventListener("click", e => {
   const a = e.target.closest("a.vw");
   if (a) { e.preventDefault(); setView(a.dataset.nav); }
 });
@@ -256,7 +262,7 @@ toc.addEventListener("click", e => {
 
 async function refreshMe() {
   S.me = await api("/api/me");
-  $("#adminNav").hidden = !S.me.user.is_app_admin;
+  $(".rail .adm").hidden = !S.me.user.is_app_admin;
 }
 
 
@@ -266,7 +272,6 @@ export {
   ICONS,
   S,
   api,
-  avatar,
   banner,
   captureActive,
   captureBad,
@@ -290,4 +295,5 @@ export {
   shortHost,
   toast,
   uuid,
+  vhead,
 };
