@@ -1,16 +1,19 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.LayoutInflater;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import android.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import dev.clipshelf.app.Creds;
 import dev.clipshelf.app.R;
@@ -18,11 +21,13 @@ import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.net.Async;
 
 /**
- * Entry detail: findings text (inert DOM textContent-equivalent via setText,
- * never HTML rendering), sources, authorized saved material, per-job states
- * with server retry, and collection-scoped removal rules from the API.
+ * Entry label detail: routing block for the category, title, From link,
+ * Contents, prompt and install in monospace blocks with copy, tags, sources,
+ * authorized saved material, per-job states with server retry, and
+ * collection-scoped removal rules from the API. All text lands through
+ * setText, never interpreted as markup.
  */
-public class EntryActivity extends Activity {
+public class EntryActivity extends AppCompatActivity {
 
     private Creds.Session session;
     private String entryId;
@@ -32,6 +37,8 @@ public class EntryActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_entry);
+        Ui.applyInsets(this);
+        Ui.up(this);
         session = Creds.session(this);
         if (session == null) {
             Ui.sessionExpired(this);
@@ -61,39 +68,92 @@ public class EntryActivity extends Activity {
 
     private void render() {
         Api.Entry e = detail.entry;
+        TextView routing = findViewById(R.id.entry_routing);
         TextView title = findViewById(R.id.entry_title);
+        TextView from = findViewById(R.id.entry_from);
         TextView body = findViewById(R.id.entry_body);
+        TextView promptLabel = findViewById(R.id.entry_prompt_label);
+        TextView promptText = findViewById(R.id.entry_prompt_text);
+        Button copyPrompt = findViewById(R.id.entry_copy_prompt);
+        TextView installLabel = findViewById(R.id.entry_install_label);
+        TextView installText = findViewById(R.id.entry_install_text);
+        Button copyInstall = findViewById(R.id.entry_copy_install);
+        ViewGroup tags = findViewById(R.id.entry_tags);
         LinearLayout containers = findViewById(R.id.entry_containers);
-        Button remove = findViewById(R.id.entry_remove);
         Button open = findViewById(R.id.entry_open_url);
-        containers.removeAllViews();
+        Button remove = findViewById(R.id.entry_remove);
 
-        title.setText(e.title.isEmpty() ? (e.url.isEmpty() ? e.id : e.url) : e.title);
-        StringBuilder sb = new StringBuilder();
-        sb.append("prompt".equals(e.kind) ? getString(R.string.entry_kind_prompt)
-                : getString(R.string.entry_kind_link));
-        if (!e.cat.isEmpty()) {
-            sb.append("  ·  ").append(e.cat);
+        boolean prompt = "prompt".equals(e.kind);
+        if (!e.cats.isEmpty()) {
+            routing.setText(e.catLabel());
+            routing.setVisibility(View.VISIBLE);
         }
+        title.setText(e.title.isEmpty() ? (e.url.isEmpty() ? e.text : e.url) : e.title);
+        if (e.url.isEmpty()) {
+            from.setVisibility(View.GONE);
+        } else {
+            from.setText(getString(R.string.from_format, e.url));
+            from.setVisibility(View.VISIBLE);
+            from.setOnClickListener(v ->
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(e.url))));
+        }
+
+        StringBuilder sb = new StringBuilder(!e.summary.isEmpty() ? e.summary : e.desc);
         if (!e.contributors.isEmpty()) {
-            sb.append("\n").append(getString(R.string.entry_contributors_label,
-                    String.join(", ", e.contributors)));
+            sb.append(sb.length() == 0 ? "" : "\n\n")
+                    .append(getString(R.string.entry_contributors_label,
+                            String.join(", ", e.contributors)));
         }
-        if (!e.tags.isEmpty()) {
-            sb.append("\n").append(getString(R.string.entry_tags_label, String.join(", ", e.tags)));
-        }
-        if (!e.desc.isEmpty()) {
-            sb.append("\n\n").append(e.desc);
-        }
-        if (!e.text.isEmpty()) {
-            sb.append("\n\n").append(e.text);
+        // Link entries keep their fetched page text here; prompt entries show
+        // their text in the prompt block below.
+        if (!prompt && !e.text.isEmpty()) {
+            sb.append(sb.length() == 0 ? "" : "\n\n").append(e.text);
         }
         body.setText(sb.toString()); // inert text, never interpreted as markup
 
+        boolean hasPrompt = prompt && !e.text.isEmpty();
+        promptLabel.setVisibility(hasPrompt ? View.VISIBLE : View.GONE);
+        promptText.setVisibility(hasPrompt ? View.VISIBLE : View.GONE);
+        copyPrompt.setVisibility(hasPrompt ? View.VISIBLE : View.GONE);
+        if (hasPrompt) {
+            promptText.setText(e.text);
+            copyPrompt.setOnClickListener(v ->
+                    Ui.copy(this, findViewById(R.id.entry_copy_prompt), "prompt", e.text));
+        }
+        boolean hasInstall = !e.install.isEmpty();
+        installLabel.setVisibility(hasInstall ? View.VISIBLE : View.GONE);
+        installText.setVisibility(hasInstall ? View.VISIBLE : View.GONE);
+        copyInstall.setVisibility(hasInstall ? View.VISIBLE : View.GONE);
+        if (hasInstall) {
+            installText.setText(e.install);
+            copyInstall.setOnClickListener(v ->
+                    Ui.copy(this, findViewById(R.id.entry_copy_install), "install", e.install));
+        }
+
+        tags.removeAllViews();
+        LayoutInflater inflater = getLayoutInflater();
+        for (String tag : e.tags) {
+            TextView tv = new TextView(this);
+            tv.setText(tag);
+            tv.setBackgroundResource(R.drawable.tag_bg);
+            tv.setTextAppearance(this, R.style.TextAppearance_Parcel_T1);
+            tv.setTextColor(getColor(R.color.ink2));
+            tv.setMaxLines(1);
+            int h = dp(8);
+            tv.setPadding(h, dp(3), h, dp(3));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            lp.setMarginEnd(h);
+            tv.setLayoutParams(lp);
+            tags.addView(tv);
+        }
+        tags.setVisibility(tags.getChildCount() == 0 ? View.GONE : View.VISIBLE);
+
+        containers.removeAllViews();
         open.setVisibility(e.url.isEmpty() ? View.GONE : View.VISIBLE);
         open.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(e.url))));
         remove.setVisibility(e.canRemove ? View.VISIBLE : View.GONE);
-        remove.setOnClickListener(v -> new AlertDialog.Builder(this)
+        remove.setOnClickListener(v -> new MaterialAlertDialogBuilder(this)
                 .setMessage(R.string.entry_remove_confirm)
                 .setPositiveButton(R.string.ok, (d, w) -> deleteEntry())
                 .setNegativeButton(R.string.cancel, null)
@@ -102,7 +162,8 @@ public class EntryActivity extends Activity {
         if (!detail.assets.isEmpty()) {
             addHeading(containers, getString(R.string.entry_assets_label));
             for (Api.Asset asset : detail.assets) {
-                Button b = new Button(this, null, android.R.attr.borderlessButtonStyle);
+                Button b = new Button(new android.view.ContextThemeWrapper(this,
+                        R.style.Widget_Parcel_Button_Text));
                 b.setText(getString(R.string.asset_view) + "  ·  " + (asset.name.isEmpty()
                         ? asset.id : asset.name) + "  (" + asset.kind + ")");
                 b.setOnClickListener(v -> {
@@ -122,6 +183,7 @@ public class EntryActivity extends Activity {
             for (String source : e.sources) {
                 TextView tv = new TextView(this);
                 tv.setText("• " + source);
+                tv.setTextAppearance(this, R.style.TextAppearance_Parcel_T3);
                 tv.setTextIsSelectable(true);
                 containers.addView(tv);
             }
@@ -152,9 +214,11 @@ public class EntryActivity extends Activity {
             sb.append('\n').append(getString(R.string.job_error_label, job.error));
         }
         tv.setText(sb.toString());
+        tv.setTextAppearance(this, R.style.TextAppearance_Parcel_T3);
         tv.setTextIsSelectable(true);
         container.addView(tv);
-        Button retry = new Button(this, null, android.R.attr.borderlessButtonStyle);
+        Button retry = new Button(new android.view.ContextThemeWrapper(this,
+                R.style.Widget_Parcel_Button_Text));
         retry.setText(R.string.entry_retry_job);
         retry.setOnClickListener(v -> {
             retry.setEnabled(false);
@@ -177,7 +241,8 @@ public class EntryActivity extends Activity {
     private void addHeading(LinearLayout container, String text) {
         TextView tv = new TextView(this);
         tv.setText(text);
-        tv.setTextAppearance(this, android.R.style.TextAppearance_Material_Small);
+        tv.setTextAppearance(this, R.style.TextAppearance_Parcel_T1);
+        tv.setTextColor(getColor(R.color.ink2));
         tv.setPadding(0, dp(20), 0, dp(4));
         container.addView(tv);
     }

@@ -1,6 +1,6 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.text.InputType;
@@ -13,7 +13,7 @@ import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import android.app.AlertDialog;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -37,7 +37,7 @@ import dev.clipshelf.app.outbox.OutboxPolicy;
  * outbox identity untouched; the session left on the old origin is revoked.
  * Also discloses the Android background-delivery limits.
  */
-public class SettingsActivity extends Activity {
+public class SettingsActivity extends AppCompatActivity {
 
     private Creds.Session session;
     private Creds.Profile profile;
@@ -48,6 +48,10 @@ public class SettingsActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_settings);
+        Ui.applyInsets(this);
+        Ui.bottomNav(this);
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        toolbar.setTitle(R.string.settings_title);
         session = Creds.session(this);
         profile = Creds.profile(this);
         if (session == null || profile == null) {
@@ -146,7 +150,7 @@ public class SettingsActivity extends Activity {
             final EditText password = new EditText(this);
             password.setInputType(InputType.TYPE_CLASS_TEXT
                     | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-            new AlertDialog.Builder(this)
+            new MaterialAlertDialogBuilder(this)
                     .setTitle(R.string.endpoint_reauth_title)
                     .setMessage(getString(R.string.endpoint_reauth_message, candidate,
                             profile.email))
@@ -161,7 +165,7 @@ public class SettingsActivity extends Activity {
                                 if (verifyError instanceof Api.ApiException
                                         && ((Api.ApiException) verifyError).code == 403) {
                                     // Different server: refuse, outbox identity must not move.
-                                    new AlertDialog.Builder(this)
+                                    new MaterialAlertDialogBuilder(this)
                                             .setTitle(R.string.error_title)
                                             .setMessage(R.string.endpoint_mismatch_rejected)
                                             .setPositiveButton(R.string.ok, null)
@@ -174,7 +178,7 @@ public class SettingsActivity extends Activity {
                             if (!OutboxPolicy.identityMatches(adopted.me.instanceId, adopted.me.userId,
                                     profile.instanceId, profile.userId)) {
                                 // Different account on the same instance: refuse.
-                                new AlertDialog.Builder(this)
+                                new MaterialAlertDialogBuilder(this)
                                         .setTitle(R.string.error_title)
                                         .setMessage(R.string.endpoint_mismatch_rejected)
                                         .setPositiveButton(R.string.ok, null)
@@ -220,7 +224,7 @@ public class SettingsActivity extends Activity {
 
         // Sign out
         Button logout = findViewById(R.id.settings_logout);
-        logout.setOnClickListener(v -> new AlertDialog.Builder(this)
+        logout.setOnClickListener(v -> new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.logout_confirm_title)
                 .setMessage(R.string.logout_confirm_message)
                 .setPositiveButton(R.string.ok, (d, w) -> {

@@ -1,6 +1,6 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.os.Bundle;
@@ -22,7 +22,7 @@ import dev.clipshelf.app.net.Async;
  * downsampled into an ImageView; text/captions render inert (setText, no
  * HTML). Everything else is honestly declined instead of proxied.
  */
-public class AssetActivity extends Activity {
+public class AssetActivity extends AppCompatActivity {
 
     private static final int MAX_IMAGE_DIMENSION = 2048;
     private static final long TEXT_PREVIEW_BYTES = 256 * 1024;
@@ -34,6 +34,7 @@ public class AssetActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_asset);
+        Ui.applyInsets(this);
         session = Creds.session(this);
         if (session == null) {
             Ui.sessionExpired(this);
@@ -44,7 +45,9 @@ public class AssetActivity extends Activity {
         String name = getIntent().getStringExtra("name");
         String contentType = getIntent().getStringExtra("contentType");
         String kind = getIntent().getStringExtra("kind");
-        setTitle(name.isEmpty() ? kind : name);
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        toolbar.setTitle(name.isEmpty() ? kind : name);
+        Ui.up(this);
 
         boolean image = "image".equals(kind)
                 || (contentType != null && contentType.startsWith("image/"));

@@ -2,15 +2,10 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="8dp">
+    android:background="@color/ground"
+    android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/collections_status"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:textColor="@color/text_secondary"
-        android:visibility="gone" />
+    <include layout="@layout/appbar" />
 
     <FrameLayout
         android:layout_width="match_parent"
@@ -20,12 +15,37 @@
         <ListView
             android:id="@+id/collections_list"
             android:layout_width="match_parent"
-            android:layout_height="match_parent" />
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:divider="@android:color/transparent"
+            android:dividerHeight="8dp"
+            android:listSelector="@android:color/transparent"
+            android:paddingStart="16dp"
+            android:paddingTop="8dp"
+            android:paddingEnd="16dp"
+            android:paddingBottom="16dp" />
+
+        <TextView
+            android:id="@+id/collections_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:padding="16dp"
+            android:textAppearance="@style/TextAppearance.Parcel.T2"
+            android:textColor="@color/ink2"
+            android:visibility="gone" />
     </FrameLayout>
 
     <Button
         android:id="@+id/collections_create"
+        style="@style/Widget.Parcel.Button.Primary"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginStart="16dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="8dp"
         android:text="@string/collection_new" />
+
+    <include layout="@layout/bottomnav" />
 </LinearLayout>

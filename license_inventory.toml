@@ -83,40 +83,76 @@ tzdata            = { observed = "2026.5",  license = "Apache-2.0",   meta = "Ap
 # has no license in its POM; it is a Guava extract whose parent POM is
 # guava-parent (Apache-2.0). BOM/platform artifacts are metadata-only and
 # excluded from the packaged set (kotlinx-coroutines-bom).
-non_packaged = ["org.jetbrains.kotlinx:kotlinx-coroutines-bom"]
+non_packaged = ["org.jetbrains.kotlinx:kotlinx-coroutines-bom",
+               "org.jetbrains.kotlin:kotlin-bom"]
 
 [android.entries]
-"androidx.work:work-runtime"                  = { observed = "2.9.1",  license = "Apache-2.0" }
-"androidx.annotation:annotation"              = { observed = "1.3.0",  license = "Apache-2.0" }
-"androidx.annotation:annotation-experimental" = { observed = "1.3.0",  license = "Apache-2.0" }
-"androidx.arch.core:core-common"              = { observed = "2.1.0",  license = "Apache-2.0" }
-"androidx.arch.core:core-runtime"             = { observed = "2.1.0",  license = "Apache-2.0" }
-"androidx.collection:collection"              = { observed = "1.0.0",  license = "Apache-2.0" }
-"androidx.concurrent:concurrent-futures"      = { observed = "1.0.0",  license = "Apache-2.0" }
-"androidx.core:core"                          = { observed = "1.9.0",  license = "Apache-2.0" }
-"androidx.lifecycle:lifecycle-common"         = { observed = "2.5.1",  license = "Apache-2.0" }
-"androidx.lifecycle:lifecycle-livedata"       = { observed = "2.5.1",  license = "Apache-2.0" }
-"androidx.lifecycle:lifecycle-livedata-core"  = { observed = "2.5.1",  license = "Apache-2.0" }
-"androidx.lifecycle:lifecycle-runtime"        = { observed = "2.5.1",  license = "Apache-2.0" }
-"androidx.lifecycle:lifecycle-service"        = { observed = "2.5.1",  license = "Apache-2.0" }
-"androidx.room:room-common"                   = { observed = "2.5.0",  license = "Apache-2.0" }
-"androidx.room:room-ktx"                      = { observed = "2.5.0",  license = "Apache-2.0" }
-"androidx.room:room-runtime"                  = { observed = "2.5.0",  license = "Apache-2.0" }
-"androidx.sqlite:sqlite"                      = { observed = "2.3.0",  license = "Apache-2.0" }
-"androidx.sqlite:sqlite-framework"            = { observed = "2.3.0",  license = "Apache-2.0" }
-"androidx.startup:startup-runtime"            = { observed = "1.1.1",  license = "Apache-2.0" }
-"androidx.tracing:tracing"                    = { observed = "1.0.0",  license = "Apache-2.0" }
-"androidx.versionedparcelable:versionedparcelable" = { observed = "1.1.1", license = "Apache-2.0" }
-"org.jetbrains:annotations"                   = { observed = "23.0.0", license = "Apache-2.0" }
-"org.jetbrains.kotlin:kotlin-stdlib"          = { observed = "1.8.22", license = "Apache-2.0" }
-"org.jetbrains.kotlin:kotlin-stdlib-common"   = { observed = "1.8.22", license = "Apache-2.0" }
-"org.jetbrains.kotlin:kotlin-stdlib-jdk7"     = { observed = "1.8.20", license = "Apache-2.0" }
-"org.jetbrains.kotlin:kotlin-stdlib-jdk8"     = { observed = "1.8.20", license = "Apache-2.0" }
-"org.jetbrains.kotlinx:kotlinx-coroutines-android" = { observed = "1.7.1", license = "Apache-2.0" }
-"org.jetbrains.kotlinx:kotlinx-coroutines-core"    = { observed = "1.7.1", license = "Apache-2.0" }
-"org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm" = { observed = "1.7.1", license = "Apache-2.0" }
-"com.google.guava:listenablefuture"           = { observed = "1.0",    license = "Apache-2.0" }
-
+"androidx.work:work-runtime"                                 = { observed = "2.9.1",  license = "Apache-2.0" }
+"androidx.activity:activity"                                 = { observed = "1.8.0",  license = "Apache-2.0" }
+"androidx.annotation:annotation"                             = { observed = "1.8.1",  license = "Apache-2.0" }
+"androidx.annotation:annotation-jvm"                         = { observed = "1.8.1",  license = "Apache-2.0" }
+"androidx.annotation:annotation-experimental"                = { observed = "1.4.1",  license = "Apache-2.0" }
+"androidx.appcompat:appcompat"                               = { observed = "1.7.0",  license = "Apache-2.0" }
+"androidx.appcompat:appcompat-resources"                     = { observed = "1.7.0",  license = "Apache-2.0" }
+"androidx.arch.core:core-common"                             = { observed = "2.2.0",  license = "Apache-2.0" }
+"androidx.arch.core:core-runtime"                            = { observed = "2.2.0",  license = "Apache-2.0" }
+"androidx.cardview:cardview"                                 = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.collection:collection"                             = { observed = "1.4.2",  license = "Apache-2.0" }
+"androidx.collection:collection-jvm"                         = { observed = "1.4.2",  license = "Apache-2.0" }
+"androidx.concurrent:concurrent-futures"                     = { observed = "1.1.0",  license = "Apache-2.0" }
+"androidx.constraintlayout:constraintlayout"                 = { observed = "2.1.0",  license = "Apache-2.0" }
+"androidx.constraintlayout:constraintlayout-core"            = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.coordinatorlayout:coordinatorlayout"               = { observed = "1.1.0",  license = "Apache-2.0" }
+"androidx.core:core"                                         = { observed = "1.13.0",  license = "Apache-2.0" }
+"androidx.core:core-ktx"                                     = { observed = "1.13.0",  license = "Apache-2.0" }
+"androidx.cursoradapter:cursoradapter"                       = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.customview:customview"                             = { observed = "1.1.0",  license = "Apache-2.0" }
+"androidx.drawerlayout:drawerlayout"                         = { observed = "1.1.1",  license = "Apache-2.0" }
+"androidx.dynamicanimation:dynamicanimation"                 = { observed = "1.1.0",  license = "Apache-2.0" }
+"androidx.emoji2:emoji2"                                     = { observed = "1.3.0",  license = "Apache-2.0" }
+"androidx.emoji2:emoji2-views-helper"                        = { observed = "1.3.0",  license = "Apache-2.0" }
+"androidx.fragment:fragment"                                 = { observed = "1.5.4",  license = "Apache-2.0" }
+"androidx.graphics:graphics-shapes"                          = { observed = "1.0.1",  license = "Apache-2.0" }
+"androidx.graphics:graphics-shapes-android"                  = { observed = "1.0.1",  license = "Apache-2.0" }
+"androidx.interpolator:interpolator"                         = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-common"                        = { observed = "2.6.2",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-livedata"                      = { observed = "2.6.2",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-livedata-core"                 = { observed = "2.6.2",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-process"                       = { observed = "2.6.2",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-runtime"                       = { observed = "2.6.2",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-service"                       = { observed = "2.6.2",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-viewmodel"                     = { observed = "2.6.2",  license = "Apache-2.0" }
+"androidx.lifecycle:lifecycle-viewmodel-savedstate"          = { observed = "2.6.2",  license = "Apache-2.0" }
+"androidx.loader:loader"                                     = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.profileinstaller:profileinstaller"                 = { observed = "1.3.1",  license = "Apache-2.0" }
+"androidx.recyclerview:recyclerview"                         = { observed = "1.2.1",  license = "Apache-2.0" }
+"androidx.resourceinspection:resourceinspection-annotation"  = { observed = "1.0.1",  license = "Apache-2.0" }
+"androidx.room:room-common"                                  = { observed = "2.5.0",  license = "Apache-2.0" }
+"androidx.room:room-ktx"                                     = { observed = "2.5.0",  license = "Apache-2.0" }
+"androidx.room:room-runtime"                                 = { observed = "2.5.0",  license = "Apache-2.0" }
+"androidx.savedstate:savedstate"                             = { observed = "1.2.1",  license = "Apache-2.0" }
+"androidx.sqlite:sqlite"                                     = { observed = "2.3.0",  license = "Apache-2.0" }
+"androidx.sqlite:sqlite-framework"                           = { observed = "2.3.0",  license = "Apache-2.0" }
+"androidx.startup:startup-runtime"                           = { observed = "1.1.1",  license = "Apache-2.0" }
+"androidx.tracing:tracing"                                   = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.transition:transition"                             = { observed = "1.5.0",  license = "Apache-2.0" }
+"androidx.vectordrawable:vectordrawable"                     = { observed = "1.1.0",  license = "Apache-2.0" }
+"androidx.vectordrawable:vectordrawable-animated"            = { observed = "1.1.0",  license = "Apache-2.0" }
+"androidx.versionedparcelable:versionedparcelable"           = { observed = "1.1.1",  license = "Apache-2.0" }
+"androidx.viewpager:viewpager"                               = { observed = "1.0.0",  license = "Apache-2.0" }
+"androidx.viewpager2:viewpager2"                             = { observed = "1.0.0",  license = "Apache-2.0" }
+"com.google.android.material:material"                       = { observed = "1.13.0",  license = "Apache-2.0" }
+"com.google.errorprone:error_prone_annotations"              = { observed = "2.15.0",  license = "Apache-2.0" }
+"com.google.guava:listenablefuture"                          = { observed = "1.0",  license = "Apache-2.0" }
+"org.jetbrains:annotations"                                  = { observed = "23.0.0",  license = "Apache-2.0" }
+"org.jetbrains.kotlin:kotlin-stdlib"                         = { observed = "1.8.22",  license = "Apache-2.0" }
+"org.jetbrains.kotlin:kotlin-stdlib-common"                  = { observed = "1.8.22",  license = "Apache-2.0" }
+"org.jetbrains.kotlin:kotlin-stdlib-jdk7"                    = { observed = "1.8.22",  license = "Apache-2.0" }
+"org.jetbrains.kotlin:kotlin-stdlib-jdk8"                    = { observed = "1.8.22",  license = "Apache-2.0" }
+"org.jetbrains.kotlinx:kotlinx-coroutines-android"           = { observed = "1.7.1",  license = "Apache-2.0" }
+"org.jetbrains.kotlinx:kotlinx-coroutines-core"              = { observed = "1.7.1",  license = "Apache-2.0" }
+"org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm"          = { observed = "1.7.1",  license = "Apache-2.0" }
+"org.jspecify:jspecify"                                      = { observed = "1.0.0",  license = "Apache-2.0" }
 [image]
 # Distro-level policy: Debian packages (base image + apt lines) are covered as
 # a set — Debian guarantees DFSG-free licenses and ships the exact license

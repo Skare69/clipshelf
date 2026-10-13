@@ -2,38 +2,141 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/ground"
     android:orientation="vertical">
 
-    <TextView
-        android:id="@+id/entry_status"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="12dp"
-        android:textColor="@color/text_secondary"
-        android:visibility="gone" />
+    <include layout="@layout/appbar" />
 
     <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false">
 
-        <LinearLayout
+        <com.google.android.material.card.MaterialCardView
+            style="@style/Widget.Parcel.Card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:padding="16dp">
+            android:layout_margin="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+            <TextView
+                android:id="@+id/entry_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textAppearance="@style/TextAppearance.Parcel.T2"
+                android:textColor="@color/ink2"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/entry_routing"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/routing_bg"
+                android:paddingStart="10dp"
+                android:paddingTop="4dp"
+                android:paddingEnd="10dp"
+                android:paddingBottom="4dp"
+                android:textAppearance="@style/TextAppearance.Parcel.T4"
+                android:textColor="@color/label"
+                android:visibility="gone" />
 
             <TextView
                 android:id="@+id/entry_title"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:textAppearance="?android:attr/textAppearanceLarge" />
+                android:layout_marginTop="12dp"
+                android:textAppearance="@style/TextAppearance.Parcel.T3Title" />
+
+            <TextView
+                android:id="@+id/entry_from"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textAppearance="@style/TextAppearance.Parcel.T2Body"
+                android:textColor="@color/ink2" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/contents_label"
+                android:textAppearance="@style/TextAppearance.Parcel.T1"
+                android:textColor="@color/ink2" />
 
             <TextView
                 android:id="@+id/entry_body"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:textAppearance="?android:attr/textAppearanceMedium" />
+                android:layout_marginTop="4dp"
+                android:textAppearance="@style/TextAppearance.Parcel.T3" />
+
+            <TextView
+                android:id="@+id/entry_prompt_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/entry_kind_prompt"
+                android:textAppearance="@style/TextAppearance.Parcel.T1"
+                android:textColor="@color/ink2"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/entry_prompt_text"
+                style="@style/Widget.Parcel.Code"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textIsSelectable="true"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/entry_copy_prompt"
+                style="@style/Widget.Parcel.Button.Text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:text="@string/action_copy_prompt"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/entry_install_label"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="@string/install_label"
+                android:textAppearance="@style/TextAppearance.Parcel.T1"
+                android:textColor="@color/ink2"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/entry_install_text"
+                style="@style/Widget.Parcel.Code"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textIsSelectable="true"
+                android:visibility="gone" />
+
+            <Button
+                android:id="@+id/entry_copy_install"
+                style="@style/Widget.Parcel.Button.Text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:minWidth="0dp"
+                android:text="@string/action_copy_install"
+                android:visibility="gone" />
+
+            <com.google.android.material.chip.ChipGroup
+                android:id="@+id/entry_tags"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp" />
 
             <LinearLayout
                 android:id="@+id/entry_containers"
@@ -42,21 +145,32 @@
                 android:layout_marginTop="8dp"
                 android:orientation="vertical" />
 
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="2dp"
+                android:layout_marginTop="16dp"
+                android:background="@drawable/perf"
+                android:layerType="software" />
+
             <Button
                 android:id="@+id/entry_open_url"
+                style="@style/Widget.Parcel.Button.Outlined"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
+                android:layout_marginTop="8dp"
                 android:text="@string/entry_open_url"
                 android:visibility="gone" />
 
             <Button
                 android:id="@+id/entry_remove"
-                android:layout_width="match_parent"
+                style="@style/Widget.Parcel.Button.Text.Danger"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="8dp"
+                android:minWidth="0dp"
                 android:text="@string/entry_remove"
                 android:visibility="gone" />
-        </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
     </ScrollView>
 </LinearLayout>

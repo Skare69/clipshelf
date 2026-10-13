@@ -1,6 +1,6 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.os.Handler;
@@ -23,7 +23,7 @@ import dev.clipshelf.app.outbox.OutboxStore;
  * enqueues prompt delivery, confirms "saved on phone", and returns to the
  * source app. No network access happens here.
  */
-public class ShareReceiverActivity extends Activity {
+public class ShareReceiverActivity extends AppCompatActivity {
 
     private static final long CONFIRM_VISIBLE_MS = 1500L;
     private static final String KEY_COMMITTED = "share_committed";
@@ -38,6 +38,9 @@ public class ShareReceiverActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_share);
+        Ui.applyInsets(this);
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        toolbar.setTitle(R.string.share_to_clipshelf);
 
         Intent intent = getIntent();
         TextView title = findViewById(R.id.share_title);

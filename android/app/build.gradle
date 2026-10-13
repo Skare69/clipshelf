@@ -148,6 +148,8 @@ tasks.register("seedRobolectricRepo", Copy) {
 
 dependencies {
     implementation "androidx.work:work-runtime:2.9.1"
+    implementation "com.google.android.material:material:1.13.0"
+    implementation "androidx.appcompat:appcompat:1.7.0"
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.robolectric:robolectric:4.14.1"
     // Real org.json for the JVM: android.jar ships a stub that throws

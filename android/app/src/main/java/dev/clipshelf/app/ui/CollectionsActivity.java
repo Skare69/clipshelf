@@ -1,6 +1,6 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.content.Intent;
 import android.os.Bundle;
 import android.view.LayoutInflater;
@@ -13,7 +13,9 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import android.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.List;
 
@@ -23,7 +25,7 @@ import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.net.Async;
 
 /** Shared-collection browsing, creation, and default-destination selection. */
-public class CollectionsActivity extends Activity {
+public class CollectionsActivity extends AppCompatActivity {
 
     private Creds.Session session;
     private List<Api.Collection> collections;
@@ -34,6 +36,10 @@ public class CollectionsActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_collections);
+        Ui.applyInsets(this);
+        Ui.bottomNav(this);
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        toolbar.setTitle(R.string.collections_title);
         session = Creds.session(this);
         if (session == null) {
             Ui.sessionExpired(this);
@@ -76,7 +82,7 @@ public class CollectionsActivity extends Activity {
     private void promptCreate() {
         EditText input = new EditText(this);
         input.setHint(R.string.collection_new_hint);
-        new AlertDialog.Builder(this)
+        new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.collection_new)
                 .setView(input)
                 .setPositiveButton(R.string.collection_create, (d, w) -> {
@@ -144,13 +150,15 @@ public class CollectionsActivity extends Activity {
             Api.Collection c = getItem(position);
             TextView name = v.findViewById(R.id.collection_name);
             TextView kind = v.findViewById(R.id.collection_kind);
+            TextView defTag = v.findViewById(R.id.collection_default_tag);
             Button def = v.findViewById(R.id.collection_set_default);
             Button members = v.findViewById(R.id.collection_manage);
 
             boolean isDefault = c.id.equals(defaultCollectionId);
-            name.setText(c.name + (isDefault ? "  ★" : ""));
+            name.setText(c.name);
             kind.setText("personal".equals(c.kind)
                     ? R.string.collection_kind_personal : R.string.collection_kind_shared);
+            defTag.setVisibility(isDefault ? View.VISIBLE : View.GONE);
 
             def.setVisibility(isDefault ? View.GONE : View.VISIBLE);
             def.setOnClickListener(iv -> setDefault(c));
@@ -162,6 +170,10 @@ public class CollectionsActivity extends Activity {
                 i.putExtra("name", c.name);
                 startActivity(i);
             });
+            // A card with no action shows no perforation and no empty action row.
+            int actions = isDefault && !manageable ? View.GONE : View.VISIBLE;
+            v.findViewById(R.id.collection_perf).setVisibility(actions);
+            v.findViewById(R.id.collection_actions).setVisibility(actions);
             return v;
         }
     }

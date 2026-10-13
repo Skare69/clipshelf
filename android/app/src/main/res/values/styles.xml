@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Parcel type ramp. Each step points at a static Archivo instance
+         (res/font): AppCompat drops variation axes when it reloads a font
+         resource, so weights and widths ship as files. sp only. -->
+    <style name="TextAppearance.Parcel" parent="android:TextAppearance">
+        <item name="android:fontFamily">@font/archivo_regular</item>
+        <item name="android:textColor">@color/ink</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T1">
+        <item name="android:textSize">13sp</item>
+        <item name="android:fontFamily">@font/archivo_bold</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T1Num">
+        <item name="android:textSize">13sp</item>
+        <item name="android:fontFamily">@font/archivo_bold</item>
+        <item name="android:fontFeatureSettings">tnum</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T1Body">
+        <item name="android:textSize">13sp</item>
+        <item name="android:fontFamily">@font/archivo_regular</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T2">
+        <item name="android:textSize">14sp</item>
+        <item name="android:fontFamily">@font/archivo_semibold</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T2Body">
+        <item name="android:textSize">14sp</item>
+        <item name="android:lineHeight">20sp</item>
+        <item name="android:fontFamily">@font/archivo_regular</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T3">
+        <item name="android:textSize">16sp</item>
+        <item name="android:lineHeight">24sp</item>
+        <item name="android:fontFamily">@font/archivo_regular</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T3Title">
+        <item name="android:textSize">16sp</item>
+        <item name="android:lineHeight">24sp</item>
+        <item name="android:fontFamily">@font/archivo_semibold</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T4">
+        <item name="android:textSize">20sp</item>
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.02</item>
+        <item name="android:fontFamily">@font/archivo_routing</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T4Dialog">
+        <item name="android:textSize">20sp</item>
+        <item name="android:fontFamily">@font/archivo_bold</item>
+    </style>
+
+    <style name="TextAppearance.Parcel.T5">
+        <item name="android:textSize">28sp</item>
+        <item name="android:fontFamily">@font/archivo_display</item>
+    </style>
+
+    <!-- Buttons: signal yellow fills the one primary action; outlined and
+         text buttons carry the rest. Controls use the 4dp corner, not pills. -->
+    <style name="ShapeAppearance.Parcel.Control" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">4dp</item>
+    </style>
+
+    <style name="Widget.Parcel.Button.Primary" parent="Widget.Material3.Button.TonalButton">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Parcel.T2</item>
+        <item name="android:textColor">@color/on_signal</item>
+        <item name="backgroundTint">@color/signal</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="strokeColor">@color/button_primary_stroke</item>
+        <item name="shapeAppearance">@style/ShapeAppearance.Parcel.Control</item>
+    </style>
+
+    <style name="Widget.Parcel.Button.Outlined" parent="Widget.Material3.Button.OutlinedButton">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Parcel.T2</item>
+        <item name="android:textColor">@color/ink</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="strokeColor">@color/field</item>
+        <item name="shapeAppearance">@style/ShapeAppearance.Parcel.Control</item>
+    </style>
+
+    <style name="Widget.Parcel.Button.Text" parent="Widget.Material3.Button.TextButton">
+        <item name="android:minHeight">48dp</item>
+        <item name="android:textAppearance">@style/TextAppearance.Parcel.T2</item>
+        <item name="android:textColor">@color/ink</item>
+        <item name="shapeAppearance">@style/ShapeAppearance.Parcel.Control</item>
+    </style>
+
+    <style name="Widget.Parcel.Button.Text.Danger">
+        <item name="android:textColor">@color/err</item>
+    </style>
+
+    <!-- Label card: label fill, 1 edge border, radius 6, borders not shadows. -->
+    <style name="Widget.Parcel.Card" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">@color/label</item>
+        <item name="strokeColor">@color/edge</item>
+        <item name="strokeWidth">1dp</item>
+        <item name="cardCornerRadius">6dp</item>
+        <item name="cardElevation">0dp</item>
+    </style>
+
+    <!-- Top app bar. -->
+    <style name="Widget.Parcel.Toolbar" parent="Widget.Material3.Toolbar">
+        <item name="android:background">@color/label</item>
+        <item name="titleTextAppearance">@style/TextAppearance.Parcel.T5</item>
+        <item name="titleTextColor">@color/ink</item>
+        <item name="subtitleTextAppearance">@style/TextAppearance.Parcel.T2</item>
+        <item name="subtitleTextColor">@color/ink2</item>
+        <item name="actionMenuTextColor">@color/ink</item>
+    </style>
+
+    <style name="Widget.Parcel.BottomNav" parent="Widget.Material3.BottomNavigationView">
+        <item name="backgroundTint">@color/label</item>
+        <!-- No tonal elevation overlay: the bar is plain label paper. -->
+        <item name="elevation">0dp</item>
+        <item name="labelVisibilityMode">labeled</item>
+    </style>
+
+    <!-- Category filter chip: label2 at rest, ink fill when selected. -->
+    <style name="Widget.Parcel.Chip" parent="Widget.Material3.Chip.Filter">
+        <item name="android:textAppearance">@style/TextAppearance.Parcel.T2</item>
+        <item name="chipBackgroundColor">@color/chip_bg</item>
+        <item name="android:textColor">@color/chip_text</item>
+        <item name="chipStrokeColor">@color/chip_stroke</item>
+        <item name="chipStrokeWidth">1dp</item>
+        <item name="chipCornerRadius">4dp</item>
+        <item name="checkedIconVisible">false</item>
+    </style>
+
+    <!-- Filled input: label2 fill, field border. -->
+    <style name="Widget.Parcel.Field" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <item name="boxBackgroundColor">@color/label2</item>
+        <item name="boxStrokeColor">@color/field_stroke</item>
+        <item name="boxStrokeWidth">1dp</item>
+        <item name="boxStrokeWidthFocused">1dp</item>
+        <item name="boxCornerRadiusTopStart">4dp</item>
+        <item name="boxCornerRadiusTopEnd">4dp</item>
+        <item name="boxCornerRadiusBottomStart">4dp</item>
+        <item name="boxCornerRadiusBottomEnd">4dp</item>
+        <item name="hintTextAppearance">@style/TextAppearance.Parcel.T1</item>
+    </style>
+
+    <!-- Monospace block for prompts and install commands. -->
+    <style name="Widget.Parcel.Code" parent="android:Widget.Material.TextView">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:lineHeight">20sp</item>
+        <item name="android:textColor">@color/ink</item>
+        <item name="android:background">@drawable/code_bg</item>
+        <item name="android:padding">12dp</item>
+    </style>
+</resources>

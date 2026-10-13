@@ -122,10 +122,9 @@ public final class Api {
     }
 
     public static final class Entry {
-        public final String id, kind, url, title, desc, text, cat;
-        public final List<String> tags, sources, contributors;
-        public final String install;
-        public final boolean found, interpreted, canRemove;
+        public final String id, kind, url, title, desc, text, summary, found, install;
+        public final List<String> cats, tags, sources, contributors;
+        public final boolean interpreted, canRemove;
 
         Entry(JSONObject o) {
             id = o.optString("id");
@@ -134,14 +133,63 @@ public final class Api {
             title = o.optString("title", "");
             desc = o.optString("desc", "");
             text = o.optString("text", "");
-            cat = o.optString("cat", "");
+            summary = o.optString("summary", "");
+            // "found" carries the entry's creation time as an ISO string.
+            found = o.optString("found", "");
             install = o.optString("install", "");
-            found = o.optBoolean("found");
+            cats = strings(o, "cat");
+            tags = strings(o, "tags");
+            sources = sourceLines(o);
+            contributors = contributorEmails(o);
             interpreted = o.optBoolean("interpreted");
             canRemove = o.optBoolean("can_remove");
-            tags = strings(o, "tags");
-            sources = strings(o, "sources");
-            contributors = strings(o, "contributors");
+        }
+
+        /** First category for the routing block; "Other" when uninterpreted. */
+        public String catLabel() {
+            return cats.isEmpty() ? "Other" : cats.get(0);
+        }
+
+        /** Contributors are {id,email} objects; render the emails. */
+        private static List<String> contributorEmails(JSONObject o) {
+            List<String> out = new ArrayList<>();
+            JSONArray a = o.optJSONArray("contributors");
+            if (a == null) {
+                return out;
+            }
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject c = a.optJSONObject(i);
+                if (c == null) {
+                    continue;
+                }
+                String email = c.optString("email", "");
+                if (!email.isEmpty()) {
+                    out.add(email);
+                }
+            }
+            return out;
+        }
+
+        /** Sources are {url,title} objects; render "title — url" lines. */
+        private static List<String> sourceLines(JSONObject o) {
+            List<String> out = new ArrayList<>();
+            JSONArray a = o.optJSONArray("sources");
+            if (a == null) {
+                return out;
+            }
+            for (int i = 0; i < a.length(); i++) {
+                JSONObject s = a.optJSONObject(i);
+                if (s == null) {
+                    continue;
+                }
+                String url = s.optString("url", "");
+                if (url.isEmpty()) {
+                    continue;
+                }
+                String title = s.optString("title", "");
+                out.add(title.isEmpty() ? url : title + " — " + url);
+            }
+            return out;
         }
     }
 

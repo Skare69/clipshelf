@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Parcel tokens, dark. -->
+    <color name="ground">#0E1013</color>
+    <color name="label">#1A1D22</color>
+    <color name="label2">#22262C</color>
+    <color name="ink">#EEF0F3</color>
+    <color name="ink2">#B2B9C3</color>
+    <color name="ink3">#8D95A0</color>
+    <color name="hair">#2E333B</color>
+    <color name="edge">#454C56</color>
+    <color name="field">#7D8590</color>
+    <color name="signal">#FFC629</color>
+    <color name="on_signal">#15171A</color>
+    <color name="ok">#4CC38A</color>
+    <color name="err">#FF7A7A</color>
+    <color name="err_soft">#351A1C</color>
+    <color name="button_primary_stroke">#FFC629</color>
+</resources>

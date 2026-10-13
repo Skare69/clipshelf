@@ -1,6 +1,5 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -11,7 +10,9 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import android.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
+
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.List;
 
@@ -23,9 +24,11 @@ import dev.clipshelf.app.work.WorkScheduler;
 /**
  * Offline-readable outbox for the active profile, grouped implicitly by row
  * identity; rows saved under another account/server are labeled and skipped
- * by delivery, never rerouted. Shows the platform background limits honestly.
+ * by delivery, never rerouted. Each row shows its route, On phone ->
+ * Delivered, with the state sentence as the main signal. Shows the platform
+ * background limits honestly.
  */
-public class OutboxActivity extends Activity {
+public class OutboxActivity extends AppCompatActivity {
 
     private static final int PAGE_SIZE = 100;
 
@@ -33,17 +36,23 @@ public class OutboxActivity extends Activity {
     private List<OutboxStore.Row> rows;
     private Adapter adapter;
     private Button loadOlder;
+    private TextView empty;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_outbox);
+        Ui.applyInsets(this);
+        Ui.bottomNav(this);
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        toolbar.setTitle(R.string.outbox_title);
         db = new OutboxStore(this);
         ListView list = findViewById(R.id.outbox_list);
 
         View header = LayoutInflater.from(this).inflate(R.layout.item_outbox_header, list, false);
         Button retry = header.findViewById(R.id.outbox_retry);
         Button clear = header.findViewById(R.id.outbox_clear);
+        empty = header.findViewById(R.id.outbox_empty);
         retry.setOnClickListener(v -> {
             WorkScheduler.drainNow(this);
             Toast.makeText(this, R.string.outbox_toast_requeued, Toast.LENGTH_SHORT).show();
@@ -58,6 +67,10 @@ public class OutboxActivity extends Activity {
         View footer = LayoutInflater.from(this).inflate(R.layout.item_outbox_limits, list, false);
         loadOlder = footer.findViewById(R.id.outbox_load_older);
         loadOlder.setOnClickListener(v -> loadOlder());
+        TextView capacity = footer.findViewById(R.id.outbox_limits_capacity);
+        capacity.setText(getString(R.string.limits_capacity,
+                dev.clipshelf.app.outbox.OutboxPolicy.MAX_OUTBOX_ROWS,
+                dev.clipshelf.app.outbox.OutboxPolicy.MAX_OUTBOX_TOTAL_TEXT_BYTES / (1024 * 1024)));
         list.addFooterView(footer);
 
         adapter = new Adapter();
@@ -81,7 +94,6 @@ public class OutboxActivity extends Activity {
         boolean more = !rows.isEmpty() && rows.size() % PAGE_SIZE == 0;
         loadOlder.setVisibility(more ? View.VISIBLE : View.GONE);
         adapter.notifyDataSetChanged();
-        TextView empty = findViewById(R.id.outbox_empty);
         empty.setVisibility(rows.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
@@ -104,7 +116,7 @@ public class OutboxActivity extends Activity {
                 && row.state != OutboxStore.STATE_REJECTED) {
             return;
         }
-        new AlertDialog.Builder(this)
+        new MaterialAlertDialogBuilder(this)
                 .setMessage(row.lastError != null ? row.lastError : getString(R.string.outbox_retry_now))
                 .setPositiveButton(R.string.outbox_requeue, (d, w) -> {
                     db.requeue(row.id);
@@ -146,7 +158,12 @@ public class OutboxActivity extends Activity {
             TextView state = v.findViewById(R.id.outbox_state);
             TextView text = v.findViewById(R.id.outbox_text);
             TextView meta = v.findViewById(R.id.outbox_meta);
+            TextView date = v.findViewById(R.id.outbox_date);
+            TextView attempts = v.findViewById(R.id.outbox_attempts);
             TextView error = v.findViewById(R.id.outbox_error);
+            View dotA = v.findViewById(R.id.outbox_dot_a);
+            View dotB = v.findViewById(R.id.outbox_dot_b);
+            View line = v.findViewById(R.id.outbox_line);
 
             text.setText(row.text.length() > 200 ? row.text.substring(0, 200) + "…" : row.text);
 
@@ -154,41 +171,73 @@ public class OutboxActivity extends Activity {
             boolean otherIdentity = profile == null
                     || !row.instanceId.equals(profile.instanceId) || !row.userId.equals(profile.userId);
 
-            int stateRes;
-            int stateColor;
+            // Route On phone -> Delivered. The sentence under the line is the
+            // main signal; dots only reinforce it. The app never shows server
+            // steps after delivery because it cannot know them.
+            int sentenceRes;
+            int sentenceColor = R.color.ink;
+            int dotARes = R.drawable.dot_current;
+            int dotBRes = R.drawable.dot_todo;
+            int lineColor = R.color.hair;
             switch (row.state) {
                 case OutboxStore.STATE_DELIVERED:
-                    stateRes = R.string.outbox_state_delivered;
-                    stateColor = R.color.status_ok;
+                    sentenceRes = R.string.outbox_state_delivered;
+                    sentenceColor = R.color.ok;
+                    dotARes = R.drawable.dot_done;
+                    dotBRes = R.drawable.dot_done;
+                    lineColor = R.color.ink;
                     break;
                 case OutboxStore.STATE_REJECTED:
-                    stateRes = R.string.outbox_state_rejected;
-                    stateColor = R.color.status_error;
+                    sentenceRes = R.string.outbox_state_rejected;
+                    sentenceColor = R.color.err;
+                    dotARes = R.drawable.dot_done;
+                    dotBRes = R.drawable.dot_stopped;
                     break;
                 case OutboxStore.STATE_PAUSED:
+                    sentenceRes = R.string.outbox_state_paused_auth;
+                    sentenceColor = R.color.ink2;
+                    break;
                 case OutboxStore.STATE_PAUSED_MISMATCH:
-                    stateRes = R.string.outbox_state_paused;
-                    stateColor = R.color.status_paused;
+                    sentenceRes = R.string.outbox_state_paused_mismatch;
+                    sentenceColor = R.color.ink2;
+                    dotARes = R.drawable.dot_done;
                     break;
                 default:
-                    stateRes = R.string.outbox_state_queued;
-                    stateColor = R.color.text_secondary;
+                    sentenceRes = R.string.outbox_state_queued;
+                    break;
             }
-            state.setText(getString(stateRes) + (row.attempts > 0 ? "  ·  " + row.attempts : ""));
-            state.setTextColor(getColor(stateColor));
+            String err0 = row.lastError == null ? "" : row.lastError;
+            state.setText(sentenceRes == R.string.outbox_state_rejected
+                    ? getString(sentenceRes, err0)
+                    : getString(sentenceRes));
+            state.setTextColor(getColor(sentenceColor));
+            dotA.setBackgroundResource(dotARes);
+            dotB.setBackgroundResource(dotBRes);
+            line.setBackgroundResource(lineColor);
 
             if (otherIdentity) {
                 meta.setText(getString(R.string.outbox_other_account, row.accountEmail, row.endpoint));
+                meta.setTextColor(getColor(R.color.ink2));
             } else {
-                String dest = row.requestedCollectionId != null
-                        ? getString(R.string.share_default_destination, row.requestedCollectionId) + "  ·  " : "";
+                // Name the destination when it is the profile's default; an
+                // older or changed destination keeps its id, the only truth here.
+                String destName = row.requestedCollectionId != null
+                        && row.requestedCollectionId.equals(profile.defaultCollectionId)
+                        && profile.defaultCollectionName != null && !profile.defaultCollectionName.isEmpty()
+                        ? profile.defaultCollectionName : row.requestedCollectionId;
+                String dest = destName != null
+                        ? getString(R.string.share_default_destination, destName) + "  ·  " : "";
                 meta.setText(dest + row.endpoint);
+                meta.setTextColor(getColor(R.color.ink2));
             }
-            meta.setTextColor(getColor(otherIdentity ? R.color.status_paused : R.color.text_secondary));
+
+            date.setText(Ui.time(row.createdAt));
+            attempts.setText(row.attempts > 0 ? String.valueOf(row.attempts) : "");
 
             String err = row.lastError != null ? row.lastError : "";
+            boolean showErr = !err.isEmpty() && row.state != OutboxStore.STATE_REJECTED;
             error.setText(err);
-            error.setVisibility(err.isEmpty() ? View.GONE : View.VISIBLE);
+            error.setVisibility(showErr ? View.VISIBLE : View.GONE);
             return v;
         }
     }

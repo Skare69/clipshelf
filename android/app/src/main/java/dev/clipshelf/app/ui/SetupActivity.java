@@ -1,6 +1,7 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
+import androidx.appcompat.app.AppCompatActivity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.widget.Button;
 import android.widget.EditText;
@@ -9,6 +10,7 @@ import android.widget.TextView;
 import java.io.IOException;
 
 import dev.clipshelf.app.Creds;
+import dev.clipshelf.app.PendingLogout;
 import dev.clipshelf.app.R;
 import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.net.Async;
@@ -22,18 +24,31 @@ import dev.clipshelf.app.work.DurableShare;
  * registered BEFORE the app will accept any share -> paused outbox rows of
  * this identity resume. Password is used once and never stored.
  */
-public class SetupActivity extends Activity {
+public class SetupActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_setup);
+        Ui.applyInsets(this);
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        toolbar.setTitle(R.string.setup_title);
 
         EditText server = findViewById(R.id.setup_server);
         EditText email = findViewById(R.id.setup_email);
         EditText password = findViewById(R.id.setup_password);
         Button go = findViewById(R.id.setup_go);
         TextView status = findViewById(R.id.setup_status);
+
+        // A sign-out whose server-side revocation still waits stays visible
+        // here until the token is revoked.
+        java.util.List<String> pendingLogouts = PendingLogout.pendingLabels(this);
+        if (!pendingLogouts.isEmpty()) {
+            TextView pending = findViewById(R.id.setup_pending);
+            pending.setText(getString(R.string.logout_pending,
+                    android.text.TextUtils.join(", ", pendingLogouts)));
+            pending.setVisibility(android.view.View.VISIBLE);
+        }
 
         Creds.Profile existing = Creds.profile(this);
         if (existing != null) {
@@ -93,6 +108,8 @@ public class SetupActivity extends Activity {
                     return;
                 }
                 setResult(RESULT_OK);
+                // MainActivity has already finished; land straight in the library.
+                startActivity(new Intent(this, LibraryActivity.class));
                 finish();
             });
         });

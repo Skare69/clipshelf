@@ -1,6 +1,6 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
+import androidx.appcompat.app.AppCompatActivity;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -12,7 +12,7 @@ import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import android.app.AlertDialog;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.List;
 
@@ -22,7 +22,7 @@ import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.net.Async;
 
 /** Shared-collection membership management (server enforces owner rules). */
-public class CollectionDetailActivity extends Activity {
+public class CollectionDetailActivity extends AppCompatActivity {
 
     private Creds.Session session;
     private String collectionId;
@@ -33,6 +33,7 @@ public class CollectionDetailActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_collection_detail);
+        Ui.applyInsets(this);
         session = Creds.session(this);
         if (session == null) {
             Ui.sessionExpired(this);
@@ -40,7 +41,9 @@ public class CollectionDetailActivity extends Activity {
             return;
         }
         collectionId = getIntent().getStringExtra("collectionId");
-        setTitle(getIntent().getStringExtra("name"));
+        androidx.appcompat.widget.Toolbar toolbar = findViewById(R.id.toolbar);
+        toolbar.setTitle(getIntent().getStringExtra("name"));
+        Ui.up(this);
 
         ListView list = findViewById(R.id.members_list);
         adapter = new Adapter();
@@ -115,7 +118,7 @@ public class CollectionDetailActivity extends Activity {
             Button remove = v.findViewById(R.id.member_remove);
             // The server rejects removing the owner or non-members; hide what cannot work.
             remove.setVisibility(m.isOwner ? View.GONE : View.VISIBLE);
-            remove.setOnClickListener(iv -> new AlertDialog.Builder(CollectionDetailActivity.this)
+            remove.setOnClickListener(iv -> new MaterialAlertDialogBuilder(CollectionDetailActivity.this)
                     .setMessage(getString(R.string.member_remove) + " " + m.email + "?")
                     .setPositiveButton(R.string.ok, (d, w) -> Async.goUi(CollectionDetailActivity.this, () -> {
                         Api.removeMember(session.profile.endpoint, session.token, collectionId, m.id);

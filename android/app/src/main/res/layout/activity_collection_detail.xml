@@ -2,40 +2,67 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="8dp">
+    android:background="@color/ground"
+    android:orientation="vertical">
+
+    <include layout="@layout/appbar" />
 
     <TextView
         android:id="@+id/members_status"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:textColor="@color/text_secondary"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:textAppearance="@style/TextAppearance.Parcel.T2"
+        android:textColor="@color/ink2"
         android:visibility="gone" />
 
     <ListView
         android:id="@+id/members_list"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:clipToPadding="false"
+        android:divider="@android:color/transparent"
+        android:dividerHeight="8dp"
+        android:listSelector="@android:color/transparent"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal">
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingStart="16dp"
+        android:paddingTop="8dp"
+        android:paddingEnd="16dp"
+        android:paddingBottom="8dp">
 
-        <EditText
-            android:id="@+id/member_add_email"
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.Parcel.Field"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="@string/member_add_hint"
-            android:importantForAutofill="no"
-            android:inputType="textEmailAddress" />
+            android:hint="@string/member_add_hint">
+
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/member_add_email"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:importantForAutofill="no"
+                android:inputType="textEmailAddress"
+                android:textAppearance="@style/TextAppearance.Parcel.T3" />
+        </com.google.android.material.textfield.TextInputLayout>
 
         <Button
             android:id="@+id/member_add_go"
+            style="@style/Widget.Parcel.Button.Primary"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
             android:text="@string/member_add" />
     </LinearLayout>
 </LinearLayout>

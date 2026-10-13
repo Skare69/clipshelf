@@ -4,8 +4,20 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Stylized shelf with captured clips -->
+    <!-- Parcel mark: white label with an ink border inside the 66dp safe
+         zone, a short routing bar top-left, and two field lines under it. -->
     <path
         android:fillColor="#FFFFFF"
-        android:pathData="M30,32 h48 v10 h-48 z M30,49 h48 v10 h-48 z M30,66 h30 v10 h-30 z" />
+        android:strokeColor="#15171A"
+        android:strokeWidth="2.5"
+        android:pathData="M31.25,37h45.5v34h-45.5z" />
+    <path
+        android:fillColor="#15171A"
+        android:pathData="M36,42h16v5h-16z" />
+    <path
+        android:fillColor="#15171A"
+        android:pathData="M36,52h36v3.5h-36z" />
+    <path
+        android:fillColor="#15171A"
+        android:pathData="M36,59.5h26v3.5h-26z" />
 </vector>

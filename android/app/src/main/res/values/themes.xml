@@ -1,12 +1,44 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Clipshelf" parent="@android:style/Theme.Material.Light.DarkActionBar">
-        <item name="android:colorPrimary">@color/primary</item>
-        <item name="android:colorPrimaryDark">@color/primary_dark</item>
-        <item name="android:colorAccent">@color/accent</item>
-        <item name="android:windowBackground">@android:color/white</item>
-        <!-- targetSdk 35 forces edge-to-edge: without this the content draws
-             underneath the status bar and action bar. -->
-        <item name="android:fitsSystemWindows">true</item>
+    <!-- Material role mapping per the Parcel contract. Colors flip through
+         values-night; no dynamic color: the palette is fixed. -->
+    <style name="Theme.Clipshelf" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/ink</item>
+        <item name="colorOnPrimary">@color/label</item>
+        <item name="colorPrimaryContainer">@color/signal</item>
+        <item name="colorOnPrimaryContainer">@color/on_signal</item>
+        <item name="colorSecondaryContainer">@color/label2</item>
+        <item name="colorOnSecondaryContainer">@color/ink</item>
+        <item name="colorSurface">@color/label</item>
+        <item name="colorOnSurface">@color/ink</item>
+        <item name="colorOnSurfaceVariant">@color/ink2</item>
+        <item name="colorOutline">@color/field</item>
+        <item name="colorOutlineVariant">@color/hair</item>
+        <item name="colorError">@color/err</item>
+        <item name="colorErrorContainer">@color/err_soft</item>
+        <item name="colorOnErrorContainer">@color/err</item>
+        <item name="android:colorBackground">@color/ground</item>
+        <item name="android:windowBackground">@color/ground</item>
+        <item name="android:statusBarColor">@color/label</item>
+        <item name="android:navigationBarColor">@color/label</item>
+        <!-- Type through the theme's roles, never a theme-wide fontFamily:
+             that one would override every TextView's textAppearance font. -->
+        <item name="textAppearanceDisplaySmall">@style/TextAppearance.Parcel.T5</item>
+        <item name="textAppearanceHeadlineLarge">@style/TextAppearance.Parcel.T5</item>
+        <item name="textAppearanceHeadlineMedium">@style/TextAppearance.Parcel.T4Dialog</item>
+        <item name="textAppearanceHeadlineSmall">@style/TextAppearance.Parcel.T4Dialog</item>
+        <item name="textAppearanceTitleLarge">@style/TextAppearance.Parcel.T4Dialog</item>
+        <item name="textAppearanceTitleMedium">@style/TextAppearance.Parcel.T3Title</item>
+        <item name="textAppearanceTitleSmall">@style/TextAppearance.Parcel.T2</item>
+        <item name="textAppearanceBodyLarge">@style/TextAppearance.Parcel.T3</item>
+        <item name="textAppearanceBodyMedium">@style/TextAppearance.Parcel.T3</item>
+        <item name="textAppearanceBodySmall">@style/TextAppearance.Parcel.T1Body</item>
+        <item name="textAppearanceLabelLarge">@style/TextAppearance.Parcel.T2</item>
+        <item name="textAppearanceLabelMedium">@style/TextAppearance.Parcel.T1</item>
+        <item name="textAppearanceLabelSmall">@style/TextAppearance.Parcel.T1</item>
+        <item name="android:textAppearance">@style/TextAppearance.Parcel.T3</item>
+        <item name="android:textAppearanceSmall">@style/TextAppearance.Parcel.T3</item>
+        <item name="android:textAppearanceMedium">@style/TextAppearance.Parcel.T3</item>
+        <item name="android:textAppearanceLarge">@style/TextAppearance.Parcel.T4Dialog</item>
     </style>
 </resources>

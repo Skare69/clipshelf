@@ -1,11 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="primary">#1B4F5E</color>
-    <color name="primary_dark">#123540</color>
-    <color name="accent">#B2703C</color>
-    <color name="ic_launcher_background">#1B4F5E</color>
-    <color name="status_paused">#B2703C</color>
-    <color name="status_error">#9C3B2E</color>
-    <color name="status_ok">#2E6B46</color>
-    <color name="text_secondary">#5A6570</color>
+    <!-- Parcel tokens, light. Dark variants live in values-night/colors.xml. -->
+    <color name="ground">#E9EBEE</color>
+    <color name="label">#FFFFFF</color>
+    <color name="label2">#F3F4F6</color>
+    <color name="ink">#15171A</color>
+    <color name="ink2">#4A5059</color>
+    <color name="ink3">#646B75</color>
+    <color name="hair">#D4D8DE</color>
+    <color name="edge">#BCC2CA</color>
+    <color name="field">#767E88</color>
+    <color name="signal">#FFC629</color>
+    <color name="on_signal">#15171A</color>
+    <color name="ok">#18794E</color>
+    <color name="err">#C0172B</color>
+    <color name="err_soft">#FCE9EA</color>
+    <!-- Primary stroke is ink in light mode only; dark mode draws no stroke. -->
+    <color name="button_primary_stroke">#15171A</color>
+    <color name="ic_launcher_background">#FFC629</color>
 </resources>

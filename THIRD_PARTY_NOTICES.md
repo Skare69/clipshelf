@@ -95,38 +95,74 @@ Apache-2.0.
 | Artifact | Resolved | License | Copyright holder |
 |---|---|---|---|
 | androidx.work:work-runtime | 2.9.1 | Apache-2.0 | The Android Open Source Project |
-| androidx.annotation:annotation | 1.3.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.annotation:annotation-experimental | 1.3.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.arch.core:core-common | 2.1.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.arch.core:core-runtime | 2.1.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.collection:collection | 1.0.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.concurrent:concurrent-futures | 1.0.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.core:core | 1.9.0 | Apache-2.0 | The Android Open Source Project |
-| androidx.lifecycle:lifecycle-common | 2.5.1 | Apache-2.0 | The Android Open Source Project |
-| androidx.lifecycle:lifecycle-livedata | 2.5.1 | Apache-2.0 | The Android Open Source Project |
-| androidx.lifecycle:lifecycle-livedata-core | 2.5.1 | Apache-2.0 | The Android Open Source Project |
-| androidx.lifecycle:lifecycle-runtime | 2.5.1 | Apache-2.0 | The Android Open Source Project |
-| androidx.lifecycle:lifecycle-service | 2.5.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.activity:activity | 1.8.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.annotation:annotation | 1.8.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.annotation:annotation-jvm | 1.8.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.annotation:annotation-experimental | 1.4.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.appcompat:appcompat | 1.7.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.appcompat:appcompat-resources | 1.7.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.arch.core:core-common | 2.2.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.arch.core:core-runtime | 2.2.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.cardview:cardview | 1.0.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.collection:collection | 1.4.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.collection:collection-jvm | 1.4.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.concurrent:concurrent-futures | 1.1.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.constraintlayout:constraintlayout | 2.1.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.constraintlayout:constraintlayout-core | 1.0.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.coordinatorlayout:coordinatorlayout | 1.1.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.core:core | 1.13.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.core:core-ktx | 1.13.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.cursoradapter:cursoradapter | 1.0.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.customview:customview | 1.1.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.drawerlayout:drawerlayout | 1.1.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.dynamicanimation:dynamicanimation | 1.1.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.emoji2:emoji2 | 1.3.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.emoji2:emoji2-views-helper | 1.3.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.fragment:fragment | 1.5.4 | Apache-2.0 | The Android Open Source Project |
+| androidx.graphics:graphics-shapes | 1.0.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.graphics:graphics-shapes-android | 1.0.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.interpolator:interpolator | 1.0.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-common | 2.6.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-livedata | 2.6.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-livedata-core | 2.6.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-process | 2.6.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-runtime | 2.6.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-service | 2.6.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-viewmodel | 2.6.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.lifecycle:lifecycle-viewmodel-savedstate | 2.6.2 | Apache-2.0 | The Android Open Source Project |
+| androidx.loader:loader | 1.0.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.profileinstaller:profileinstaller | 1.3.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.recyclerview:recyclerview | 1.2.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.resourceinspection:resourceinspection-annotation | 1.0.1 | Apache-2.0 | The Android Open Source Project |
 | androidx.room:room-common | 2.5.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.room:room-ktx | 2.5.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.room:room-runtime | 2.5.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.savedstate:savedstate | 1.2.1 | Apache-2.0 | The Android Open Source Project |
 | androidx.sqlite:sqlite | 2.3.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.sqlite:sqlite-framework | 2.3.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.startup:startup-runtime | 1.1.1 | Apache-2.0 | The Android Open Source Project |
 | androidx.tracing:tracing | 1.0.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.transition:transition | 1.5.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.vectordrawable:vectordrawable | 1.1.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.vectordrawable:vectordrawable-animated | 1.1.0 | Apache-2.0 | The Android Open Source Project |
 | androidx.versionedparcelable:versionedparcelable | 1.1.1 | Apache-2.0 | The Android Open Source Project |
+| androidx.viewpager:viewpager | 1.0.0 | Apache-2.0 | The Android Open Source Project |
+| androidx.viewpager2:viewpager2 | 1.0.0 | Apache-2.0 | The Android Open Source Project |
+| com.google.android.material:material | 1.13.0 | Apache-2.0 | Google LLC |
+| com.google.errorprone:error_prone_annotations | 2.15.0 | Apache-2.0 | Google LLC |
+| com.google.guava:listenablefuture | 1.0 | Apache-2.0 | Google LLC (Guava extract; POM omits the license, parent `guava-parent` is Apache-2.0) |
 | org.jetbrains:annotations | 23.0.0 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlin:kotlin-stdlib | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlin:kotlin-stdlib-common | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
-| org.jetbrains.kotlin:kotlin-stdlib-jdk7 | 1.8.20 | Apache-2.0 | JetBrains s.r.o. |
-| org.jetbrains.kotlin:kotlin-stdlib-jdk8 | 1.8.20 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib-jdk7 | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib-jdk8 | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-android | 1.7.1 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-core | 1.7.1 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm | 1.7.1 | Apache-2.0 | JetBrains s.r.o. |
-| com.google.guava:listenablefuture | 1.0 | Apache-2.0 | Google LLC (Guava extract; POM omits the license, parent `guava-parent` is Apache-2.0) |
+| org.jspecify:jspecify | 1.0.0 | Apache-2.0 | The JSpecify authors |
 
-`kotlinx-coroutines-bom` is a Gradle platform (metadata only) and is not
-packaged. The Gradle wrapper, Gradle 8.9, and AGP 8.7.3 are Apache-2.0 build
+`kotlinx-coroutines-bom` and `kotlin-bom` are Gradle platforms (metadata
+only) and are not packaged. The Gradle wrapper, Gradle 8.9, and AGP 8.7.3 are Apache-2.0 build
 tooling; they are not shipped in the APK.
 
 ## Bundled fonts

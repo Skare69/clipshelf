@@ -1,149 +1,43 @@
 package dev.clipshelf.app.ui;
 
-import android.app.Activity;
 import android.content.Intent;
 import android.os.Bundle;
-import android.view.View;
-import android.widget.Button;
-import android.widget.TextView;
-import android.widget.Toast;
 
-import android.app.AlertDialog;
+import androidx.appcompat.app.AppCompatActivity;
 
 import dev.clipshelf.app.Creds;
 import dev.clipshelf.app.PendingLogout;
-import dev.clipshelf.app.R;
 import dev.clipshelf.app.net.Async;
-import dev.clipshelf.app.outbox.OutboxStore;
 import dev.clipshelf.app.work.WorkScheduler;
 
-import java.util.List;
-
 /**
- * Hub. Re-registers the durable periodic drain on every open (KEEP is
- * idempotent) and prompts a drain, so a process kill between the local
+ * Entry router. Re-registers the durable periodic drain on every open (KEEP
+ * is idempotent) and prompts a drain, so a process kill between the local
  * outbox commit and its one-time enqueue is also healed by the next open.
+ * Signed in routes straight to Library; otherwise to setup.
  */
-public class MainActivity extends Activity {
+public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        setContentView(R.layout.activity_main);
-    }
-
-    @Override
-    protected void onResume() {
-        super.onResume();
-        render();
         if (!PendingLogout.pendingLabels(this).isEmpty()) {
+            // This router finishes at once; the revocation outlives it.
+            android.content.Context app = getApplicationContext();
             Async.go(() -> {
-                PendingLogout.revokeAll(this);
+                PendingLogout.revokeAll(app);
                 return null;
-            }, (r, e) -> render());
+            }, (r, e) -> { });
         }
         Creds.Profile profile = Creds.profile(this);
-        if (profile != null && !profile.instanceId.isEmpty()) {
+        boolean signedIn = profile != null && !profile.instanceId.isEmpty();
+        if (signedIn) {
             WorkScheduler.ensurePeriodic(this);
             WorkScheduler.drainNow(this);
+            startActivity(new Intent(this, LibraryActivity.class));
+        } else {
+            startActivity(new Intent(this, SetupActivity.class));
         }
-    }
-
-    private void render() {
-        Creds.Profile p = Creds.profile(this);
-        TextView email = findViewById(R.id.main_email);
-        TextView server = findViewById(R.id.main_server);
-        TextView instance = findViewById(R.id.main_instance);
-        TextView summary = findViewById(R.id.main_outbox_summary);
-        TextView hint = findViewById(R.id.main_hint);
-        Button setup = findViewById(R.id.main_setup);
-        Button outbox = findViewById(R.id.main_outbox);
-        Button library = findViewById(R.id.main_library);
-        Button collections = findViewById(R.id.main_collections);
-        Button settings = findViewById(R.id.main_settings);
-        Button logout = findViewById(R.id.main_logout);
-
-        boolean signedIn = p != null && !p.instanceId.isEmpty();
-        setup.setVisibility(signedIn ? View.GONE : View.VISIBLE);
-        outbox.setVisibility(signedIn ? View.VISIBLE : View.GONE);
-        library.setVisibility(signedIn ? View.VISIBLE : View.GONE);
-        collections.setVisibility(signedIn ? View.VISIBLE : View.GONE);
-        settings.setVisibility(signedIn ? View.VISIBLE : View.GONE);
-        logout.setVisibility(signedIn ? View.VISIBLE : View.GONE);
-        hint.setVisibility(signedIn ? View.VISIBLE : View.GONE);
-
-        setup.setOnClickListener(v -> startActivity(new Intent(this, SetupActivity.class)));
-
-        if (!signedIn) {
-            email.setText(R.string.not_signed_in);
-            server.setVisibility(View.GONE);
-            instance.setVisibility(View.GONE);
-            summary.setVisibility(View.GONE);
-            List<String> pending = PendingLogout.pendingLabels(this);
-            if (pending.isEmpty()) {
-                hint.setVisibility(View.GONE);
-            } else {
-                hint.setText(getString(R.string.logout_pending,
-                        android.text.TextUtils.join(", ", pending)));
-                hint.setVisibility(View.VISIBLE);
-            }
-            return;
-        }
-
-        hint.setText(R.string.action_share_hint);
-        email.setText(getString(R.string.signed_in_as, p.email));
-        server.setText(getString(R.string.server_label, p.endpoint));
-        instance.setText(getString(R.string.instance_label,
-                p.instanceId.length() > 8 ? p.instanceId.substring(0, 8) + "…" : p.instanceId));
-        server.setVisibility(View.VISIBLE);
-        instance.setVisibility(View.VISIBLE);
-
-        OutboxStore db = new OutboxStore(this);
-        int[] counts = db.countsFor(p.instanceId, p.userId);
-        int others = db.countOtherIdentities(p.instanceId, p.userId);
-        int paused = counts[OutboxStore.STATE_PAUSED] + counts[OutboxStore.STATE_PAUSED_MISMATCH];
-        String text = getString(R.string.outbox_summary,
-                counts[OutboxStore.STATE_QUEUED], paused,
-                counts[OutboxStore.STATE_DELIVERED]);
-        if (counts[OutboxStore.STATE_REJECTED] > 0) {
-            text += "  ·  " + getString(R.string.outbox_rejected_note, counts[OutboxStore.STATE_REJECTED]);
-        }
-        if (others > 0) {
-            text += "  (+" + others + ")";
-        }
-        summary.setText(text);
-        summary.setVisibility(View.VISIBLE);
-
-        outbox.setOnClickListener(v -> startActivity(new Intent(this, OutboxActivity.class)));
-        library.setOnClickListener(v -> startActivity(new Intent(this, LibraryActivity.class)));
-        collections.setOnClickListener(v -> startActivity(new Intent(this, CollectionsActivity.class)));
-        settings.setOnClickListener(v -> startActivity(new Intent(this, SettingsActivity.class)));
-        logout.setOnClickListener(v -> confirmLogout());
-    }
-
-    private void confirmLogout() {
-        new AlertDialog.Builder(this)
-                .setTitle(R.string.logout_confirm_title)
-                .setMessage(R.string.logout_confirm_message)
-                .setPositiveButton(R.string.ok, (d, w) -> logout())
-                .setNegativeButton(R.string.cancel, null)
-                .show();
-    }
-
-    private void logout() {
-        Creds.Profile p = Creds.profile(this);
-        Creds.Session s = Creds.session(this);
-        if (p == null || s == null) {
-            Creds.clear(this); // outbox rows stay for this identity
-            render();
-            return;
-        }
-        Async.go(() -> PendingLogout.signOut(this, p.endpoint, p.email, s.token), (notice, e) -> {
-            Creds.clear(this); // outbox rows stay for this identity
-            if (notice != null) {
-                Toast.makeText(this, notice, Toast.LENGTH_LONG).show();
-            }
-            render();
-        });
+        finish();
     }
 }

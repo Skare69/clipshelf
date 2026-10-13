@@ -1,109 +1,135 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/ground"
+    android:orientation="vertical">
 
-    <LinearLayout
+    <include layout="@layout/appbar" />
+
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:clipToPadding="false">
 
-        <TextView
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/account_section"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            android:textStyle="bold" />
+            android:orientation="vertical"
+            android:padding="16dp"
+            android:paddingBottom="32dp">
 
-        <TextView
-            android:id="@+id/settings_account"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:textAppearance="?android:attr/textAppearanceMedium" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/account_section"
+                android:textAppearance="@style/TextAppearance.Parcel.T1"
+                android:textColor="@color/ink2" />
 
-        <TextView
-            android:id="@+id/settings_instance"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:textColor="@color/text_secondary" />
+            <TextView
+                android:id="@+id/settings_account"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textAppearance="@style/TextAppearance.Parcel.T3Title" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/default_collection_section"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            android:textStyle="bold" />
+            <TextView
+                android:id="@+id/settings_instance"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textAppearance="@style/TextAppearance.Parcel.T2Body"
+                android:textColor="@color/ink2" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/default_collection_hint"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            android:textColor="@color/text_secondary" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="@string/default_collection_section"
+                android:textAppearance="@style/TextAppearance.Parcel.T1"
+                android:textColor="@color/ink2" />
 
-        <Spinner
-            android:id="@+id/settings_default_collection"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/default_collection_hint"
+                android:textAppearance="@style/TextAppearance.Parcel.T2Body"
+                android:textColor="@color/ink2" />
 
-        <Button
-            android:id="@+id/settings_default_apply"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/collection_set_default" />
+            <Spinner
+                android:id="@+id/settings_default_collection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" />
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/endpoint_section"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            android:textStyle="bold" />
+            <Button
+                android:id="@+id/settings_default_apply"
+                style="@style/Widget.Parcel.Button.Outlined"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/collection_set_default" />
 
-        <EditText
-            android:id="@+id/settings_endpoint"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:autofillHints="url"
-            android:hint="@string/endpoint_hint"
-            android:inputType="textUri" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="@string/endpoint_section"
+                android:textAppearance="@style/TextAppearance.Parcel.T1"
+                android:textColor="@color/ink2" />
 
-        <Button
-            android:id="@+id/settings_endpoint_apply"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/endpoint_update" />
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Widget.Parcel.Field"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:hint="@string/endpoint_hint">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="24dp"
-            android:text="@string/limits_section"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            android:textStyle="bold" />
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/settings_endpoint"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints="url"
+                    android:inputType="textUri"
+                    android:textAppearance="@style/TextAppearance.Parcel.T3" />
+            </com.google.android.material.textfield.TextInputLayout>
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/limits_text"
-            android:textAppearance="?android:attr/textAppearanceSmall"
-            android:textColor="@color/text_secondary" />
+            <Button
+                android:id="@+id/settings_endpoint_apply"
+                style="@style/Widget.Parcel.Button.Primary"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:text="@string/endpoint_update" />
 
-        <Button
-            android:id="@+id/settings_logout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="32dp"
-            android:text="@string/action_logout" />
-    </LinearLayout>
-</ScrollView>
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="24dp"
+                android:text="@string/limits_section"
+                android:textAppearance="@style/TextAppearance.Parcel.T1"
+                android:textColor="@color/ink2" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="@string/limits_text"
+                android:textAppearance="@style/TextAppearance.Parcel.T3"
+                android:textColor="@color/ink2" />
+
+            <Button
+                android:id="@+id/settings_logout"
+                style="@style/Widget.Parcel.Button.Text.Danger"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="32dp"
+                android:minWidth="0dp"
+                android:text="@string/action_logout" />
+        </LinearLayout>
+    </ScrollView>
+
+    <include layout="@layout/bottomnav" />
+</LinearLayout>
