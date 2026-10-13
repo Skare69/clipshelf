@@ -89,6 +89,9 @@ jobs:
           path: android/app/build/test-results/testDebugUnitTest/
           retention-days: 7
           if-no-files-found: ignore
+      # Lint gate; warnings fail too (lint block in android/app/build.gradle).
+      - run: ./gradlew :app:lintDebug --no-daemon
+        working-directory: android
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: clipshelf-debug-apk

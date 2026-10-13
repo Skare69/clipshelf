@@ -113,6 +113,12 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+
+    // CI runs lintDebug (ci.yml): a warning fails the build too, so the
+    // report stays empty instead of growing a backlog.
+    lint {
+        warningsAsErrors true
+    }
 }
 
 tasks.named("preBuild") { dependsOn copyThirdPartyNotices }
