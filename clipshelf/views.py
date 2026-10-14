@@ -153,6 +153,7 @@ def _job_json(job, user=None):
         # state rules; colors and labels stay presentation.
         "active": job.active,
         "needs_attention": job.needs_attention,
+        "terminal": job.terminal,
         "can_retry": job.can_retry and (
             user is None or job.capture.user_id == user.id
         ),

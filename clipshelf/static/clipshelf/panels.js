@@ -269,15 +269,16 @@ function progress(j) {
   let done = 0;
   if (fetched) done = 1;
   if (fetched && read) done = 2;
-  if (j.state === "done" && read) done = 3;
+  if (j.state === "done" && (read || j.terminal)) done = 3;
   let stop = -1, now = -1;
-  if (j.state === "blocked" || (j.state === "done" && readBad)) stop = fetched ? 2 : 1;
+  if (!j.terminal && (j.state === "blocked" || (j.state === "done" && readBad))) stop = fetched ? 2 : 1;
   else if (fetchBad && !j.active) stop = 1;
   else if (j.active && done < 3) now = done + 1;
   return { done, now, stop };
 }
 function statusOf(j) {
   const p = progress(j), why = j.error || "";
+  if (j.terminal) return ["warn", "Shelved as a link: this site is not read", ""];
   if (p.stop >= 0) {
     if (j.guardrail) return ["stop", "Held by screening", why];
     if (j.state === "done") return ["stop", "Read, but the findings were withheld", why];

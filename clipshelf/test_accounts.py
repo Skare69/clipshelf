@@ -913,3 +913,22 @@ class JobPolicyTests(SimpleTestCase):
                 interpretation=Job.InterpretationStatus.COMPLETE,
             ).needs_attention
         )
+
+    def test_terminal_host_job_is_shelved_not_attention(self):
+        job = self._job(
+            state=Job.State.DONE,
+            acquisition=Job.AcquisitionStatus.COMPLETE,
+            interpretation=Job.InterpretationStatus.BLOCKED,
+        )
+        self.assertTrue(job.terminal)
+        self.assertFalse(job.needs_attention)
+        self.assertTrue(job.can_retry)
+        # the same trio with an error is a real failure again
+        job = self._job(
+            state=Job.State.DONE,
+            acquisition=Job.AcquisitionStatus.COMPLETE,
+            interpretation=Job.InterpretationStatus.BLOCKED,
+            error="upstream refused",
+        )
+        self.assertFalse(job.terminal)
+        self.assertTrue(job.needs_attention)

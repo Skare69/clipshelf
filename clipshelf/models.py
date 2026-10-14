@@ -199,14 +199,29 @@ class Job(models.Model):
         return self.state in {self.State.QUEUED, self.State.RUNNING, self.State.RETRY}
 
     @property
-    def needs_attention(self) -> bool:
-        """Blocked as a whole, or any stage the operator must look at."""
+    def terminal(self) -> bool:
+        """Shelved as a link: done, interpretation blocked, no error — the
+        worker's terminal-host path. The page was never read, so nothing was
+        withheld and the operator need not look at it."""
         return (
-            self.state == self.State.BLOCKED
-            or self.acquisition
-            in {self.AcquisitionStatus.BLOCKED, self.AcquisitionStatus.ERROR}
-            or self.interpretation
-            in {self.InterpretationStatus.BLOCKED, self.InterpretationStatus.ERROR}
+            self.state == self.State.DONE
+            and self.interpretation == self.InterpretationStatus.BLOCKED
+            and not self.error
+        )
+
+    @property
+    def needs_attention(self) -> bool:
+        """Blocked as a whole, or any stage the operator must look at.
+        Terminal-host jobs are shelved, not attention-seeking."""
+        return (
+            not self.terminal
+            and (
+                self.state == self.State.BLOCKED
+                or self.acquisition
+                in {self.AcquisitionStatus.BLOCKED, self.AcquisitionStatus.ERROR}
+                or self.interpretation
+                in {self.InterpretationStatus.BLOCKED, self.InterpretationStatus.ERROR}
+            )
         )
 
     GUARDRAIL_PREFIXES = (
@@ -270,8 +285,9 @@ class Job(models.Model):
         self.save()  # full row: callers may stage findings/source/warnings first
 
     def mark_done(self, error="", interpretation=None, warnings=None):
-        """Terminal success; the findings-withheld variant passes
-        interpretation=BLOCKED. warnings=None keeps the row's list."""
+        """Terminal success; the terminal-host variant passes
+        interpretation=BLOCKED (job.terminal, not needs_attention).
+        warnings=None keeps the row's list."""
         self.state = self.State.DONE
         self.error = error
         self.interpretation = (interpretation if interpretation is not None

@@ -776,6 +776,12 @@ class CaptureTests(ApiTestCase):
         target = next(c for c in listing if c["id"] == str(capture_id))
         self.assertTrue(any(j["needs_attention"] for j in target["jobs"]))
 
+        # Terminal host: shelved as a link, projected as not needing attention.
+        detail = projected("done", interpretation="blocked")
+        self.assertTrue(detail["terminal"])
+        self.assertFalse(detail["needs_attention"])
+        self.assertTrue(detail["can_retry"])
+
         # Verdict projections: guardrail is state-scoped, screening_warnings
         # is the server-filtered, deduplicated sublist.
         detail = projected(

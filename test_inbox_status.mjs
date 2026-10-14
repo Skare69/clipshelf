@@ -21,7 +21,7 @@ globalThis.addEventListener = () => {};
 const { progress, statusOf } = await import("./clipshelf/static/clipshelf/panels.js");
 
 const job = over => ({ state: "queued", acquisition: "pending", interpretation: "pending",
-  active: true, guardrail: false, attempts: 0, error: "", ...over });
+  active: true, guardrail: false, terminal: false, attempts: 0, error: "", ...over });
 const cases = [
   // [label, job, {done, now, stop}, [kind, sentence]]
   ["queued", job({}), { done: 0, now: 1, stop: -1 }, ["", "Waiting to fetch"]],
@@ -37,7 +37,12 @@ const cases = [
     { done: 0, now: -1, stop: 1 }, ["stop", "Stopped at Fetch"]],
   ["guardrail", job({ state: "blocked", acquisition: "complete", interpretation: "blocked", active: false, guardrail: true }),
     { done: 1, now: -1, stop: 2 }, ["stop", "Held by screening"]],
-  ["findings withheld", job({ state: "done", acquisition: "complete", interpretation: "blocked", active: false }),
+  ["terminal host", job({ state: "done", acquisition: "complete", interpretation: "blocked",
+      active: false, terminal: true,
+      warnings: ["terminal host: retained as metadata only, never interpreted"] }),
+    { done: 3, now: -1, stop: -1 }, ["warn", "Shelved as a link: this site is not read"]],
+  ["findings withheld, non-terminal", job({ state: "done", acquisition: "complete",
+      interpretation: "blocked", active: false, error: "withheld: danger 2.5" }),
     { done: 1, now: -1, stop: 2 }, ["stop", "Read, but the findings were withheld"]],
 ];
 for (const [label, j, route, [kind, sentence]] of cases) {

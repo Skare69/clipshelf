@@ -145,17 +145,26 @@ class JobTransitionTests(WorkerMixin, TestCase):
         self.assertEqual(job.error, "config")
         self.assertEqual(job.interpretation, "blocked")
 
-    def test_mark_done_defaults_and_withheld_variant(self):
+    def test_mark_done_defaults_and_terminal_variant(self):
         job = self.make_job(state="running")
         job.mark_done()
         self.assertEqual(
             (job.state, job.error, job.interpretation),
             ("done", "", "complete"))
+        self.assertFalse(job.needs_attention)
+        # terminal-host variant: never read, nothing withheld, not attention
         job.mark_done(interpretation="blocked",
                       warnings=["terminal host: retained as metadata only, never interpreted"])
         self.assertEqual(
             (job.state, job.interpretation, job.warnings),
             ("done", "blocked", ["terminal host: retained as metadata only, never interpreted"]))
+        self.assertTrue(job.terminal)
+        self.assertFalse(job.needs_attention)
+        self.assertTrue(job.can_retry)
+        # with an error it is a real withheld/failed read again
+        job.mark_done(error="upstream refused", interpretation="blocked")
+        self.assertFalse(job.terminal)
+        self.assertTrue(job.needs_attention)
 
 
 class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
@@ -171,6 +180,21 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         published = Path(self.tmp) / asset.path
         self.assertTrue(published.is_file(), "no complete asset file at final path")
         self.assertTrue(str(asset.path).startswith("assets/"))
+
+    def test_terminal_host_shelves_job_without_reading(self):
+        def no_read(source, config, cats, **kw):
+            raise AssertionError("the model must not run for a terminal host")
+
+        job = self.make_job(url="https://arxiv.org/abs/2401.00001")
+        self.run_worker(interpret=no_read)
+        job = self.refresh(job)
+        self.assertEqual(
+            (job.state, job.acquisition, job.interpretation, job.error, job.attempts),
+            ("done", "complete", "blocked", "", 0))
+        self.assertTrue(job.terminal)
+        self.assertFalse(job.needs_attention)
+        self.assertTrue(job.can_retry)
+        self.assertIn("terminal host", job.warnings[0])
 
     def test_abandoned_running_recovered(self):
         job = self.make_job(state="running")
