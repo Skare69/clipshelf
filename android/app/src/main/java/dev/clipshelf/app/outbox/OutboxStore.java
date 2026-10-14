@@ -155,21 +155,6 @@ public final class OutboxStore extends SQLiteOpenHelper {
         }
     }
 
-    /** Counts for the active profile: index = state constant. */
-    public int[] countsFor(String instanceId, String userId) {
-        int[] counts = new int[OutboxStore.STATE_PAUSED_MISMATCH + 1];
-        try (Cursor c = db().rawQuery("SELECT state, COUNT(*) FROM " + TABLE
-                + " WHERE instance_id=? AND user_id=? GROUP BY state", new String[]{instanceId, userId})) {
-            while (c.moveToNext()) {
-                int s = c.getInt(0);
-                if (s >= 0 && s < counts.length) {
-                    counts[s] = c.getInt(1);
-                }
-            }
-        }
-        return counts;
-    }
-
     public int countOtherIdentities(String instanceId, String userId) {
         try (Cursor c = db().rawQuery("SELECT COUNT(*) FROM " + TABLE
                         + " WHERE NOT (instance_id=? AND user_id=?)",
