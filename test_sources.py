@@ -2617,9 +2617,5 @@ def test():
     print("ok")
 
 
-def load_tests(loader, tests, pattern):
-    return unittest.TestSuite([unittest.FunctionTestCase(test)])
-
-
 if __name__ == "__main__":
     test()

@@ -1,5 +1,4 @@
 """Self-check: python test_clipshelf.py — pure helpers and CLI lock behavior."""
-import unittest
 import clipshelf.lib as cs
 
 
@@ -712,10 +711,6 @@ def test():
     _lock_gate_regressions()
     _compose_passes_size_and_fallback_settings()
     print("ok")
-
-
-def load_tests(loader, tests, pattern):
-    return unittest.TestSuite([unittest.FunctionTestCase(test)])
 
 
 if __name__ == "__main__":
