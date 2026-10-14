@@ -1,13 +1,13 @@
 """store_findings screening gate: optional, fail-open, withhold before write."""
 import json
 import os
-import uuid
 from types import SimpleNamespace
 from unittest import mock
 
 from django.test import SimpleTestCase, TestCase
-from django.utils import timezone
 from allauth.account.models import EmailAddress
+
+from test_worker import WorkerMixin
 
 from clipshelf import judgment, models, services, interpretation
 from clipshelf.interpretation import GuardrailBlocked
@@ -22,14 +22,7 @@ class ScreeningMixin:
         self.user = models.User.objects.create_user(username="s1", email="s1@example.com")
         self.personal = services.personal_collection(self.user)
 
-    def make_job(self, url="https://example.com/a"):
-        capture = models.Capture.objects.create(
-            user=self.user, client_request_id=str(uuid.uuid4()), raw_text=url,
-            requested_collection_id=None, collection=self.personal,
-            request_hash="h", received_at=timezone.now(), notice="")
-        return models.Job.objects.create(
-            capture=capture, url=url, collection=self.personal, state="queued",
-            acquisition="pending", interpretation="pending", attempts=0)
+    make_job = WorkerMixin.make_job
 
     def findings(self, job, links=()):
         return {"source": job.url, "summary": "good findings", "repos": [], "prompts": [],

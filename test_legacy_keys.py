@@ -143,22 +143,27 @@ class PublicationIdentityTests(TestCase):
             "alice's tombstone suppressed bob")
 
 
-class MergeVariantTests(TestCase):
+class KeysFixtureMixin:
+    """Data dir plus one user and their personal collection."""
+
     def setUp(self):
         tmp = tempfile.mkdtemp(prefix="clipshelf-keys-")
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         override = override_settings(DATA_DIR=tmp)
         override.enable()
         self.addCleanup(override.disable)
-        self.alice = User.objects.create_user(username="m", email="m@example.com")
-        self.personal = services.personal_collection(self.alice)
+        self.tmp = tmp
+        self.user = User.objects.create_user(username="m", email="m@example.com")
+        self.personal = services.personal_collection(self.user)
 
+
+class MergeVariantTests(KeysFixtureMixin, TestCase):
     def test_merge_legacy_tombstone_blocks_cased_link(self):
         models.History.objects.create(
-            collection=self.personal, user=self.alice,
+            collection=self.personal, user=self.user,
             kind=models.History.Kind.REMOVED, url=LEGACY)
         stats = imports.merge_findings(
-            self.alice, [{"source": CASED, "links": [{"url": CASED, "title": "t"}]}])
+            self.user, [{"source": CASED, "links": [{"url": CASED, "title": "t"}]}])
         self.assertEqual(stats["links"], 0, "extracted merge resurrected a removed link")
         self.assertFalse(
             models.Entry.objects.filter(collection=self.personal, kind="link").exists())
@@ -167,23 +172,13 @@ class MergeVariantTests(TestCase):
         legacy_entry = models.Entry.objects.create(
             collection=self.personal, kind="link", key=LEGACY)
         imports.merge_findings(
-            self.alice, [{"source": CASED, "links": [{"url": CASED, "title": "t"}]}])
+            self.user, [{"source": CASED, "links": [{"url": CASED, "title": "t"}]}])
         self.assertEqual(
             models.Entry.objects.filter(collection=self.personal, kind="link").count(), 1)
         self.assertTrue(legacy_entry.contributions.exists())
 
 
-class ImportVariantTests(TestCase):
-    def setUp(self):
-        tmp = tempfile.mkdtemp(prefix="clipshelf-keys-")
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        override = override_settings(DATA_DIR=tmp)
-        override.enable()
-        self.addCleanup(override.disable)
-        self.tmp = tmp
-        self.user = User.objects.create_user(username="i", email="i@example.com")
-        self.personal = services.personal_collection(self.user)
-
+class ImportVariantTests(KeysFixtureMixin, TestCase):
     def _import(self, items, removed=None):
         return imports.import_items(user=self.user, collection_id=None,
                                    items=items, removed=removed or {},
