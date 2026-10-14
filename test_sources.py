@@ -268,7 +268,7 @@ def test_deadline_bounded_reads():
             pass
 
     real_validate = net.validate_url
-    net.validate_url = lambda url: ("http", "media.example", port, "/",
+    net.validate_url = lambda url, deadline=None: ("http", "media.example", port, "/",
                                     [(socket.AF_INET, ("127.0.0.1", port))])
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
@@ -303,7 +303,7 @@ def test_deadline_bounded_reads():
         except OSError:
             pass
 
-    net.validate_url = lambda url: ("http", "media.example", port, "/",
+    net.validate_url = lambda url, deadline=None: ("http", "media.example", port, "/",
                                     [(socket.AF_INET, ("127.0.0.1", port))])
     thread = threading.Thread(target=trickle, daemon=True)
     thread.start()
@@ -337,7 +337,7 @@ def test_deadline_bounded_reads():
 
     fake = RetryNet({"media.example": [PUBLIC, "203.0.113.9"]}, [])
     real_socket = net.socket
-    net.validate_url = lambda url: ("http", "media.example", 80, "/",
+    net.validate_url = lambda url, deadline=None: ("http", "media.example", 80, "/",
                                     [(socket.AF_INET, (PUBLIC, 80)),
                                      (socket.AF_INET, ("203.0.113.9", 80))])
     net.socket = fake
@@ -393,7 +393,7 @@ def test_deadline_bounded_connect():
             return self.sock_cls(self)
 
     real_socket, real_validate, real_tls = net.socket, net.validate_url, net._TLS
-    net.validate_url = lambda url: ("https", "media.example", 443, "/",
+    net.validate_url = lambda url, deadline=None: ("https", "media.example", 443, "/",
                                     [(socket.AF_INET, (PUBLIC, 443))])
     net._TLS = {"https": SlowHandshake()}
     try:
@@ -436,6 +436,32 @@ def test_deadline_bounded_connect():
         net.socket = real_socket
         net.validate_url = real_validate
         net._TLS = real_tls
+
+
+def test_deadline_bounded_dns():
+    # the resolver wait sits inside the whole-fetch budget: a nameserver that
+    # never answers cannot hold a worker a resolver timeout above it
+    # (glibc default is 5s x 2 attempts per lookup)
+    class SlowDNSNet(FakeNet):
+        def getaddrinfo(self, host, port, *a, **k):
+            self.queried.append(host)
+            time.sleep(3.0)             # nameserver that never answers
+            raise socket.gaierror(8, f"cannot resolve {host!r}")
+
+    fake = SlowDNSNet({}, [])
+    real_socket = net.socket
+    net.socket = fake
+    start = time.monotonic()
+    try:
+        try:
+            net.fetch_public("http://slow-dns.example/", timeout=1.0)
+            raise AssertionError("slow DNS accepted past deadline")
+        except net.NetworkError as exc:
+            elapsed = time.monotonic() - start
+            assert "time bound" in str(exc), str(exc)
+            assert elapsed < 1.3, f"slow DNS held the fetch {elapsed:.2f}s"
+    finally:
+        net.socket = real_socket
 
 
 def test_import_media_bounds(tmp=None):
@@ -1848,6 +1874,8 @@ def test():
     print("deadline bounds ok")
     test_deadline_bounded_connect()
     print("deadline connect ok")
+    test_deadline_bounded_dns()
+    print("deadline dns ok")
     tmp = tempfile.mkdtemp(prefix="cs-src-")
     try:
         test_import_media_bounds(tmp)

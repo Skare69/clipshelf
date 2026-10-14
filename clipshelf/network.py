@@ -3,7 +3,7 @@
 fetch_public() resolves destinations itself, refuses any non-public address
 (including IPv6-mapped/6to4/Teredo embeddings), pins the validated address at
 connect time so DNS rebinding cannot switch it, re-validates every redirect
-hop, and bounds decompression, total bytes, and wall time.
+hop, and bounds DNS, decompression, total bytes, and wall time.
 
 Extractor traffic (gallery-dl, yt-dlp, including curl_cffi impersonation,
 which bypasses Python's resolver) is forced through extractor_egress(): a
@@ -66,16 +66,41 @@ def _assert_public_ip(text):
         raise NetworkError(f"non-public destination refused: {text[:64]}")
 
 
-def resolve_public(host, port):
+def resolve_public(host, port, deadline=None):
     """All SOCK_STREAM addresses for host; every one must be globally routable.
 
     Mixed public+private records fail closed, so a rebinding resolver can never
-    sneak a private address past the pin.
+    sneak a private address past the pin. deadline (a time.monotonic() instant,
+    from fetch_public) also bounds the resolver wait: getaddrinfo has no timeout
+    parameter, so it runs in a daemon thread and an overrunning lookup is
+    abandoned when the whole-fetch budget is spent.
     """
+    if deadline is not None and deadline - time.monotonic() <= 0:
+        raise NetworkError("fetch exceeded time bound")
     try:
-        infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        if deadline is None:
+            infos = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        else:
+            box = []
+
+            def _lookup():
+                try:
+                    box.append(socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM))
+                except BaseException as exc:    # re-raised on the waiting thread
+                    box.append(exc)
+
+            worker = threading.Thread(target=_lookup, daemon=True)
+            worker.start()
+            worker.join(max(deadline - time.monotonic(), 0.0))
+            if not box:                 # lookup still running: budget spent
+                raise TimeoutError("fetch exceeded time bound")
+            if isinstance(box[0], BaseException):
+                raise box[0]
+            infos = box[0]
     except socket.gaierror as exc:
         raise NetworkError(f"cannot resolve {host[:255]!r}: {exc}")
+    except TimeoutError as exc:
+        raise NetworkError("fetch exceeded time bound") from exc
     out = []
     for family, _type, _proto, _canon, sockaddr in infos:
         _assert_public_ip(sockaddr[0])
@@ -86,11 +111,11 @@ def resolve_public(host, port):
     return out
 
 
-def validate_url(url):
+def validate_url(url, deadline=None):
     """Scheme/host/port/credential checks + validated pinned addresses.
 
     Returns (scheme, host, port, request_path, [(family, sockaddr), ...]).
-    Raises NetworkError on any refusal.
+    Raises NetworkError on any refusal. deadline bounds the resolver wait.
     """
     try:
         parts = urllib.parse.urlsplit(url)
@@ -116,7 +141,7 @@ def validate_url(url):
     # UnicodeEncodeError. %-encode as UTF-8; % stays safe so existing
     # escapes survive a redirect hop without double encoding.
     path = urllib.parse.quote(path, safe="/?&=%:@!$'()*+,;~[]")
-    return parts.scheme, host, port, path, resolve_public(host, port)
+    return parts.scheme, host, port, path, resolve_public(host, port, deadline)
 
 
 # ------------------------------------------------------------- pinned fetch
@@ -280,7 +305,7 @@ def fetch_public(url, max_bytes=DEFAULT_MAX_BYTES, timeout=DEFAULT_TIMEOUT,
     deadline = time.monotonic() + timeout
     current = url
     for _hop in range(MAX_REDIRECTS + 1):
-        scheme, host, port, path, infos = validate_url(current)
+        scheme, host, port, path, infos = validate_url(current, deadline)
         conn, resp = _open_pinned(scheme, host, port, path, infos, user_agent, deadline)
         try:
             status = resp.status
@@ -399,7 +424,7 @@ class _ProxyHandler(socketserver.BaseRequestHandler):
             if port not in (80, 443):
                 _reply(self.request, 403, "port refused")
                 return
-            infos = resolve_public(host, port)   # raises NetworkError -> 502
+            infos = resolve_public(host, port, deadline)   # raises NetworkError -> 502
             _reply(self.request, 200, "Connection established")
             try:
                 upstream = _connect_pinned(infos, 30)
@@ -417,7 +442,7 @@ class _ProxyHandler(socketserver.BaseRequestHandler):
         _reply(self.request, 405, "only CONNECT or absolute-form http")
 
     def _forward_http(self, method, target, head, rest, deadline):
-        _scheme, host, port, path, infos = validate_url(target)
+        _scheme, host, port, path, infos = validate_url(target, deadline)
         lines = head.decode("latin1").split("\r\n")
         out = [f"{method} {path} HTTP/1.1"]
         clen = 0
