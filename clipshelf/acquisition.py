@@ -33,6 +33,7 @@ IMPORT_MEDIA_MAX_BYTES = 96 << 20 # per embedded/imported media file ceiling
 EXTRACTOR_TIMEOUT = 900           # per extractor subprocess run, seconds
 VIDEO_MAX_DURATION = 900          # seconds of video we are willing to keep
 IMAGE_MAX_PIXELS = 16384          # per-axis decoded image bound
+IMAGE_AREA_MAX = 40_000_000       # total decoded pixel bound; caps buffer memory
 
 IMAGE_TYPES = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
                "webp": "image/webp", "gif": "image/gif", "avif": "image/avif"}
@@ -138,7 +139,7 @@ def adopt_file(source, src_path, directory, kind, content_type):
 def validate_image(data):
     """Full decode bounds check; returns content type or raises ValueError."""
     with Image.open(io.BytesIO(data)) as im:
-        if max(im.size) > IMAGE_MAX_PIXELS:
+        if max(im.size) > IMAGE_MAX_PIXELS or im.width * im.height > IMAGE_AREA_MAX:
             raise ValueError(f"image dimensions {im.size} exceed bound")
         im.load()
         return _IMAGE_FORMAT_TYPE.get(im.format, f"image/{(im.format or 'unknown').lower()}")

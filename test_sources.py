@@ -6,11 +6,13 @@ import json
 import io
 import random
 import socket
+import struct
 import tempfile
 import os
 import time
 import threading
 import unittest
+import zlib
 from email.message import Message
 from unittest import mock
 
@@ -1356,6 +1358,58 @@ def test_image_source_bounds():
     print("image bounds ok")
 
 
+def huge_png_bytes(width=13000, height=13000):
+    """Single-colour truecolor PNG built row-by-row: ~169 Mpx in tiny bytes,
+    without the test itself allocating a full-size pixel buffer."""
+    row = b"\x00" + b"\x07" * (width * 3)
+    comp = zlib.compressobj()
+    idat = b"".join(comp.compress(row) for _ in range(height)) + comp.flush()
+
+    def chunk(tag, payload):
+        return (struct.pack(">I", len(payload)) + tag + payload
+                + struct.pack(">I", zlib.crc32(tag + payload)))
+
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
+
+
+def test_image_area_bound():
+    """A highly compressible 13000x13000 PNG is refused with a warning before
+    any full-size decode; the same area bound holds for stored assets and
+    normal images still convert."""
+    data = huge_png_bytes()
+    assert len(data) < (1 << 20), len(data)
+
+    # _data_url returns None with a warning and never decodes full pixels
+    warnings = []
+    with mock.patch.object(Image.Image, "load",
+                           side_effect=AssertionError("full decode attempted")):
+        url = interp._data_url(data, warnings, "bomb.png")
+    assert url is None, url
+    assert any("exceed bound" in w for w in warnings), warnings
+    assert not any("full decode attempted" in w for w in warnings), warnings
+
+    # a normal image still converts under the same path
+    warnings = []
+    url = interp._data_url(png_bytes(), warnings, "small.png")
+    assert url and url.startswith("data:image/jpeg;base64,"), warnings
+    buf = io.BytesIO()
+    Image.new("RGB", (1536, 1536), (1, 2, 3)).save(buf, "PNG")
+    warnings = []
+    url = interp._data_url(buf.getvalue(), warnings, "1536.png")
+    assert url and url.startswith("data:image/jpeg;base64,"), warnings
+
+    # validate_image applies the same bound, so stored assets agree
+    try:
+        acq.validate_image(data)
+    except ValueError as exc:
+        assert "exceed bound" in str(exc)
+    else:
+        raise AssertionError("oversized-area image accepted")
+    assert acq.validate_image(png_bytes()) == "image/png"
+    print("image area bound ok")
+
+
 def test_frame_extraction_contract():
     """ffmpeg frame sampling: file-only whitelist, bounded window/fps/frames,
     quality and scale pinned; budget 0 never spawns a subprocess."""
@@ -2023,6 +2077,7 @@ def test():
     test_post_transport_and_http_errors()
     test_response_read_bound()
     test_image_source_bounds()
+    test_image_area_bound()
     test_frame_extraction_contract()
     test_frame_sampling_bounds()
     test_material_state_shape()

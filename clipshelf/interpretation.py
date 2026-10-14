@@ -24,6 +24,7 @@ from PIL import Image, ImageOps
 from clipshelf.lib import MAX_URL_LENGTH, norm, repo_url
 from clipshelf import network
 from clipshelf import judgment
+from clipshelf.acquisition import IMAGE_AREA_MAX
 
 __all__ = ["InterpretationError", "ConfigurationError", "GuardrailBlocked",
            "interpret", "check_connection", "list_models", "is_category_label"]
@@ -221,6 +222,10 @@ def _data_url(data, warnings, label):
     """Bounded inline JPEG data URL; original file bytes stay untouched."""
     try:
         with Image.open(io.BytesIO(data)) as im:
+            if im.width * im.height > IMAGE_AREA_MAX:
+                raise ValueError(
+                    f"image area {im.width * im.height} pixels exceed bound")
+            im.draft("RGB", (IMAGE_EDGE_MAX, IMAGE_EDGE_MAX))
             im = ImageOps.exif_transpose(im).convert("RGB")
             for edge, quality in ((IMAGE_EDGE_MAX, 85), (1024, 70), (768, 55)):
                 small = im.copy()
