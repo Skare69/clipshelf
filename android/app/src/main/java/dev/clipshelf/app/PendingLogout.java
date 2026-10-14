@@ -18,10 +18,10 @@ import dev.clipshelf.app.net.Api;
  * cannot complete (offline, timeout, 5xx/429), the session token is re-stored
  * Keystore-encrypted in a prefs file separate from the profile — never
  * plaintext, and invisible to Creds.clear() — and revocation is retried from
- * MainActivity resume and the periodic DeliverWorker until the server
- * confirms. The local profile is always cleared immediately; this store only
- * exists to finish the server half of sign-out. A permanent server rejection
- * (other 4xx) is surfaced and nothing is retained.
+ * the MainActivity (router) start and the periodic DeliverWorker until the
+ * server confirms. The local profile is always cleared immediately; this
+ * store only exists to finish the server half of sign-out. A permanent
+ * server rejection (other 4xx) is surfaced and nothing is retained.
  */
 public final class PendingLogout {
 
@@ -117,10 +117,11 @@ public final class PendingLogout {
     /**
      * Account identities with an outstanding server-side sign-out (no crypto
      * on the UI thread). Deliberately lock-free: revokeAll holds LOCK across
-     * up to ~2 min of network attempts, and onResume/render call this on the
-     * UI thread, which must never park on that monitor. Safe because
-     * SharedPreferences reads are thread-safe and write() replaces the whole
-     * JSON string, so this sees the old or new list, never a tear.
+     * up to ~2 min of network attempts, and MainActivity (router) start and
+     * SetupActivity call this on the UI thread, which must never park on that
+     * monitor. Safe because SharedPreferences reads are thread-safe and
+     * write() replaces the whole JSON string, so this sees the old or new
+     * list, never a tear.
      */
     public static List<String> pendingLabels(Context ctx) {
         List<String> out = new ArrayList<>();
