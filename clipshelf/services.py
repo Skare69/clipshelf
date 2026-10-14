@@ -290,6 +290,12 @@ def admit_import(user, request_id, input_digest, collection, staging_rel, fmt):
 # Entry serialization and removal
 # ---------------------------------------------------------------------------
 
+def _stored_list(value):
+    """Stored list field: [] unless truly a list, so malformed/legacy data
+    can never raise on read."""
+    return value if isinstance(value, list) else []
+
+
 def serialize_entry(entry, user):
     """Flat API entry merged from the contributions REMAINING in this
     collection. Private data of removed contributions never appears."""
@@ -318,9 +324,9 @@ def serialize_entry(entry, user):
         cat = data.get("cat")
         if isinstance(cat, str) and cat:
             categories.add(cat)
-        categories.update(v for v in data.get("categories") or [] if isinstance(v, str))
-        tags.update(v for v in data.get("tags") or [] if isinstance(v, str))
-        for item in data.get("sources") or []:
+        categories.update(v for v in _stored_list(data.get("categories")) if isinstance(v, str))
+        tags.update(v for v in _stored_list(data.get("tags")) if isinstance(v, str))
+        for item in _stored_list(data.get("sources")):
             url = _str(item.get("url")) if isinstance(item, dict) else _str(item)
             # Skip, never raise: malformed/legacy data must not 500 entry reads.
             if not url or url in source_urls:

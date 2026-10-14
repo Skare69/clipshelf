@@ -13,6 +13,8 @@ from datetime import timedelta
 from unittest import mock
 from urllib.parse import urlencode
 
+from unittest import mock
+
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
@@ -1195,6 +1197,76 @@ class ImportTests(ApiTestCase):
                 self.assertEqual(response.json()["detail"], detail)
                 self.assertFalse(ImportRecord.objects.exists())
                 self.assertEqual(os.listdir(staging), [])
+    def _shared_with_member(self):
+        shared = Collection.objects.create(
+            name="Team finds", kind="shared", owner=self.alice
+        )
+        Membership.objects.create(collection=shared, user=self.bob)
+        return shared
+
+    @staticmethod
+    def _fake_import_export(batch, directory, budget=None):
+        """Offline stand-in for acquisition.import_export: complete acquisition."""
+        return [{"url": item["url"], "original_url": item["url"], "title": "",
+                 "desc": "", "text": "", "links": [], "assets": [],
+                 "acquisition": "complete", "warnings": [], "metadata": {}}
+                for item in batch]
+
+    def test_member_malformed_import_cannot_break_entry_reads(self):
+        # A member's malformed import (tags: 5) used to store the raw value
+        # and then 500 GET /api/entries for every member of the shared
+        # collection, with no way to find the offending entry. Imports now
+        # coerce malformed shared fields to empty like the capture path, and
+        # entry reads skip non-list stored values (older versions stored
+        # them verbatim).
+        shared = self._shared_with_member()
+        bad_items = [
+            {"url": "https://example.invalid/a", "tags": 5},
+            {"url": "https://example.invalid/b", "sources": 1},
+            {"url": "https://example.invalid/c", "categories": True},
+        ]
+        with mock.patch("clipshelf.acquisition.import_export",
+                        side_effect=self._fake_import_export):
+            for item in bad_items:
+                imports.import_items(
+                    user=self.bob, collection_id=shared.id, items=[item])
+        alice = self._login(self.alice)
+        response = alice.get("/api/entries")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            sorted(e["url"] for e in response.json()["entries"]),
+            sorted(f"https://example.invalid/{c}" for c in "abc"),
+        )
+        for listed in response.json()["entries"]:
+            self.assertEqual(listed["tags"], [])
+            self.assertEqual(listed["sources"], [])
+            self.assertEqual(listed["cat"], [])
+        for entry in Entry.objects.filter(collection=shared):
+            self.assertEqual(
+                alice.get(f"/api/entries/{entry.id}").status_code, 200)
+
+    def test_poisoned_stored_data_cannot_break_entry_reads(self):
+        # Data an older version stored verbatim must never 500 a read:
+        # serialize_entry treats non-list tags/categories/sources as empty.
+        shared = self._shared_with_member()
+        entry, _ = Entry.objects.get_or_create(
+            collection=shared, kind="link", key="https://example.invalid/poison")
+        Contribution.objects.create(
+            entry=entry, user=self.bob, origin="legacy-import",
+            data={"title": "", "desc": "", "tags": 5, "categories": True,
+                  "sources": 1},
+        )
+        alice = self._login(self.alice)
+        response = alice.get("/api/entries")
+        self.assertEqual(response.status_code, 200)
+        listed = response.json()["entries"][0]
+        self.assertEqual(listed["url"], "https://example.invalid/poison")
+        self.assertEqual(listed["tags"], [])
+        self.assertEqual(listed["cat"], [])
+        self.assertEqual(listed["sources"], [])
+        detail = alice.get(f"/api/entries/{entry.id}")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["entry"]["tags"], [])
 
     def test_import_request_id_unique_across_payloads(self):
         # The database constraint is the race backstop: the pre-insert check
