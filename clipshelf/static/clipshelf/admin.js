@@ -5,6 +5,7 @@ import { ICONS, S, api, banner, confirmDialog, el, fmtDate, icon, onEnter, out, 
 import { renderToc } from "./panels.js";
 
 const errNode = e => el("p", { class: "err", text: e.message });
+const showNote = (node, ok, text) => { node.className = ok ? "hint" : "err"; node.textContent = text; node.hidden = false; };
 // A head written as "#Joined" is a number or date column: right-aligned, tabular.
 const table = (heads, rows) => el("div", { class: "tablewrap" }, el("table", {},
   el("thead", {}, el("tr", {}, ...heads.map(h => h.startsWith("#")
@@ -200,6 +201,7 @@ function adminLlm(llm, err, scr, scrErr) {
   const conc = el("input", { type: "number", id: "llmConc", min: 1, max: 8, value: llm.concurrency ?? 2 });
   const key = el("input", { type: "password", id: "llmKey", placeholder: llm.has_api_key ? "Saved — leave blank to keep" : "No key set (optional for local endpoints)", autocomplete: "new-password" });
   const clear = el("input", { type: "checkbox", id: "llmClearKey" });
+  const withKey = b => { if (clear.checked) b.api_key = ""; else if (key.value) b.api_key = key.value; return b; };
   const provider = el("select", { id: "llmProvider" }, ...LLM_PROVIDERS.map(o => el("option", { value: o.id, text: o.label })));
   const known = LLM_PROVIDERS.find(o => o.url && (llm.base_url || "").replace(/\/+$/, "") === o.url);
   provider.value = known ? known.id : "";
@@ -214,11 +216,6 @@ function adminLlm(llm, err, scr, scrErr) {
   });
   base.addEventListener("input", () => { if (modelCtl.tagName === "SELECT") textModel(); });
   const note = el("p", { class: "hint", hidden: true });
-  const showNote = (ok, text) => {
-    note.className = ok ? "hint" : "err";
-    note.textContent = text;
-    note.hidden = false;
-  };
   const check = el("button", { class: "btn", type: "button", text: "Check connection" });
   const setCheck = s => {
     check.disabled = s === "busy";
@@ -249,34 +246,28 @@ function adminLlm(llm, err, scr, scrErr) {
   load.addEventListener("click", async () => {
     load.disabled = true; load.textContent = "Loading…";
     try {
-      const b = { base_url: base.value.trim() };
-      if (clear.checked) b.api_key = "";
-      else if (key.value) b.api_key = key.value;
+      const b = withKey({ base_url: base.value.trim() });
       const list = (await sensitive("/api/admin/llm/models", b)).models || [];
       if (base.value.trim() !== b.base_url) return;
       if (list.length) showModels(list);
       else if (modelCtl.tagName === "SELECT") textModel();
-      showNote(list.length, list.length
+      showNote(note, list.length, list.length
         ? `${list.length} models offered — pick one in the Model box.`
         : "The endpoint listed no models; type the name instead.");
-    } catch (e) { if (e.status !== 401 && !e.cancelled) showNote(false, e.message); }
+    } catch (e) { if (e.status !== 401 && !e.cancelled) showNote(note, false, e.message); }
     finally { load.disabled = false; load.textContent = "Load models"; }
   });
   const body = () => ({ base_url: base.value.trim(), model: modelValue(),
     concurrency: Math.min(8, Math.max(1, parseInt(conc.value, 10) || 1)) });
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
-    const b = body();
-    if (clear.checked) b.api_key = "";
-    else if (key.value) b.api_key = key.value;
+    const b = withKey(body());
     try { await sensitive("/api/admin/llm", b); key.value = ""; clear.checked = false;
       toast("Interpretation settings saved."); renderAdmin(); }
     catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
   });
   check.addEventListener("click", async () => {
-    const b = { base_url: base.value.trim(), model: modelValue() };
-    if (clear.checked) b.api_key = "";
-    else if (key.value) b.api_key = key.value;
+    const b = withKey({ base_url: base.value.trim(), model: modelValue() });
     const before = [base.value.trim(), modelValue(), key.value, conc.value, clear.checked].join("\n");
     note.hidden = true;
     setCheck("busy");
@@ -285,10 +276,10 @@ function adminLlm(llm, err, scr, scrErr) {
       if ([base.value.trim(), modelValue(), key.value, conc.value, clear.checked].join("\n") !== before)
         setCheck("idle");
       else if (j.check?.ok) setCheck("ok");
-      else { setCheck("idle"); showNote(false, j.check?.message || "check failed"); }
+      else { setCheck("idle"); showNote(note, false, j.check?.message || "check failed"); }
     } catch (e) {
       setCheck("idle");
-      if (e.status !== 401 && !e.cancelled) showNote(false, e.message);
+      if (e.status !== 401 && !e.cancelled) showNote(note, false, e.message);
     }
   });
   p.append(form,
@@ -300,7 +291,6 @@ function adminLlm(llm, err, scr, scrErr) {
   const sClear = el("input", { type: "checkbox", id: "scrClearKey" });
   const sBody = () => sClear.checked ? { api_key: "" } : sKey.value ? { api_key: sKey.value } : {};
   const sNote = el("p", { class: "hint", hidden: true });
-  const sShowNote = (ok, text) => { sNote.className = ok ? "hint" : "err"; sNote.textContent = text; sNote.hidden = false; };
   const sTest = el("button", { class: "btn", type: "button", text: "Test" });
   const sForm = el("form", {},
     el("div", { class: "field" }, el("label", { for: "scrKey", text: "API key" }), sKey,
@@ -315,15 +305,14 @@ function adminLlm(llm, err, scr, scrErr) {
     ev.preventDefault();
     try { await sensitive("/api/admin/screening", sBody()); sKey.value = ""; sClear.checked = false;
       toast("Screening settings saved."); renderAdmin(); }
-    catch (e) { if (e.status !== 401 && !e.cancelled) sShowNote(false, e.message); }
+    catch (e) { if (e.status !== 401 && !e.cancelled) showNote(sNote, false, e.message); }
   });
   sTest.addEventListener("click", async () => {
     sNote.hidden = true;
     try {
       const j = await sensitive("/api/admin/screening/check", sBody());
-      const ok = j.check?.ok ?? j.ok;
-      sShowNote(ok, (ok ? "Screening check passed: " : "Screening check failed: ") + (j.check?.message || j.message || ""));
-    } catch (e) { if (e.status !== 401 && !e.cancelled) sShowNote(false, e.message); }
+      showNote(sNote, j.ok, (j.ok ? "Screening check passed: " : "Screening check failed: ") + j.message);
+    } catch (e) { if (e.status !== 401 && !e.cancelled) showNote(sNote, false, e.message); }
   });
   p.append(el("fieldset", {}, el("legend", { text: "Screening (TypeSafe)" }), sForm));
   return p;
