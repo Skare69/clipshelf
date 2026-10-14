@@ -10,11 +10,7 @@ it instead of reaching further in; callers own thresholds and fail-open.
 
 import os
 
-try:
-    from typesafe_sdk import Choice, Noul, NoulCriteria, Score, TypeSafeClient
-    _SDK = True
-except ImportError:
-    _SDK = False
+from typesafe_sdk import Choice, Noul, NoulCriteria, Score, TypeSafeClient
 
 # Tuned policy knobs.
 ACTION_STEER = 0.70
@@ -34,8 +30,8 @@ class JudgmentError(Exception):
 
 
 def available(api_key=None) -> bool:
-    return _SDK and bool((api_key or "").strip()
-                         or os.environ.get("TYPESAFE_API_KEY", "").strip())
+    return bool((api_key or "").strip()
+                or os.environ.get("TYPESAFE_API_KEY", "").strip())
 
 
 def _cut(value):
@@ -61,7 +57,7 @@ def _float(answer, name):
 
 def ask(state, questions, api_key=None):
     if not available(api_key):
-        raise JudgmentError("screening unavailable: no API key or SDK missing")
+        raise JudgmentError("screening unavailable: no API key")
     with _client(api_key) as client:
         try:
             response = client.system_one(state=state, questions=questions, timeout=TIMEOUT)
