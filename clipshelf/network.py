@@ -25,8 +25,8 @@ import time
 import urllib.parse
 import zlib
 
-__all__ = ["NetworkError", "fetch_public", "resolve_public", "extractor_egress",
-           "scrub_env"]
+__all__ = ["NetworkError", "Refused", "TooLarge", "fetch_public",
+           "resolve_public", "extractor_egress", "scrub_env"]
 
 MAX_REDIRECTS = 10
 _NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
@@ -49,6 +49,14 @@ class NetworkError(Exception):
     """Refused or failed public fetch; message is safe to surface."""
 
 
+class Refused(NetworkError):
+    """Deterministic policy refusal (SSRF guard): never transient."""
+
+
+class TooLarge(NetworkError):
+    """The response exceeded the caller's byte bound."""
+
+
 # ---------------------------------------------------------------- validation
 
 def _assert_public_ip(text):
@@ -56,7 +64,7 @@ def _assert_public_ip(text):
     try:
         ip = ipaddress.ip_address(text)
     except ValueError:
-        raise NetworkError(f"malformed address refused: {text[:64]!r}")
+        raise Refused(f"malformed address refused: {text[:64]!r}")
     check = ip
     if isinstance(ip, ipaddress.IPv6Address):
         # belt over 3.13's patched is_global: unwrap embedded IPv4 explicitly
@@ -66,7 +74,7 @@ def _assert_public_ip(text):
         if emb is not None:
             check = emb
     if not ip.is_global or not check.is_global:
-        raise NetworkError(f"non-public destination refused: {text[:64]}")
+        raise Refused(f"non-public destination refused: {text[:64]}")
 
 
 def resolve_public(host, port, deadline=None):
@@ -128,7 +136,7 @@ def validate_url(url, deadline=None):
     if parts.scheme not in ("http", "https"):
         raise NetworkError(f"unsupported scheme {parts.scheme!r}")
     if parts.username or parts.password:
-        raise NetworkError("URL credentials refused")
+        raise Refused("URL credentials refused")
     host = parts.hostname
     if not host:
         raise NetworkError("URL has no host")
@@ -136,7 +144,7 @@ def validate_url(url, deadline=None):
     if port is None:
         port = default
     elif port != default:
-        raise NetworkError(f"non-standard port {port} refused")
+        raise Refused(f"non-standard port {port} refused")
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
@@ -244,7 +252,7 @@ def _bounded_read(resp, encoding, max_bytes, deadline):
     def absorb(piece):
         out.extend(piece)
         if len(out) > max_bytes:
-            raise NetworkError(f"response exceeds {max_bytes} byte bound")
+            raise TooLarge(f"response exceeds {max_bytes} byte bound")
 
     try:
         while True:
@@ -270,7 +278,7 @@ def _bounded_read(resp, encoding, max_bytes, deadline):
             if tail:
                 out.extend(tail)
                 if len(out) > max_bytes:
-                    raise NetworkError(f"response exceeds {max_bytes} byte bound")
+                    raise TooLarge(f"response exceeds {max_bytes} byte bound")
             if not dec.eof:
                 raise NetworkError("truncated compressed response")
     except zlib.error as exc:

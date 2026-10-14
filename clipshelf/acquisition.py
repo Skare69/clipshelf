@@ -148,10 +148,10 @@ def validate_video_file(path):
 # --------------------------------------------------------------- pages
 
 def _network_status(source, exc):
-    """Honest status for a refused/failed public fetch."""
-    text = str(exc)
-    _warn(source, text)
-    source["acquisition"] = "blocked" if "refused" in text or "non-public" in text else "error"
+    """Honest status for a refused/failed public fetch: a deterministic policy
+    refusal blocks; transport failures are transient errors and get retried."""
+    _warn(source, str(exc))
+    source["acquisition"] = "blocked" if isinstance(exc, network.Refused) else "error"
 
 
 def _direct_media_cap(ctype):

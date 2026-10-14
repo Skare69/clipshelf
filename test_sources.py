@@ -654,18 +654,20 @@ def test_interpretation_regressions(tmp):
     assert len(calls) == 1
     assert any("size bound" in warning for warning in findings["warnings"])
 
-    # URL body overflow alone does not mean the endpoint is unverified.
-    large_url = "https://example.com/large"
-    unavailable_url = "https://example.com/unavailable"
+    # URL body overflow alone does not mean the endpoint is unverified: the
+    # size error comes from a real oversized body, not a hand-written message
+    large_url = "http://example.com/large"
+    unavailable_url = "http://example.com/unavailable"
 
-    def fetch(url, **kwargs):
-        if url == large_url:
-            raise net.NetworkError("response exceeds 65536 byte bound")
-        raise net.NetworkError("offline")
-
+    fake, original = patched({"example.com": [PUBLIC]},
+                             [http(body=b"x" * (interp.VERIFY_URL_BYTES_MAX + 1)),
+                              http(404, body=b"gone")])
     findings = {"repos": [], "links": [large_url, unavailable_url], "warnings": []}
-    with mock.patch.object(net, "fetch_public", side_effect=fetch):
+    try:
         interp._verify_urls(findings, [])
+    finally:
+        net.socket = original
+    assert fake.connected == [PUBLIC, PUBLIC], fake.connected
     assert not any(large_url in warning for warning in findings["warnings"])
     assert any(unavailable_url in warning for warning in findings["warnings"])
 
@@ -755,6 +757,37 @@ def test_direct_media_single_fetch():
         acq.PAGE_MAX_BYTES = real_page_cap
         acq.validate_video_file = real_validate
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_network_status_classification():
+    """Refusals classify by type, not message text: a refused TCP dial is a
+    transient error (worker retries with backoff); only policy refusals block."""
+    class RefusedSock(FakeSock):
+        def connect(self, sa):
+            raise ConnectionRefusedError(111, "Connection refused")
+
+    class RefusedNet(FakeNet):
+        def socket(self, family, type):
+            return RefusedSock(self)
+
+    tmp = tempfile.mkdtemp(prefix="cs-status-")
+    real_socket = net.socket
+    net.socket = RefusedNet({"public.example": [PUBLIC]}, [])
+    try:
+        src = acq.acquire("http://public.example/x", tmp)
+        assert src["acquisition"] == "error", (src["acquisition"], src["warnings"])
+        assert any("Connection refused" in w for w in src["warnings"]), src["warnings"]
+    finally:
+        net.socket = real_socket
+
+    # a non-public destination is a deterministic policy refusal: blocked
+    try:
+        src = acq.acquire("http://10.0.0.1/x", tmp)
+        assert src["acquisition"] == "blocked", (src["acquisition"], src["warnings"])
+        assert any("non-public" in w for w in src["warnings"]), src["warnings"]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print("status classification ok")
 
 
 def test_interpretation_bounds():
@@ -1900,6 +1933,7 @@ def test():
         shutil.rmtree(tmp, ignore_errors=True)
     test_direct_media_single_fetch()
     print("direct media ok")
+    test_network_status_classification()
     test_interpretation_bounds()
     test_screening_policy().debug()
     test_screening_warning_projection()

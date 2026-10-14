@@ -448,8 +448,7 @@ def _verify_urls(findings, warnings):
         try:
             network.fetch_public(url, max_bytes=VERIFY_URL_BYTES_MAX, timeout=20)
         except Exception as exc:
-            if (isinstance(exc, network.NetworkError)
-                    and str(exc) == f"response exceeds {VERIFY_URL_BYTES_MAX} byte bound"):
+            if isinstance(exc, network.TooLarge):
                 continue
             flag = f"unverified: {url}"[:300]
             if flag not in findings["warnings"]:
