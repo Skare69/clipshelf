@@ -45,6 +45,7 @@ android {
     compileSdk 35
 
     defaultConfig {
+        // No applicationIdSuffix: the share target identity is dev.clipshelf.app.
         applicationId "dev.clipshelf.app"
         minSdk 26
         targetSdk 35
@@ -71,11 +72,7 @@ android {
 
     buildTypes {
         release {
-            minifyEnabled false
             signingConfig signingConfigs.release
-        }
-        debug {
-            // No applicationIdSuffix: the share target identity is dev.clipshelf.app.
         }
     }
 
