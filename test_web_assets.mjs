@@ -223,3 +223,27 @@ console.log("ok: failed import replay shows the stored error and never the succe
     `the debounce must not move focus out of the search box, got ${globalThis.document.activeElement?.id || "none"}`);
 }
 console.log("ok: a search that opens the library keeps focus in the search box");
+
+/* ---------- 5. empty invitations panel renders no "null" child (red-before/green-after) ---------- */
+/* Drives the real adminInvitations code path in clipshelf/static/clipshelf/admin.js.
+   The stub's append mirrors the real DOM: non-Node arguments become text, so a
+   `append(null)` fallback would surface as the literal text "null" between the form
+   and the hint. Fails at the head that passed `: null` into p.append(...). */
+const { adminInvitations } = await import("./clipshelf/static/clipshelf/admin.js");
+const collectText = (n) => collect(n).map((c) => c.textContent).join("");
+const empty = adminInvitations([], null);
+const emptyText = collectText(empty);
+assert.ok(!emptyText.includes("null"),
+  `empty invitations must render no "null" child, got: ${JSON.stringify(emptyText)}`);
+assert.ok(collect(empty).some((c) => c.tagName === "FORM"), "invite form still renders");
+assert.match(emptyText, /single-use, expiring links/, "hint still renders");
+
+// Control: one pending invitation still renders the table row, and no "null".
+const soon = new Date(Date.now() + 864e5).toISOString();
+const one = adminInvitations(
+  [{ email: "a@b.c", used_at: null, created_at: soon, expires_at: soon }], null);
+const oneText = collectText(one);
+assert.ok(!oneText.includes("null"), `rendered row must not contain "null": ${JSON.stringify(oneText)}`);
+assert.ok(oneText.includes("a@b.c") && oneText.includes("Pending"), "row renders with status");
+
+console.log("ok: empty invitations panel shows no stray null child");

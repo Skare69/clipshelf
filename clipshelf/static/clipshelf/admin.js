@@ -112,7 +112,7 @@ function adminInvitations(invs, err) {
       el("td", {}, el("span", { class: "badge " + ({ Used: "", Expired: "err", Pending: "ok" }[status]), text: status })));
   });
   p.append(form,
-    rows.length ? table(["Email", "#Created", "#Expires", "Status"], rows) : null,
+    rows.length ? table(["Email", "#Created", "#Expires", "Status"], rows) : "",
     el("p", { class: "hint", text: "Invitations are single-use, expiring links; the recipient picks their own password and verifies the email. SMTP is not involved. The full link is shown only once, at creation." }));
   return p;
 }
@@ -331,3 +331,5 @@ function adminLlm(llm, err, scr, scrErr) {
 
 
 onEnter("admin", renderAdmin);
+
+export { adminInvitations };
