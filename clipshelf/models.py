@@ -16,6 +16,8 @@ from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from django.utils.translation import gettext_lazy as _
 
+from clipshelf import lib
+
 # Omitted-value sentinel for ServerSettings.resolve; distinct from an explicit
 # empty string, which clears the key.
 _UNSET = object()
@@ -170,8 +172,8 @@ class Job(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     capture = models.ForeignKey(Capture, on_delete=models.CASCADE, related_name="jobs")
     collection = models.ForeignKey(Collection, on_delete=models.PROTECT, related_name="jobs")
-    url = models.CharField(max_length=2048)
-    final_url = models.CharField(max_length=2048, blank=True, default="")
+    url = models.CharField(max_length=lib.MAX_URL_LENGTH)
+    final_url = models.CharField(max_length=lib.MAX_URL_LENGTH, blank=True, default="")
     state = models.CharField(max_length=16, choices=State.choices, default=State.QUEUED)
     acquisition = models.CharField(
         max_length=16, choices=AcquisitionStatus.choices, default=AcquisitionStatus.PENDING
@@ -336,7 +338,7 @@ class Entry(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     collection = models.ForeignKey(Collection, on_delete=models.CASCADE, related_name="entries")
     kind = models.CharField(max_length=16, choices=Kind.choices, default=Kind.LINK)
-    key = models.CharField(max_length=2048)
+    key = models.CharField(max_length=lib.MAX_URL_LENGTH)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -387,8 +389,8 @@ class History(models.Model):
     collection = models.ForeignKey(Collection, on_delete=models.CASCADE, related_name="history")
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="history")
     kind = models.CharField(max_length=16, choices=Kind.choices)
-    url = models.CharField(max_length=2048)
-    target_url = models.CharField(max_length=2048, blank=True, default="")
+    url = models.CharField(max_length=lib.MAX_URL_LENGTH)
+    target_url = models.CharField(max_length=lib.MAX_URL_LENGTH, blank=True, default="")
     data = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

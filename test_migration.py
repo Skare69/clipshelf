@@ -204,6 +204,16 @@ class ManifestTests(MigrationMixin, TestCase):
                 imports.legacy_payload({"links": links})
             self.assertEqual(raised.exception.messages, [message])
 
+    def test_legacy_history_url_bound_uses_lib_max_url_length(self):
+        # the bound must track lib.MAX_URL_LENGTH, not a copied 2048 literal
+        with mock.patch.object(lib, "MAX_URL_LENGTH", 20):
+            with self.assertRaises(ValidationError) as raised:
+                self.direct_import(dry_run=True,
+                                   seen={"x" * 21: "2024-01-01"})
+        self.assertEqual(raised.exception.messages,
+                         ["legacy history URLs must be non-empty strings up "
+                          "to 20 characters"])
+
 
 class MediaParityTests(MigrationMixin, TestCase):
     """The dry run and the real import must report the same media set for

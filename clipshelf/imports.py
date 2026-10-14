@@ -299,11 +299,11 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     if not isinstance(seen, dict) or not isinstance(removed, dict):
         raise ValidationError("legacy seen and removed must be JSON objects")
     for urls in (seen, removed):
-        if any(not isinstance(url, str) or not url.strip() or len(url) > 2048
-               for url in urls):
+        if any(not isinstance(url, str) or not url.strip()
+               or len(url) > lib.MAX_URL_LENGTH for url in urls):
             raise ValidationError(
                 "legacy history URLs must be non-empty strings up to "
-                "2048 characters")
+                f"{lib.MAX_URL_LENGTH} characters")
     removed_urls = list(removed)
     removed_keys = {lib.norm(url) or url for url in removed_urls}
     items = _dedupe(items, removed_keys)
