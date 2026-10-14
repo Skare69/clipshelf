@@ -6,8 +6,11 @@ at every lookup, never minted, never migrated."""
 import shutil
 import tempfile
 import uuid
+from pathlib import Path
+from unittest import mock
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
@@ -177,6 +180,15 @@ class MergeVariantTests(KeysFixtureMixin, TestCase):
             models.Entry.objects.filter(collection=self.personal, kind="link").count(), 1)
         self.assertTrue(legacy_entry.contributions.exists())
 
+    def test_merge_source_summary_lands_in_contribution_desc(self):
+        imports.merge_findings(
+            self.alice, [{"source": "https://example.com/s",
+                          "summary": "the longest summary",
+                          "repos": [], "links": [], "prompts": []}])
+        entry = models.Entry.objects.get(collection=self.personal, kind="link")
+        contribution = entry.contributions.get(user=self.alice)
+        self.assertEqual(contribution.data["desc"], "the longest summary")
+
 
 class ImportVariantTests(KeysFixtureMixin, TestCase):
     def _import(self, items, removed=None):
@@ -199,3 +211,37 @@ class ImportVariantTests(KeysFixtureMixin, TestCase):
         self.assertEqual(result["counts"]["entries"], 0)
         self.assertFalse(models.Entry.objects.exists(),
                          "import resurrected a removed link under its cased key")
+
+
+class LegacyPayloadTests(TestCase):
+    """Pure translation helpers: a renamed field key must not drop data."""
+
+    def test_legacy_payload_keeps_title(self):
+        result = imports.legacy_payload(
+            {"links": {"https://example.com/a": {"title": "Legacy Title"}}})
+        self.assertEqual(result["items"][0]["title"], "Legacy Title")
+
+    def test_prompt_plans_keep_found_and_interpreted(self):
+        plans = imports._prompt_plans(
+            [{"text": "P", "title": "T", "cat": "c",
+              "found": "somewhere", "interpreted": "yes"}])
+        self.assertEqual(plans[0]["data"]["found"], "somewhere")
+        self.assertEqual(plans[0]["data"]["interpreted"], "yes")
+
+    def test_manifest_prompts_keep_found_and_interpreted(self):
+        manifest = imports._manifest(
+            [], [{"text": "P", "title": "T", "cat": "c",
+                  "found": "somewhere", "interpreted": "yes"}],
+            {}, [], {"files": {}, "missing": []}, "test")
+        prompt = manifest["prompts"][publication.prompt_key("P")]
+        self.assertEqual(prompt["found"], "somewhere")
+        self.assertEqual(prompt["interpreted"], "yes")
+
+    def test_non_string_media_path_gets_the_pinned_message(self):
+        # The message surfaces verbatim in the import error the user sees.
+        with self.assertRaises(ValidationError) as raised:
+            imports._resolve_media({"path": 123}, None,
+                                   Path(tempfile.gettempdir()),
+                                   {"files": {}, "missing": []})
+        self.assertEqual(raised.exception.messages,
+                         ["media path must be a relative filename"])

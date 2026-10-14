@@ -102,6 +102,13 @@ class ScreeningKeyTests(TestCase):
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "env-key"}):
             self.assertEqual(services.screening_key(), "env-key")
 
+    def test_env_fallback_uses_exact_env_name(self):
+        s = services.get_settings()
+        s.typesafe_api_key = ""
+        s.save(update_fields=["typesafe_api_key"])
+        with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": "env-secret"}):
+            self.assertEqual(services.screening_key(), "env-secret")
+
     def test_none_when_unset(self):
         with mock.patch.dict(os.environ, {"TYPESAFE_API_KEY": ""}):
             self.assertIsNone(services.screening_key())
@@ -223,6 +230,26 @@ class InterpretKeyTests(SimpleTestCase):
             with self.assertRaises(GuardrailBlocked):
                 interpretation.interpret(source, config, [], screening_key="row-key")
         self.assertEqual(seen, ["row-key"])
+
+
+class ScreeningGatePayloadTests(TestCase):
+    """screening_gate reaches the settings row through screening_key, so it
+    needs the database: the payload it hands the screener must keep its keys."""
+
+    def test_screening_gate_payload_shape(self):
+        material = {"title": "T", "description": "D", "text": "X"}
+        findings = {"source": "https://example.com/s", "repos": [], "links": []}
+        with mock.patch.object(services.judgment, "available", return_value=True), \
+                mock.patch.object(services.judgment, "screen_findings",
+                                  return_value=None) as screen:
+            result, withheld = services.screening_gate(material, findings)
+        self.assertEqual(screen.call_count, 1)
+        payload = screen.call_args[0][0]
+        self.assertGreaterEqual(set(payload), {"material", "findings", "entries"})
+        self.assertEqual(payload["material"], material)
+        self.assertEqual(payload["entries"], [])
+        self.assertIsNone(withheld)
+        self.assertEqual(result, findings)
 
 
 class StoreFindingsKeyTests(ScreeningMixin, TestCase):

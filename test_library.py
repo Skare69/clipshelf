@@ -4,11 +4,13 @@ idempotency/conflict, destination fallback, contributor-local removal.
 Real database, real views, real authorization — no mocks.
 """
 
+import hashlib
 import json
 import os
 import shutil
 import tempfile
 import uuid
+from unittest import mock
 from datetime import timedelta
 from unittest import mock
 from urllib.parse import urlencode
@@ -17,12 +19,14 @@ from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.http import Http404
 from django.db import IntegrityError, transaction
 from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 from allauth.account.models import EmailAddress
 
 from clipshelf import imports, services, worker
+from clipshelf import acquisition, judgment, views
 from clipshelf.models import ImportRecord, ImportRequest
 from clipshelf.models import Asset, Capture, Collection, Contribution, Entry, History, Job, Membership
 
@@ -1544,6 +1548,168 @@ class ImportTests(ApiTestCase):
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["entries"][0]["install"], "")
         self.assertFalse(payload["entries"][0]["interpreted"])
+    # --- mutant-kill tests -------------------------------------------------
+
+    def test_import_rejects_export_nesting_beyond_max_depth(self):
+        # views._scan_import_keys raises ApiError(400) when a node sits
+        # deeper than MAX_IMPORT_DEPTH. "links" is depth 1, the per-url
+        # entry dict depth 2; twelve more dict levels put the innermost
+        # value at depth 14 > 12.
+        deep = "deep"
+        for _ in range(12):
+            deep = {"k": deep}
+        alice = self._login(self.alice)
+        response = self._post_import(
+            alice, json.dumps({"links": {"https://example.com/a": deep}}).encode()
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            "export nesting exceeds the supported depth",
+        )
+
+    def test_legacy_import_records_legacy_format_in_manifest(self):
+        alice = self._login(self.alice)
+        response = self._post_import(
+            alice,
+            json.dumps(
+                {"links": {"https://example.com/a": {"title": "T"}}}
+            ).encode(),
+        )
+        self.assertEqual(response.status_code, 201)
+        record = ImportRecord.objects.get(pk=response.json()["import"]["id"])
+        self.assertEqual(record.manifest["format"], "legacy")
+
+    def test_tiktok_import_digests_fields_with_unescaped_unicode(self):
+        # imports._canonical uses ensure_ascii=False, so the staged
+        # fields_sha256 must equal a digest over the UTF-8 spelling of the
+        # fields (no \uXXXX escapes).
+        alice = self._login(self.alice)
+        response = self._post_import(
+            alice,
+            json.dumps(
+                [{"id": "1", "url": "https://example.com/a", "title": "cl\u00e9"}]
+            ).encode(),
+        )
+        self.assertEqual(response.status_code, 201)
+        record = ImportRecord.objects.get(pk=response.json()["import"]["id"])
+        imports.run_staged_import(record)
+        record.refresh_from_db()
+        # _update_manifest nests the rebuilt manifest under result.
+        url, stored = next(iter(
+            record.manifest["result"]["manifest"]["links"].items()))
+        expected = hashlib.sha256(
+            json.dumps(
+                {"id": "1", "url": url, "title": "cl\u00e9"},
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        self.assertEqual(stored["fields_sha256"], expected)
+
+    def test_screening_withhold_blocks_legacy_interpreted_import_job(self):
+        alice = self._login(self.alice)
+        cache_dir = os.path.join(os.path.realpath(self._data_dir()), "import-cache")
+        os.makedirs(os.path.join(cache_dir, "cache"), exist_ok=True)
+        with open(os.path.join(cache_dir, "cache", "p.html"), "w") as fh:
+            fh.write("<html>kept page</html>")
+        response = self._post_import(
+            alice,
+            json.dumps(
+                {
+                    "links": {
+                        "https://example.com/a": {
+                            "interpreted": True,
+                            "title": "T",
+                            "cache": "cache/p.html",
+                        }
+                    }
+                }
+            ).encode(),
+        )
+        self.assertEqual(response.status_code, 201)
+        record = ImportRecord.objects.get(pk=response.json()["import"]["id"])
+        withheld = {"danger": judgment.WITHHOLD_DANGER, "related": {}}
+        with mock.patch.object(judgment, "available", return_value=True), \
+                mock.patch.object(judgment, "screen_findings", return_value=withheld), \
+                mock.patch.object(
+                    acquisition, "acquire",
+                    side_effect=acquisition.AcquisitionError("offline")):
+            imports.run_staged_import(record)
+        job = Job.objects.get(url="https://example.com/a")
+        self.assertEqual(job.state, "blocked")
+        self.assertEqual(job.interpretation, "blocked")
+
+
+class ApiMutantKillTests(ApiTestCase):
+    def test_entries_unknown_collection_answers_404(self):
+        # The API surface maps Http404 to a generic detail; the specific
+        # message is asserted on the raising seam itself below.
+        alice = self._login(self.alice)
+        response = alice.get(
+            f"/api/entries?collection_id={self.bob_personal.id}"
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.json()["detail"], "no such resource")
+        with self.assertRaises(Http404) as ctx:
+            views._accessible_collection(self.alice, str(self.bob_personal.id))
+        self.assertEqual(str(ctx.exception), "collection not accessible")
+
+    def test_delete_member_on_personal_collection_answers_403(self):
+        alice = self._login(self.alice)
+        response = alice.delete(
+            f"/api/collections/{self.alice_personal.id}/members/{self.bob.id}"
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"], "personal collections have no members"
+        )
+
+    def test_add_member_on_personal_collection_answers_403(self):
+        alice = self._login(self.alice)
+        response = alice.post(
+            f"/api/collections/{self.alice_personal.id}/members",
+            data=json.dumps({"email": self.bob.email}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(
+            response.json()["detail"], "personal collections have no members"
+        )
+
+    def test_az_sort_orders_by_title_not_url(self):
+        entry_a, _ = self._contribute(
+            self.alice, self.alice_personal, url="https://example.com/m"
+        )
+        Contribution.objects.filter(entry=entry_a).update(data={"title": "zeta"})
+        entry_b, _ = self._contribute(
+            self.alice, self.alice_personal, url="https://example.com/z"
+        )
+        Contribution.objects.filter(entry=entry_b).update(data={"title": "alpha"})
+        alice = self._login(self.alice)
+        response = alice.get("/api/entries?sort=az")
+        self.assertEqual(response.status_code, 200)
+        first = response.json()["entries"][0]
+        self.assertEqual(first["title"], "alpha")
+
+    def test_capture_trims_unbalanced_trailing_parenthesis(self):
+        # One unmatched "(" plus two trailing ")": the balancer scans the
+        # candidate without its trailing ")"s, finds balance 1, and trims
+        # exactly one ")" so the paired one survives.
+        alice = self._login(self.alice)
+        response = alice.post(
+            "/api/captures",
+            data=self._capture_body(
+                self.alice, collection=self.alice_personal,
+                text="(https://example.com/a_(b))",
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        capture = Capture.objects.get(pk=response.json()["receipt"]["id"])
+        job = Job.objects.get(capture=capture)
+        self.assertEqual(job.url, "https://example.com/a_(b)")
 
 
 class ShellAndHealthTests(ApiTestCase):

@@ -193,6 +193,28 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.assertTrue(published.is_file(), "no complete asset file at final path")
         self.assertTrue(str(asset.path).startswith("assets/"))
 
+    def test_acquire_phase_moves_files_out_of_staging(self):
+        job = self.make_job()
+        self.run_worker()
+        staging = Path(self.tmp) / "staging" / f"job-{job.id}"
+        # move=True consumes the staged file; a copy would leave it behind.
+        self.assertFalse(staging.exists() and any(staging.iterdir()),
+                         "staged files were copied, not moved, into assets/")
+
+    def test_store_source_caps_tags_at_fifty(self):
+        job = self.make_job()
+        services.store_source(job, {
+            "url": job.url, "acquisition": "complete", "title": "t",
+            "metadata": {"tags": [f"tag{i}" for i in range(51)]}})
+        contribution = models.Contribution.objects.get(job=job)
+        self.assertEqual(len(contribution.data["tags"]), 50)
+
+    def test_validate_findings_caps_each_install_at_2000_chars(self):
+        job = self.make_job()
+        findings = services._validate_findings(
+            job, {"source": job.url, "installs": ["x" * 2001]})
+        self.assertEqual(len(findings["installs"][0]), 2000)
+
     def test_terminal_host_shelves_job_without_reading(self):
         def no_read(source, config, cats, **kw):
             raise AssertionError("the model must not run for a terminal host")

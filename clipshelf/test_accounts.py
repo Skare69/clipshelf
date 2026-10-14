@@ -13,9 +13,10 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.exceptions import PermissionDenied
+from django.contrib.auth.models import AnonymousUser
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import JsonResponse
-from django.test import Client, SimpleTestCase, TestCase, override_settings
+from django.test import Client, RequestFactory, SimpleTestCase, TestCase, override_settings
 from django.urls import include, path, reverse
 from django.utils import timezone
 
@@ -1039,3 +1040,55 @@ class JobPolicyTests(SimpleTestCase):
         )
         self.assertFalse(job.terminal)
         self.assertTrue(job.needs_attention)
+
+
+class InviteSignupFormGuardTests(AccountTestCase):
+    """The signup form turns an unknown mailbox into a form error, driven by
+    allauth's request context even though allauth hides the request from
+    signup-form clean_email."""
+
+    def test_clean_email_rejects_unknown_email_without_pending_invitation(self):
+        request = RequestFactory().get("/signup")
+        request.user = AnonymousUser()
+        request.session = {}
+        # allauth 65.x hides the request from signup forms: it reaches
+        # clean_email only through allauth's request context.
+        form = accounts.InviteSignupForm(data={"email": "stranger@clipshelf.test"})
+        # Production shape: fields are cleaned before clean_email runs.
+        form.cleaned_data = {"email": "stranger@clipshelf.test"}
+        with accounts.allauth_context.request_context(request):
+            with self.assertRaises(ValidationError):
+                form.clean_email()
+
+
+class AdminUserListVerificationTests(AccountTestCase):
+    def test_user_list_reports_verification_status_per_user(self):
+        verified_user = make_user("verified-list@clipshelf.test", verified=True)
+        unverified_user = make_user("unverified-list@clipshelf.test", verified=False)
+        self.client.force_login(self.admin)
+        response = self.client.get("/api/admin/users")
+        self.assertEqual(response.status_code, 200)
+        users = {u["email"]: u for u in response.json()["users"]}
+        self.assertIs(users[verified_user.email]["is_verified"], True)
+        self.assertIs(users[unverified_user.email]["is_verified"], False)
+
+
+class AdminCollectionListShapeTests(AccountTestCase):
+    def test_collection_list_exposes_owner_and_members_with_exact_keys(self):
+        owner = make_user("coll-owner@clipshelf.test")
+        member = make_user("coll-member@clipshelf.test")
+        shared = Collection(name="SharedListed", kind="shared", owner=owner)
+        shared.save()
+        Membership(collection=shared, user=member).save()
+        self.client.force_login(self.admin)
+        response = self.client.get("/api/admin/collections")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["collections"]
+        self.assertEqual(
+            data[0]["owner"],
+            {"id": str(owner.pk), "email": owner.email, "is_active": True},
+        )
+        self.assertEqual(
+            data[0]["members"],
+            [{"id": str(member.pk), "email": member.email, "is_active": True}],
+        )
