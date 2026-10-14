@@ -48,7 +48,8 @@ Open the URL and complete the setup wizard — it creates the first
 administrator. If an administrator locks themselves out, `bootstrap_admin
 --email you@example.com` remains the CLI recovery path and prints a single-use
 link. In development mail goes to the console; production needs a real SMTP
-relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery.
+relay (`CLIPSHELF_SMTP_*`) for invitations and password recovery. Send a test
+message with `python clipshelf.py sendtestemail you@example.com`.
 
 ## Deploy on the NAS
 
