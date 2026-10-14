@@ -259,17 +259,23 @@ def _lock_gate_regressions():
         assert ld.MIN_RELEASE_AGE == timedelta(days=7)
 
         # 2. a yanked keep pin is unheld and re-resolved, never shipped
+        gateless = []
+
         def yanked_fake(python, req, tmp, extra):
             if extra and extra[0] == "-c":
                 held = dict(l.split("==") for l in Path(extra[1]).read_text().split())
                 if held.get("foo") == "2.0":
                     return {"foo": "2.0"}, {"foo"}
-                return {"foo": "1.0"}, set()
-            return {"foo": "1.0"}, set()
+                return {"foo": held.get("foo", "99.0")}, set()  # an unheld name gets its newest
+            # pip: the age gate applies to pass 1 only; a hold-less re-resolve
+            # takes the newest non-yanked release of any age
+            gateless.append(1)
+            return {"foo": "1.0" if len(gateless) == 1 else "99.0"}, set()
 
         with mock.patch.object(ld, "dry_run", side_effect=yanked_fake):
             res = ld.resolve("python", req, tmp, {"foo": "2.0"})
         assert res.pins == {"foo": "1.0"} and not res.yanked
+        assert len(gateless) == 1  # re-held at its gated pick; no ungated re-resolve
 
         lock_lines = ["# test lock", "foo==2.0 \\", "    --hash=sha256:" + "0" * 64]
         lock = tmp / "requirements.lock"

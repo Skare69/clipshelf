@@ -146,10 +146,16 @@ def resolve(python: str, req: Path, tmp: Path, keep: dict[str, str] | None = Non
         drop = yanked & held_names.keys()
         if not drop:
             break
-        # pip only installs a yanked release under an exact pin; unholding
-        # settles on the age-gated non-yanked release
+        # pip only installs a yanked release under an exact pin; a hold-less
+        # name resolves to the newest non-yanked release of any age, so
+        # re-hold at the pass-1 age-gated pick. Delete only when the held pin
+        # equals the gated pick (a keep-only pin, or pass 1 somehow picked the
+        # yanked release) — otherwise the loop would never settle.
         for n in drop:
-            del held_names[n]
+            if n in gated and held_names[n] != gated[n]:
+                held_names[n] = gated[n]
+            else:
+                del held_names[n]
     # win32-only Django marker dep: keep it in the shipped set verbatim
     if "django" in pins and "tzdata" in (keep or {}) and "tzdata" not in pins:
         # ponytail: the carried tzdata version never updates until the lock is
