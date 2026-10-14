@@ -211,7 +211,43 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
     def test_abandoned_running_recovered(self):
         job = self.make_job(state="running")
         self.run_worker()
+        # the abandoned run counts as a failed attempt and backs off first
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.attempts), ("retry", 1))
+        self.assertGreater(job.retry_at, timezone.now())
+        self.assertEqual(job.error, "worker stopped while processing")
+        models.Job.objects.filter(pk=job.pk).update(
+            retry_at=timezone.now() - timedelta(seconds=1))
+        self.run_worker()
         self.assertEqual(self.refresh(job).state, "done")
+
+    def test_recovered_crash_counts_as_attempt(self):
+        near_limit = self.make_job(state="running", attempts=4)
+        fresh = self.make_job(state="running", attempts=0)
+        worker._recover_abandoned()
+        near_limit = self.refresh(near_limit)
+        self.assertEqual((near_limit.state, near_limit.attempts), ("blocked", 5))
+        self.assertIsNone(near_limit.retry_at)
+        fresh = self.refresh(fresh)
+        self.assertEqual((fresh.state, fresh.attempts), ("retry", 1))
+        self.assertGreater(fresh.retry_at, timezone.now())
+
+    def test_recovered_import_counts_attempts_in_manifest(self):
+        fresh = models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "running"})
+        near_limit = models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "running", "attempts": 4})
+        worker._recover_abandoned()
+        fresh.refresh_from_db()
+        self.assertEqual(
+            (fresh.manifest["status"], fresh.manifest["attempts"]), ("pending", 1))
+        near_limit.refresh_from_db()
+        self.assertEqual(
+            (near_limit.manifest["status"], near_limit.manifest["attempts"]),
+            ("error", 5))
+        self.assertEqual(near_limit.manifest["error"], "worker stopped while processing")
 
     def test_disabled_user_pauses_without_processing(self):
         job = self.make_job()

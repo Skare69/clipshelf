@@ -89,9 +89,9 @@ def main(once=False, stdout=None):
             print(message)
 
     with coordinator_lock(), data_lock():
-        recovered = _recover_abandoned()
-        if recovered:
-            say(f"recovered {recovered} abandoned running job(s)")
+        job_ids, import_ids = _recover_abandoned()
+        if job_ids or import_ids:
+            say(f"recovered abandoned jobs {job_ids} and imports {import_ids}")
         pool = ThreadPoolExecutor(max_workers=_concurrency(), thread_name_prefix="clipshelf-worker")
         # Refill keeps a slot busy while a long import runs; --once still
         # drains every claimable job before breaking. Imports never take
@@ -130,14 +130,27 @@ def main(once=False, stdout=None):
 def _recover_abandoned():
     """Recover in-flight work while holding the exclusive coordinator lock."""
     with transaction.atomic():
-        recovered = models.Job.objects.filter(state="running").update(
-            state="retry", retry_at=timezone.now()
-        )
+        jobs = list(models.Job.objects.filter(state="running"))
+        for job in jobs:
+            # The abandoned run counts as a failed attempt, so a job whose
+            # processing kills the worker reaches the same blocked terminal
+            # state as repeated failures instead of looping across restarts.
+            job.fail("worker stopped while processing")
+        import_ids = []
         for record in models.ImportRecord.objects.filter(
                 manifest__status=models.ImportRecord.Status.RUNNING):
-            record.update_manifest({"status": models.ImportRecord.Status.PENDING})
-            recovered += 1
-        return recovered
+            attempts = int(record.manifest.get("attempts") or 0) + 1
+            if attempts >= models.Job.MAX_ATTEMPTS:
+                updates = {"status": models.ImportRecord.Status.ERROR,
+                           "attempts": attempts,
+                           "completed_at": timezone.now().isoformat(),
+                           "error": "worker stopped while processing"}
+            else:
+                updates = {"status": models.ImportRecord.Status.PENDING,
+                           "attempts": attempts}
+            record.update_manifest(updates)
+            import_ids.append(record.id)
+        return [job.id for job in jobs], import_ids
 
 
 def _llm_configured():
