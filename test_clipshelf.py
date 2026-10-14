@@ -411,6 +411,51 @@ def _lock_gate_regressions():
         assert res.pins["tzdata"] == "2025.2"
 
 
+def _compose_passes_size_and_fallback_settings():
+    # Regression: the documented Docker deployment must be able to raise the
+    # import ceiling and rotate the secret key with fallbacks. Both settings
+    # pass through the shared app-env block (web, worker and the ops one-shots
+    # inherit it), and a blank CLIPSHELF_MAX_IMPORT_BYTES behaves as unset.
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    from pathlib import Path
+
+    # ponytail: text scan of the shared block instead of an anchor-resolving
+    # YAML read — PyYAML is not a dependency; valid while web/worker inherit *app.
+    lines = (Path(__file__).resolve().parent / "compose.yaml").read_text().splitlines()
+    start = lines.index("  environment: &app-env")
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("  volumes:"))
+    block = "\n".join(lines[start:end])
+    assert "CLIPSHELF_MAX_IMPORT_BYTES:" in block, block
+    assert "CLIPSHELF_SECRET_KEY_FALLBACKS:" in block, block
+
+    with tempfile.TemporaryDirectory(prefix="clipshelf-env-test-") as data_dir:
+        env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("CLIPSHELF_", "DJANGO_SETTINGS_MODULE"))
+        }
+        env.update({
+            "DJANGO_SETTINGS_MODULE": "clipshelf.project.settings",
+            "CLIPSHELF_DATA_DIR": data_dir,
+            "CLIPSHELF_DEBUG": "1",
+            # compose.yaml passes "" when the .env omits the variable.
+            "CLIPSHELF_MAX_IMPORT_BYTES": "",
+        })
+        code = (
+            "import django; django.setup(); "
+            "from django.conf import settings; "
+            "print(settings.CLIPSHELF_MAX_IMPORT_BYTES)"
+        )
+        proc = subprocess.run(
+            [sys.executable, "-c", code], env=env,
+            capture_output=True, text=True, timeout=60,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert int(proc.stdout.strip()) == 32 * 1024 * 1024, proc.stdout
+
+
 def test():
     # norm: canonicalize + dedup
     assert cs.norm("https://GitHub.com/a/b/?utm_source=x#frag") == cs.norm("https://github.com/a/b")
@@ -579,6 +624,7 @@ def test():
     _automatic_migration_waits_for_exclusive_lock()
     _lock_check_regressions()
     _lock_gate_regressions()
+    _compose_passes_size_and_fallback_settings()
     print("ok")
 
 

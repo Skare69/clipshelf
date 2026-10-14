@@ -222,7 +222,10 @@ STATIC_URL = "static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Upload ceilings: honest 413, no truncation ---
-CLIPSHELF_MAX_IMPORT_BYTES = int(os.environ.get("CLIPSHELF_MAX_IMPORT_BYTES", 32 * 1024 * 1024))
+# Blank behaves as unset: compose.yaml passes "" when the .env omits it.
+CLIPSHELF_MAX_IMPORT_BYTES = int(
+    os.environ.get("CLIPSHELF_MAX_IMPORT_BYTES") or 32 * 1024 * 1024
+)
 DATA_UPLOAD_MAX_MEMORY_SIZE = CLIPSHELF_MAX_IMPORT_BYTES
 FILE_UPLOAD_MAX_MEMORY_SIZE = CLIPSHELF_MAX_IMPORT_BYTES
 DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
