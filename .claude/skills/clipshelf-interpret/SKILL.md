@@ -65,16 +65,19 @@ All paths are relative to the repo root (where `clipshelf.py` lives).
      what the prompt is *for* (e.g. "Image generation", "Coding agents",
      "Writing & marketing") - same reuse-before-invent rule as repos.
    - Categorize every repo you report. Reuse existing categories before
-     inventing new ones: `python -c "import json;print(sorted({e.get('cat')
-     for e in json.load(open('library.json',encoding='utf-8'))['links'].values()
-     if e.get('cat')}))"`. Categories are specific domains ("Video generation",
+     inventing new ones - the vocabulary lives in the database, so read it
+     with `python clipshelf.py shell -c "from django.contrib.auth import get_user_model;
+     from clipshelf import worker; u = get_user_model().objects.get(email='you@example.com');
+     print(worker._categories(u.owned_collections.get(kind='personal')))"` (most used
+     first). Categories are specific domains ("Video generation",
      "Claude Code ecosystem"), not "AI".
    - For each repo that is an installable tool, read its README (fetch
      `https://raw.githubusercontent.com/<owner>/<name>/HEAD/README.md`) and put
      the official install one-liner in `installs` (e.g. `pip install x`,
      `npm i -g x`, `npx skills add owner/name`, `git clone <url>`). It must be a
-     single non-interactive command that works on Windows. The library UI runs it
-     verbatim on an "install" click - no `curl | sh`, no multi-step scripts.
+     single non-interactive command that works on Windows. Clipshelf never runs
+     it - the UI shows it copy-only for a human to paste - so keep it a one-liner
+     (no `curl | sh`, no multi-step scripts).
      Curated lists, datasets, or repos without a clear install command: omit.
    - Omit empty fields. Include an entry for every item you interpreted, even
      if it only has a summary.
