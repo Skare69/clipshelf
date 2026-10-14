@@ -6,7 +6,6 @@ import json
 import io
 import random
 import socket
-import shutil
 import tempfile
 import os
 import time
@@ -462,8 +461,7 @@ def test_deadline_bounded_dns():
         net.socket = real_socket
 
 
-def test_import_media_bounds(tmp=None):
-    tmp = tmp or tempfile.mkdtemp(prefix="cs-src-")
+def test_import_media_bounds(tmp):
     good = base64.b64encode(png_bytes()).decode()
 
     # payload-level violations raise
@@ -687,60 +685,59 @@ def test_direct_media_single_fetch():
     """Direct media arrives in ONE fetch under the media cap; pages keep the
     page cap. Before the content-type cap this rejected valid direct video
     over PAGE_MAX_BYTES and downloaded small media twice."""
-    tmp = tempfile.mkdtemp(prefix="cs-dir-")
-    real_page_cap = acq.PAGE_MAX_BYTES
-    real_validate = acq.validate_video_file
-    big_mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\0" * (8192 - 12)
-    small_mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\0" * (2048 - 12)
-    acq.PAGE_MAX_BYTES = 4096
-    acq.validate_video_file = lambda path: {"duration": 1.0}
-    try:
-        # direct video over the page cap but under the media cap is acquired
-        fake, original = patched({"media.example": [PUBLIC]},
-                                 [http(200, "video/mp4", big_mp4),
-                                  http(200, "video/mp4", big_mp4)])
+    with tempfile.TemporaryDirectory(prefix="cs-dir-") as tmp:
+        real_page_cap = acq.PAGE_MAX_BYTES
+        real_validate = acq.validate_video_file
+        big_mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\0" * (8192 - 12)
+        small_mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\0" * (2048 - 12)
+        acq.PAGE_MAX_BYTES = 4096
+        acq.validate_video_file = lambda path: {"duration": 1.0}
         try:
-            src = acq.acquire("http://media.example/movie.mp4", tmp)
-            assert src["acquisition"] == "complete", src["warnings"]
-            assert src["metadata"]["media"] == "video"
-            assert len(fake.connected) == 1, fake.connected
-            with open(src["assets"][0]["path"], "rb") as fh:
-                assert fh.read() == big_mp4
+            # direct video over the page cap but under the media cap is acquired
+            fake, original = patched({"media.example": [PUBLIC]},
+                                     [http(200, "video/mp4", big_mp4),
+                                      http(200, "video/mp4", big_mp4)])
+            try:
+                src = acq.acquire("http://media.example/movie.mp4", tmp)
+                assert src["acquisition"] == "complete", src["warnings"]
+                assert src["metadata"]["media"] == "video"
+                assert len(fake.connected) == 1, fake.connected
+                with open(src["assets"][0]["path"], "rb") as fh:
+                    assert fh.read() == big_mp4
+            finally:
+                net.socket = original
+            # small direct media: one GET, not a page fetch plus a media re-fetch
+            fake, original = patched({"media.example": [PUBLIC]},
+                                     [http(200, "video/mp4", small_mp4),
+                                      http(200, "video/mp4", small_mp4)])
+            try:
+                src = acq.acquire("http://media.example/clip.mp4", tmp)
+                assert src["acquisition"] == "complete", src["warnings"]
+                assert len(fake.connected) == 1, fake.connected
+            finally:
+                net.socket = original
+            # images likewise single-fetch
+            fake, original = patched({"media.example": [PUBLIC]},
+                                     [http(200, "image/png", png_bytes()),
+                                      http(200, "image/png", png_bytes())])
+            try:
+                src = acq.acquire("http://media.example/pic.png", tmp)
+                assert src["acquisition"] == "complete", src["warnings"]
+                assert src["metadata"]["media"] == "image"
+                assert len(fake.connected) == 1, fake.connected
+            finally:
+                net.socket = original
+            # plain pages keep the page byte cap
+            fake, original = patched({"media.example": [PUBLIC]},
+                                     [http(200, "text/html", b"<html>" + b"x" * 8192)])
+            try:
+                src = acq.acquire("http://media.example/page.html", tmp)
+                assert src["acquisition"] == "error", src["acquisition"]
+            finally:
+                net.socket = original
         finally:
-            net.socket = original
-        # small direct media: one GET, not a page fetch plus a media re-fetch
-        fake, original = patched({"media.example": [PUBLIC]},
-                                 [http(200, "video/mp4", small_mp4),
-                                  http(200, "video/mp4", small_mp4)])
-        try:
-            src = acq.acquire("http://media.example/clip.mp4", tmp)
-            assert src["acquisition"] == "complete", src["warnings"]
-            assert len(fake.connected) == 1, fake.connected
-        finally:
-            net.socket = original
-        # images likewise single-fetch
-        fake, original = patched({"media.example": [PUBLIC]},
-                                 [http(200, "image/png", png_bytes()),
-                                  http(200, "image/png", png_bytes())])
-        try:
-            src = acq.acquire("http://media.example/pic.png", tmp)
-            assert src["acquisition"] == "complete", src["warnings"]
-            assert src["metadata"]["media"] == "image"
-            assert len(fake.connected) == 1, fake.connected
-        finally:
-            net.socket = original
-        # plain pages keep the page byte cap
-        fake, original = patched({"media.example": [PUBLIC]},
-                                 [http(200, "text/html", b"<html>" + b"x" * 8192)])
-        try:
-            src = acq.acquire("http://media.example/page.html", tmp)
-            assert src["acquisition"] == "error", src["acquisition"]
-        finally:
-            net.socket = original
-    finally:
-        acq.PAGE_MAX_BYTES = real_page_cap
-        acq.validate_video_file = real_validate
-        shutil.rmtree(tmp, ignore_errors=True)
+            acq.PAGE_MAX_BYTES = real_page_cap
+            acq.validate_video_file = real_validate
 
 
 def test_network_status_classification():
@@ -1237,8 +1234,7 @@ def test_response_read_bound():
 def test_image_source_bounds():
     """Source images above the 32 MiB bound are skipped before decoding with
     an honest warning; a file exactly at the bound still decodes to one part."""
-    tmp = tempfile.mkdtemp(prefix="cs-img-")
-    try:
+    with tempfile.TemporaryDirectory(prefix="cs-img-") as tmp:
         warnings = []
         big = os.path.join(tmp, "big.png")
         with open(big, "wb") as fh:
@@ -1281,8 +1277,6 @@ def test_image_source_bounds():
         assert url and url.startswith("data:image/jpeg;base64,"), warnings
         im = Image.open(io.BytesIO(base64.b64decode(url.split(",", 1)[1])))
         assert 768 < max(im.size) <= 1024, im.size
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
     print("image bounds ok")
 
 
@@ -1902,13 +1896,10 @@ def test():
     print("deadline connect ok")
     test_deadline_bounded_dns()
     print("deadline dns ok")
-    tmp = tempfile.mkdtemp(prefix="cs-src-")
-    try:
+    with tempfile.TemporaryDirectory(prefix="cs-src-") as tmp:
         test_import_media_bounds(tmp)
         test_acquisition_regressions(tmp)
         test_interpretation_regressions(tmp)
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
     test_direct_media_single_fetch()
     print("direct media ok")
     test_network_status_classification()
