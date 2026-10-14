@@ -201,6 +201,8 @@ def _acquire_page(url, directory, source):
         try:
             validate_video_file(path)
         except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+            os.remove(path)
+            source["assets"].pop()
             _warn(source, f"video failed validation: {exc}")
             source["acquisition"] = "partial"
             return
@@ -318,12 +320,21 @@ def _run_extractor(argv):
 
 
 def _collect_files(outdir, source, directory):
-    """Classify extractor output into contract assets + captions text/info."""
+    """Classify extractor output into contract assets + captions text/info.
+
+    Extractor --max-filesize/filesize-max flags only hold for an announced
+    Content-Length, so MEDIA_MAX_BYTES is re-checked locally per file and per
+    attempt before anything is read or adopted."""
     captions_text, info = "", {}
+    adopted = 0
     for root, _dirs, files in os.walk(outdir):
         for name in sorted(files):
             src = os.path.join(root, name)
             ext = name.rsplit(".", 1)[-1].lower()
+            size = os.path.getsize(src)
+            if size > MEDIA_MAX_BYTES:
+                _warn(source, f"{name} skipped: above {MEDIA_MAX_BYTES} byte bound")
+                continue
             if name.endswith(".json"):
                 try:
                     with open(src, encoding="utf-8", errors="replace") as fh:
@@ -333,10 +344,14 @@ def _collect_files(outdir, source, directory):
                 except Exception as exc:
                     _warn(source, f"metadata file unreadable: {exc}")
                 continue
+            if adopted + size > MEDIA_MAX_BYTES:
+                _warn(source, f"per-attempt media bound reached; {name} skipped")
+                continue
             if ext in CAPTION_EXTS:
                 with open(src, "rb") as fh:
                     captions_text = _caption_text(fh.read())
                 adopt_file(source, src, directory, "captions", "application/x-subrip")
+                adopted += size
             elif ext in IMAGE_TYPES:
                 with open(src, "rb") as fh:
                     data = fh.read()
@@ -346,6 +361,7 @@ def _collect_files(outdir, source, directory):
                     _warn(source, f"image {name} failed validation: {exc}")
                     continue
                 adopt_file(source, src, directory, "image", ctype)
+                adopted += size
             elif ext in VIDEO_TYPES:
                 ctype = VIDEO_TYPES[ext]
                 with open(src, "rb") as fh:
@@ -354,13 +370,17 @@ def _collect_files(outdir, source, directory):
                     _warn(source, f"video {name} truncated")
                     continue
                 adopt_file(source, src, directory, "video", ctype)
+                adopted += size
                 try:
                     validate_video_file(source["assets"][-1]["path"])
                 except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
+                    os.remove(source["assets"].pop()["path"])
+                    adopted -= size
                     _warn(source, f"video failed validation: {exc}")
                     source["acquisition"] = "partial"
             elif ext in AUDIO_TYPES:
                 adopt_file(source, src, directory, "audio", AUDIO_TYPES[ext])
+                adopted += size
     return captions_text, info
 
 

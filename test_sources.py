@@ -636,6 +636,44 @@ def test_tiktok_host_dispatch(tmp):
         tiktok.assert_called_once()
 
 
+def test_extractor_output_bounds():
+    """Extractor output above the local bound is never adopted, and a video
+    that fails ffprobe is deleted like _import_video does; a valid small file
+    is still kept. Extractor size flags alone do not bound unannounced
+    Content-Length bodies, so the check must be local."""
+    tmp = tempfile.mkdtemp(prefix="cs-xtr-")
+
+    def emit(argv):
+        outdir = argv[argv.index("--paths") + 1]
+        with open(os.path.join(outdir, "huge.mp4"), "wb") as fh:
+            fh.seek(300 << 20)  # 300 MiB, sparse: size independent of disk use
+            fh.write(b"\0")
+        with open(os.path.join(outdir, "broken.mp4"), "wb") as fh:
+            fh.write(b"\x00\x00\x00\x18ftypmp42" + b"\0" * 64)
+        with open(os.path.join(outdir, "cover.png"), "wb") as fh:
+            fh.write(png_bytes())
+        return 0, ""
+
+    with mock.patch.object(acq, "_oembed", return_value={"title": "", "author": "",
+                                                         "thumbnail_url": ""}), \
+         mock.patch.object(net, "extractor_egress", return_value=mock.MagicMock()), \
+         mock.patch.object(acq, "_run_extractor", side_effect=emit), \
+         mock.patch.object(acq, "validate_video_file",
+                           side_effect=ValueError("no video stream")):
+        source = acq.acquire("https://www.tiktok.com/@u/video/bounds", tmp)
+    assert [asset["kind"] for asset in source["assets"]] == ["image"], source["assets"]
+    assert any("huge.mp4" in warning and "skipped" in warning
+               for warning in source["warnings"]), source["warnings"]
+    assert any(warning.startswith("video failed validation")
+               for warning in source["warnings"]), source["warnings"]
+    assert source["acquisition"] == "partial", source["acquisition"]
+    # the rejected video's staged copy is gone and nothing oversized was kept
+    assert not any(name.endswith(".mp4") for _, _, files in os.walk(tmp)
+                   for name in files), "unadopted or rejected video bytes were kept"
+    shutil.rmtree(tmp, ignore_errors=True)
+    print("extractor bounds ok")
+
+
 def test_interpretation_regressions(tmp):
     config = {"base_url": "http://h/v1", "model": "m"}
     source = {"url": "https://example.com/page", "title": "", "desc": "",
@@ -758,6 +796,23 @@ def test_direct_media_single_fetch():
                 src = acq.acquire("http://media.example/page.html", tmp)
                 assert src["acquisition"] == "error", src["acquisition"]
             finally:
+                net.socket = original
+            # a direct video that fails ffprobe is deleted, not kept with a warning
+            fake, original = patched({"media.example": [PUBLIC]},
+                                     [http(200, "video/mp4", small_mp4)])
+            bad_tmp = tempfile.mkdtemp(prefix="cs-bad-")
+            try:
+                with mock.patch.object(acq, "validate_video_file",
+                                       side_effect=ValueError("no video stream")):
+                    src = acq.acquire("http://media.example/bad.mp4", bad_tmp)
+                assert src["acquisition"] == "partial", src["warnings"]
+                assert src["assets"] == [], src["assets"]
+                assert any(w.startswith("video failed validation")
+                           for w in src["warnings"]), src["warnings"]
+                assert not any(name.endswith(".mp4") for _, _, files in os.walk(bad_tmp)
+                               for name in files), "invalid video bytes were kept"
+            finally:
+                shutil.rmtree(bad_tmp, ignore_errors=True)
                 net.socket = original
         finally:
             acq.PAGE_MAX_BYTES = real_page_cap
@@ -1962,6 +2017,7 @@ def test():
     test_direct_media_single_fetch()
     print("direct media ok")
     test_network_status_classification()
+    test_extractor_output_bounds()
     test_interpretation_bounds()
     test_screening_policy().debug()
     test_screening_warning_projection()
