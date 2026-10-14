@@ -30,8 +30,10 @@ from django.test import Client, TestCase, TransactionTestCase, override_settings
 from allauth.account.models import EmailAddress
 from PIL import Image
 
+from django.conf import settings
+
 from clipshelf import acquisition, cli, imports, judgment, lib, models, publication, services, worker
-from clipshelf.management.commands.backup import Command as BackupCommand
+from clipshelf.management.commands.backup import CONFIG_KEYS, Command as BackupCommand
 
 CACHE_BYTES = b"<html>cached page</html>"
 CACHE_NAME = "cache/" + hashlib.sha1(CACHE_BYTES).hexdigest() + ".html"
@@ -213,6 +215,23 @@ class ManifestTests(MigrationMixin, TestCase):
         self.assertEqual(raised.exception.messages,
                          ["legacy history URLs must be non-empty strings up "
                           "to 20 characters"])
+
+
+    def test_import_success_report_names_digest_and_counts(self):
+        out = self.run_import_command().rstrip("\n")
+        record = models.ImportRecord.objects.get(user=self.user)
+        counts = record.manifest["counts"]
+        # head and tail exact; result= must be followed by the result counts
+        # repr (an appended x after any constant breaks head, tail, or brace)
+        head, sep, tail = out.partition(" result=")
+        self.assertEqual(head,
+                         f"imported: digest={record.input_digest[:16]} "
+                         f"counts={counts}")
+        self.assertTrue(sep, out)
+        self.assertTrue(tail.startswith("{"), tail)
+        self.assertTrue(tail.endswith(
+            f" into personal collection {self.personal.id} "
+            "(interpret_cmd recorded, not activated)"), tail)
 
 
 class MediaParityTests(MigrationMixin, TestCase):
@@ -683,6 +702,52 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
         self.assertEqual(stat.S_IMODE(secrets_path.stat().st_mode), 0o600,
                          "a crashed backup left SECRETS.json readable by others")
         self.assertNotIn("smtp-password", secrets_path.read_text(encoding="utf-8"))
+
+    def test_backup_manifest_records_exact_config_and_database(self):
+        data_dir = self.tmp / "backup-data"
+        data_dir.mkdir()
+        target = self.tmp / "manifest-backup"
+        config = {
+            "DEFAULT_FROM_EMAIL": "backup@example.com",
+            "EMAIL_HOST": "smtp.backup.example",
+            "EMAIL_PORT": 587,
+            "EMAIL_USE_TLS": True,
+            "EMAIL_USE_SSL": False,
+            "EMAIL_HOST_USER": "mailer",
+            "ALLOWED_HOSTS": ["backup.example"],
+            "CSRF_TRUSTED_ORIGINS": ["https://backup.example"],
+        }
+        with override_settings(DATA_DIR=str(data_dir), **config):
+            call_command("backup", "--output", str(target), stdout=io.StringIO())
+        manifest = json.loads((target / "manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(manifest["config"],
+                         {key: config[key] for key in CONFIG_KEYS})
+        expected_name = Path(str(settings.DATABASES["default"]["NAME"])).name
+        self.assertEqual(
+            manifest["database"],
+            {"engine": "sqlite", "path_name": expected_name,
+             "sqlite_version": sqlite3.sqlite_version})
+
+    def test_backup_restore_roundtrip_restores_database_file(self):
+        data_dir = self.tmp / "backup-data"
+        data_dir.mkdir()
+        target = self.tmp / "roundtrip-backup"
+        fresh = self.tmp / "fresh-data"
+        fresh_db = fresh / "db.sqlite3"
+        with override_settings(DATA_DIR=str(data_dir)):
+            call_command("backup", "--output", str(target), stdout=io.StringIO())
+        with override_settings(DATA_DIR=str(fresh),
+                               DATABASES={"default": {
+                                   "ENGINE": "django.db.backends.sqlite3",
+                                   "NAME": str(fresh_db)}}):
+            call_command("restore", "--input", str(target), stdout=io.StringIO())
+        con = sqlite3.connect(str(fresh_db))
+        try:
+            rows = con.execute(
+                "SELECT count(*) FROM clipshelf_serversettings").fetchone()[0]
+        finally:
+            con.close()
+        self.assertGreaterEqual(rows, 1)
 
     @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
     def test_backup_directory_and_snapshot_are_private_under_default_umask(self):

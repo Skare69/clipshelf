@@ -59,6 +59,15 @@ class CheckAndroidTests(unittest.TestCase):
             "+--- com.example:dep:9.9!!\n")
         self.assert_version_changed(errors, "com.example:dep", "9.9")
 
+    def test_uninventoried_dependency_reported(self):
+        errors = self.run_android(
+            "+--- com.example:stranger:9.9\n")
+        self.assertEqual(len(errors), 2, errors)
+        self.assertEqual(
+            errors[1],
+            "android: resolved com.example:stranger:9.9 is not in "
+            "license_inventory.toml — review its license, then add it")
+
     def test_version_range_resolved_version_compared(self):
         errors = self.run_android(
             "+--- com.example:dep:[1.0,2.0) -> 9.9\n")

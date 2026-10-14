@@ -15,6 +15,7 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, override_settings
 
+from clipshelf.management.commands import clean as clean_cmd
 from clipshelf.management.commands import restore as restore_cmd
 
 
@@ -193,6 +194,42 @@ class RestorePublicationTests(RestoreMixin, SimpleTestCase):
         self.assertFalse(self.fresh_db.exists())
         self.assertFalse((self.fresh / "assets").exists())
 
+    def test_missing_backup_files_reports_not_a_clipshelf_backup(self):
+        (self.backup / "manifest.json").unlink()
+        with self.assertRaises(CommandError) as raised:
+            self.restore()
+        self.assertEqual(
+            str(raised.exception),
+            f"not a clipshelf backup: {self.backup} "
+            "(need db.sqlite3 + manifest.json)")
+
+    def test_restore_into_nonempty_data_directory_is_refused(self):
+        con = sqlite3.connect(str(self.fresh_db))
+        try:
+            con.execute("CREATE TABLE stray (id INTEGER)")
+            con.commit()
+        finally:
+            con.close()
+        with self.assertRaises(CommandError) as raised:
+            self.restore()
+        self.assertEqual(
+            str(raised.exception),
+            f"refusing live overwrite: {self.fresh_db} already contains "
+            "1 table(s); restore only into an empty data directory")
+
+    def test_recheck_refusal_message_after_lock(self):
+        # the in-lock recheck must refuse with the same message when the data
+        # directory filled between the pre-lock check and the lock
+        with mock.patch.object(restore_cmd.Command, "_tables",
+                               side_effect=[0, 1]) as tables:
+            with self.assertRaises(CommandError) as raised:
+                self.restore()
+        self.assertEqual(tables.call_count, 2)
+        self.assertEqual(
+            str(raised.exception),
+            f"refusing live overwrite: {self.fresh_db} already contains "
+            "1 table(s); restore only into an empty data directory")
+
     def test_malformed_secrets_are_rejected_before_publication_without_printing_values(self):
         sensitive_value = "restore-test-value"
         cases = (
@@ -212,3 +249,20 @@ class RestorePublicationTests(RestoreMixin, SimpleTestCase):
                 self.assertNotIn(sensitive_value, output.getvalue())
                 self.assertFalse(self.fresh_db.exists())
                 self.assertFalse((self.fresh / "assets").exists())
+
+
+class CleanExecuteCountTests(SimpleTestCase):
+    def test_execute_reports_exact_deleted_and_skipped_counts(self):
+        tmp = Path(tempfile.mkdtemp(prefix="clipshelf-clean-"))
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        staging = tmp / "staging"
+        deletable = staging / "job-old"
+        live = staging / "job-live"
+        deletable.mkdir(parents=True)
+        live.mkdir(parents=True)
+        with override_settings(DATA_DIR=str(tmp)), \
+                mock.patch.object(clean_cmd.worker, "staging_cleanup_candidates",
+                                  side_effect=[[deletable, live], [deletable]]):
+            output = io.StringIO()
+            call_command("clean", "--execute", stdout=output)
+        self.assertIn("deleted 1 candidate(s), skipped 1", output.getvalue())

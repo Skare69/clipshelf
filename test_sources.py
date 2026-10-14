@@ -1378,7 +1378,7 @@ def test_screening_policy():
              mock.patch.object(interp, "post", ok_post):
             findings = interp.interpret(source, cfg, categories)
         assert findings["repos"] == ["https://github.com/owner/repo"]
-        assert any("screening unavailable" in w for w in findings["warnings"])
+        assert "screening unavailable: no api key" in findings["warnings"]
         print("screening policy ok")
 
     def check_offline():
@@ -1673,6 +1673,81 @@ def test_image_area_bound():
         raise AssertionError("oversized-area image accepted")
     assert acq.validate_image(png_bytes()) == "image/png"
     print("image area bound ok")
+def test_image_quality_rung():
+    """The re-encode ladder saves at its paired quality: an image that fits
+    under the byte cap is JPEG at the top fitting rung (85, then 70, then 55)."""
+    warnings = []
+    buf = io.BytesIO()
+    # deterministic noise: JPEG size must fall as quality falls (a flat image
+    # does not — low qualities can encode larger)
+    noise = bytes((i * 73 + 41) % 256 for i in range(64 * 64))
+    Image.frombytes("L", (64, 64), noise).convert("RGB").save(buf, "PNG")
+    saves = []
+    real_save = Image.Image.save
+    data = buf.getvalue()
+    sizes = {}
+
+    def spy_save(self, fp, format=None, **kw):
+        quality = kw.get("quality")
+        saves.append(quality)
+        real_save(self, fp, format=format, **kw)
+        if isinstance(fp, io.BytesIO) and quality:
+            sizes[quality] = fp.tell()
+        return None
+
+    def run(cap):
+        saves.clear()
+        with mock.patch.object(Image.Image, "save", spy_save), \
+                mock.patch.object(interp, "IMAGE_BYTES_MAX", cap):
+            url = interp._data_url(data, warnings, "tiny.png")
+        assert url and url.startswith("data:image/jpeg;base64,"), (url, warnings)
+
+    run(1 << 30)
+    assert saves == [85], saves
+    # a cap just under one rung's size forces the next rung: 70, then 55
+    run(sizes[85] - 1)
+    assert saves == [85, 70], saves
+    assert sizes[70] < sizes[85], sizes
+    run(sizes[70] - 1)
+    assert saves == [85, 70, 55], saves
+    assert sizes[55] < sizes[70], sizes
+
+
+def test_image_edge_rungs():
+    """A large image walks the edge ladder: each rung thumbnails to its
+    paired edge (1536/1024/768) before the quality re-encode."""
+    noise = bytes((i * 73 + 41) % 256 for i in range(2000 * 2000))
+    buf = io.BytesIO()
+    Image.frombytes("L", (2000, 2000), noise).convert("RGB").save(buf, "PNG")
+    saves = []
+    real_save = Image.Image.save
+
+    def spy_save(self, fp, format=None, **kw):
+        real_save(self, fp, format=format, **kw)
+        if isinstance(fp, io.BytesIO):
+            nbytes = fp.tell()
+            # open a snapshot: reading fp directly would move its position
+            # and corrupt the ladder's own buf.tell() size check
+            with Image.open(io.BytesIO(fp.getvalue())) as got:
+                saves.append((kw.get("quality"), got.size, nbytes))
+        return None
+
+    data = buf.getvalue()
+
+    def run(cap):
+        saves.clear()
+        with mock.patch.object(Image.Image, "save", spy_save), \
+                mock.patch.object(interp, "IMAGE_BYTES_MAX", cap):
+            url = interp._data_url(data, [], "big.png")
+        assert url and url.startswith("data:image/jpeg;base64,"), url
+
+    run(1 << 30)
+    assert saves == [(85, (1536, 1536), saves[0][2])], saves
+    run(saves[0][2] - 1)
+    assert [s[:2] for s in saves] == [(85, (1536, 1536)), (70, (1024, 1024))], saves
+    run(saves[-1][2] - 1)
+    assert [s[:2] for s in saves] == [
+        (85, (1536, 1536)), (70, (1024, 1024)), (55, (768, 768))], saves
 
 
 def test_frame_extraction_contract():
@@ -2206,7 +2281,8 @@ def test_list_models():
             interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
             raise AssertionError("401 accepted")
         except interp.ConfigurationError as exc:
-            assert "credentials" in str(exc) and "sekret" not in str(exc)
+            assert str(exc) == "endpoint rejected credentials (HTTP 401)", exc
+            assert "sekret" not in str(exc)
 
         # 403 is also read as a credentials rejection, key not leaked
         def forbidden(req, timeout=None):
@@ -2218,7 +2294,8 @@ def test_list_models():
             interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
             raise AssertionError("403 accepted")
         except interp.ConfigurationError as exc:
-            assert "credentials" in str(exc) and "sekret" not in str(exc), exc
+            assert str(exc) == "endpoint rejected credentials (HTTP 403)", exc
+            assert "sekret" not in str(exc), exc
 
         # unreachable: the reason part is truncated at its 200-char bound
         def unreachable_long(req, timeout=None):
@@ -2346,6 +2423,8 @@ def test():
     test_response_read_bound()
     test_image_source_bounds()
     test_image_area_bound()
+    test_image_quality_rung()
+    test_image_edge_rungs()
     test_frame_extraction_contract()
     test_frame_sampling_bounds()
     test_material_state_shape()

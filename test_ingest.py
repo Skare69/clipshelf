@@ -85,3 +85,17 @@ class IngestCommandTests(TestCase):
 
         with self.assertRaisesMessage(CommandError, "UTF-8"):
             self.ingest(dump)
+
+    def test_rejected_capture_message_starts_with_rejected(self):
+        dump = self.root / "empty.txt"
+        dump.write_text("", encoding="utf-8")
+
+        with self.assertRaises(CommandError) as raised:
+            self.ingest(dump, self.first)
+
+        # exact message: the dict-form ValidationError renders via str(), the
+        # rejected: wrap prepends exactly "rejected: " (accept_capture's
+        # string-form .message branch is unreachable through this command:
+        # its oversized case is pre-empted by the command's own file cap)
+        self.assertEqual(str(raised.exception),
+                         "rejected: {'text': ['Text is required.']}")

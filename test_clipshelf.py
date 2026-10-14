@@ -454,6 +454,81 @@ def _compose_passes_size_and_fallback_settings():
         )
         assert proc.returncode == 0, proc.stderr
         assert int(proc.stdout.strip()) == 32 * 1024 * 1024, proc.stdout
+def _bind_bounds():
+    """serve's host:port parser accepts only ports 1..65535; local default."""
+    from clipshelf import cli
+    assert cli._bind("example.com:8080") == ("example.com", 8080)
+    assert cli._bind(":1") == ("127.0.0.1", 1)
+    assert cli._bind(":65535") == ("127.0.0.1", 65535)
+    assert cli._bind("") == ("127.0.0.1", 8000)
+    for bad, word in ((":0", "out of range"), (":65536", "out of range"),
+                      (":foo", "bad host:port")):
+        try:
+            cli._bind(bad)
+            raise AssertionError(f"{bad} accepted")
+        except SystemExit as e:
+            assert word in str(e), (bad, e)
+
+
+def _coordinator_lock_deadline():
+    """coordinator_lock retries until the deadline, then names the blocker."""
+    import os
+    import subprocess
+    import sys
+    import tempfile
+    import textwrap
+
+    child = textwrap.dedent("""\
+        import itertools
+        from unittest import mock
+        import django
+        django.setup()
+        from clipshelf.management import locks
+
+        ran = []
+        # a busy lock is retried and taken before the deadline; the body runs
+        # and the region is released on exit
+        with mock.patch.object(locks, "_try_lock",
+                               side_effect=[False, True]) as try_lock, \
+                mock.patch.object(locks.time, "monotonic",
+                                  side_effect=itertools.count(0, 0.5)), \
+                mock.patch.object(locks.time, "sleep"), \
+                mock.patch.object(locks, "_unlock") as unlock:
+            with locks.coordinator_lock(timeout=5.0):
+                ran.append(1)
+        assert ran == [1]
+        assert len(try_lock.call_args_list) == 2
+        assert unlock.called
+
+        # past the deadline the wait gives up with the coordinator message
+        with mock.patch.object(locks, "_try_lock", return_value=False), \
+                mock.patch.object(locks.time, "monotonic",
+                                  side_effect=[0.0, 10.0]), \
+                mock.patch.object(locks.time, "sleep"):
+            try:
+                with locks.coordinator_lock(timeout=5.0):
+                    ran.append(2)
+                raise AssertionError("deadline exceeded but coordinator_lock entered")
+            except RuntimeError as e:
+                assert str(e).startswith(
+                    "another clipshelf worker coordinator is already running"), e
+        assert ran == [1]
+        print("coordinator deadline ok")
+    """)
+    with tempfile.TemporaryDirectory(prefix="clipshelf-coord-test-") as data_dir:
+        env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("CLIPSHELF_", "DJANGO_SETTINGS_MODULE"))
+        }
+        env.update({
+            "DJANGO_SETTINGS_MODULE": "clipshelf.project.settings",
+            "CLIPSHELF_DATA_DIR": data_dir,
+            "CLIPSHELF_DEBUG": "1",
+        })
+        r = subprocess.run([sys.executable, "-c", child], env=env,
+                           capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0 and "coordinator deadline ok" in r.stdout, (
+            r.stdout, r.stderr)
 
 
 def test():
@@ -622,6 +697,8 @@ def test():
         assert p.text == "a b", (tag, p.text)
 
     _automatic_migration_waits_for_exclusive_lock()
+    _bind_bounds()
+    _coordinator_lock_deadline()
     _lock_check_regressions()
     _lock_gate_regressions()
     _compose_passes_size_and_fallback_settings()

@@ -217,6 +217,29 @@ class DeployProbeTests(SimpleTestCase):
             [],
         )
 
+    def test_entrypoint_migrate_dispatch_execs_clipshelf_migrate(self):
+        # op "migrate" must build [sys.executable, "clipshelf.py", "migrate"]
+        # and exec it; a dispatch regression falls through to fail() and
+        # exits 1 instead.
+        mod = load_deploy_script("entrypoint.py", "entrypoint3")
+        mod.DATA_DIR = temp_data_dir(self)
+        calls = []
+
+        def fake_execvp(program, args):
+            calls.append((program, args))
+
+        with contextlib.ExitStack() as ctx:
+            ctx.enter_context(mock.patch.dict(
+                os.environ, {"CLIPSHELF_DEBUG": "1"}))
+            ctx.enter_context(mock.patch.object(
+                mod.sys, "argv", ["entrypoint", "migrate"]))
+            ctx.enter_context(mock.patch.object(mod.os, "execvp", fake_execvp))
+            ctx.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            mod.main()
+
+        cmd = [sys.executable, "clipshelf.py", "migrate"]
+        self.assertEqual(calls, [(cmd[0], cmd)])
+
 
 def fake_dpkg_query(statuses):
     """Emulate subprocess.run(["dpkg-query", "-W", "-f=FMT", *names]).

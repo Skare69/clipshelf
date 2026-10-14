@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -66,6 +67,49 @@ class MakeTests(unittest.TestCase):
                 start += 1
             # one distinct wheel hash per platform set
             self.assertEqual(len(hashes), len(lock_deps.PLATFORM_SETS))
+
+    def test_reports_pin_count_on_stdout(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            lock, err = self.make(fake_pip("no-such-platform", "fail"))
+        self.assertIsNone(err)
+        wrote = out.getvalue().splitlines()[1]
+        self.assertTrue(wrote.startswith("wrote ") and wrote.endswith(" with 2 pins"),
+                        wrote)
+
+    def test_main_uses_default_out(self):
+        calls = []
+        with patch.object(lock_deps, "make",
+                          lambda *a, **k: calls.append((a, k))), \
+                patch.object(lock_deps.sys, "argv", ["lock_deps.py", "make"]):
+            lock_deps.main()
+        self.assertEqual(calls[0][0],
+                         (sys.executable, Path("requirements.txt"),
+                          Path("requirements.lock"), None))
+
+
+class DryRunTests(unittest.TestCase):
+    REPORT = [{"is_yanked": True, "metadata": {"name": "Demo_Pkg", "version": "1.2.3"}},
+              {"metadata": {"name": "other-pkg", "version": "2.0"}}]
+
+    def test_dry_run(self):
+        cmds = []
+        with tempfile.TemporaryDirectory() as d:
+            def run(cmd, **kwargs):
+                cmds.append(cmd)
+                report = Path(cmd[cmd.index("--report") + 1])
+                report.write_text(json.dumps({"install": self.REPORT}), encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            with patch.object(lock_deps.subprocess, "run", side_effect=run):
+                pins, yanked = lock_deps.dry_run("python", Path("requirements.txt"),
+                                                 Path(d), [])
+
+        self.assertEqual(cmds, [["python", "-m", "pip", "install", "--dry-run",
+                                 "--report", str(Path(d) / "report.json"),
+                                 "--ignore-installed", "-r", "requirements.txt"]])
+        self.assertEqual(pins, {"demo-pkg": "1.2.3", "other-pkg": "2.0"})
+        self.assertEqual(yanked, {"demo-pkg"})
 
 
 class CheckTests(unittest.TestCase):
