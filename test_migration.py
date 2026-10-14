@@ -9,6 +9,8 @@ import os
 import shutil
 import sqlite3
 import stat
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
@@ -703,6 +705,24 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
                              "cli.main must pin umask 077 before creating files")
         finally:
             os.umask(old_umask)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
+    def test_new_data_dir_is_private_under_default_umask(self):
+        """End to end: in a subprocess with umask 0022, `clipshelf.py check`
+        on a fresh CLIPSHELF_DATA_DIR leaves the directory 0700. settings.py
+        creates DATA_DIR during django.setup(), so this fails if the umask
+        call in cli.main moves below django.setup() (the in-process umask
+        test above cannot see that ordering)."""
+        data_dir = self.tmp / "fresh-data"
+        env = dict(os.environ, CLIPSHELF_DATA_DIR=str(data_dir))
+        proc = subprocess.run(
+            [sys.executable, "clipshelf.py", "check"],
+            cwd=Path(__file__).resolve().parent, env=env,
+            preexec_fn=lambda: os.umask(0o022),
+            capture_output=True, text=True, timeout=120)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        self.assertEqual(stat.S_IMODE(data_dir.stat().st_mode), 0o700,
+                         "a fresh data directory was readable by others")
 
     def test_concurrent_backups_publish_one_complete_generation(self):
         data_dir = self.tmp / "backup-data"
