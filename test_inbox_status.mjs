@@ -8,17 +8,24 @@
 import assert from "node:assert/strict";
 
 class Stub extends EventTarget {
-  dataset = {}; children = []; hidden = false; value = "";
-  setAttribute() {} append() {} replaceChildren() {} closest() { return null; }
+  dataset = {}; children = []; childNodes = []; hidden = false; value = ""; text = "";
+  setAttribute() {} append() {} closest() { return null; }
+  replaceChildren(...kids) {
+    this.childNodes = kids.map(k => typeof k === "string" ? { textContent: k } : k);
+    this.text = "";
+  }
+  get textContent() { return this.text + this.childNodes.map(c => c.textContent).join(""); }
+  set textContent(v) { this.text = String(v); this.childNodes = []; }
 }
 globalThis.localStorage = { getItem: () => null, setItem() {} };
+const bySel = {};
 globalThis.document = {
   cookie: "", createElement: () => new Stub(),
-  querySelector: () => new Stub(), querySelectorAll: () => [],
+  querySelector: s => (bySel[s] ||= new Stub()), querySelectorAll: () => [],
 };
 globalThis.addEventListener = () => {};
 
-const { progress, statusOf } = await import("./clipshelf/static/clipshelf/panels.js");
+const { progress, statusOf, setInboxCount } = await import("./clipshelf/static/clipshelf/panels.js");
 
 const job = over => ({ state: "queued", acquisition: "pending", interpretation: "pending",
   active: true, guardrail: false, terminal: false, attempts: 0, error: "", ...over });
@@ -62,3 +69,19 @@ for (const [label, j, route, [kind, sentence, note = ""]] of cases) {
   assert.equal(why ?? "", note, `${label}: status note`);
 }
 console.log(`ok: ${cases.length} job states map to the right route and status`);
+
+// Inbox count pill: the number must name its reason in text, not color alone
+// (wide screens read "Inbox 2" for both meanings today).
+const n = document.querySelector("#nInbox");
+setInboxCount([{ jobs: [{ needs_attention: true }] }, { jobs: [{ needs_attention: true }] }]);
+assert.equal(n.textContent, "2 need you", "alert count names its reason");
+assert.equal(n.className, "count alert", "alert count keeps its class");
+setInboxCount([{ jobs: [{ active: true, needs_attention: false }] }]);
+assert.equal(n.textContent, "1 in progress", "active count names its reason");
+assert.equal(n.className, "count", "active count stays unhighlighted");
+setInboxCount([{ jobs: [{ active: true }] }, { jobs: [{ needs_attention: true }] }]);
+assert.equal(n.textContent, "1 need you", "mixed counts show the bad number");
+setInboxCount([{ jobs: [] }]);
+assert.equal(n.textContent, "", "idle count stays empty");
+assert.equal(n.childNodes.length, 0, "idle count renders nothing (phone :empty rule)");
+console.log("ok: inbox count names need-you vs in-progress without color");

@@ -365,7 +365,8 @@ function pollCaptures() {
 function setInboxCount(caps) {
   const act = caps.filter(captureActive).length, bad = caps.filter(captureBad).length;
   const n = $("#nInbox");
-  n.textContent = bad || act || "";
+  n.replaceChildren(...(bad || act ? [String(bad || act),
+    el("span", { class: "vh", text: bad ? " need you" : " in progress" })] : []));
   n.className = "count" + (bad ? " alert" : "");
   n.setAttribute("title", bad ? plural(bad, "capture needs you", "captures need you")
     : act ? plural(act, "capture in progress", "captures in progress") : "");
@@ -798,4 +799,4 @@ onEnter("library", () => { libHead(); loadEntries(true); });
 onEnter("inbox", () => { inboxHead(); S.capsLoaded = false; loadCaptures(); pollCaptures(); });
 onEnter("collections", renderCollections);
 onEnter("settings", renderSettings);
-export { progress, refreshInboxCount, renderToc, statusOf };
+export { progress, refreshInboxCount, renderToc, setInboxCount, statusOf };
