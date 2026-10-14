@@ -84,13 +84,6 @@ public class LibraryActivity extends AppCompatActivity {
         ListView list = findViewById(R.id.library_list);
         adapter = new Adapter();
         list.setAdapter(adapter);
-        list.setOnItemClickListener((p, v, pos, id) -> {
-            if (pos >= 0 && pos < visible.size()) {
-                Intent i = new Intent(this, EntryActivity.class);
-                i.putExtra("entryId", visible.get(pos).id);
-                startActivity(i);
-            }
-        });
         search.setOnEditorActionListener((v, actionId, event) -> {
             if (actionId == EditorInfo.IME_ACTION_SEARCH) {
                 q = v.getText().toString().trim();
@@ -423,6 +416,10 @@ public class LibraryActivity extends AppCompatActivity {
                 i.putExtra("entryId", e.id);
                 startActivity(i);
             });
+            // The visible details button marks the row explicitly focusable,
+            // so AbsListView never fires its item click; the row carries the
+            // open action itself.
+            row.setOnClickListener(b -> details.performClick());
             return v;
         }
 
