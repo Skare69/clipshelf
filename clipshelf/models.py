@@ -10,7 +10,7 @@ from datetime import timedelta
 from django.conf import settings
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MaxValueValidator, MinValueValidator
-from django.db import models
+from django.db import models, transaction
 from django.db.models import Q
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
@@ -540,6 +540,12 @@ class Invitation(models.Model):
 class ImportRecord(models.Model):
     """Idempotency ledger for browser tiktok.json imports: one digest per user."""
 
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        RUNNING = "running", "Running"
+        DONE = "done", "Done"
+        ERROR = "error", "Error"
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="import_records")
     input_digest = models.CharField(max_length=64)
@@ -552,6 +558,20 @@ class ImportRecord(models.Model):
                 fields=["user", "input_digest"], name="clipshelf_import_digest_unique"
             ),
         ]
+
+    def update_manifest(self, updates):
+        """The one writer of manifest fields: merge and save under a row lock.
+
+        Callers own the decision (which fields, which status); this owns the
+        read-modify-write, so concurrent manifest updates never lose fields.
+        The status strings live in Status; every writer passes a constant.
+        """
+        with transaction.atomic():
+            record = ImportRecord.objects.select_for_update().get(pk=self.pk)
+            manifest = dict(record.manifest)
+            manifest.update(updates)
+            record.manifest = manifest
+            record.save(update_fields=["manifest"])
 
     def __str__(self):
         return f"Import {self.input_digest[:12]} by {self.user_id}"

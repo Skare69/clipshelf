@@ -27,7 +27,7 @@ class Command(BaseCommand):
             if job.error:
                 self.stdout.write(f"         error: {job.error[:200]}")
         imports = (models.ImportRecord.objects.filter(user=user)
-                   .exclude(manifest__status="done")
+                   .exclude(manifest__status=models.ImportRecord.Status.DONE)
                    .order_by("-created_at"))
         for record in imports:
             self.stdout.write(

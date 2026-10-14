@@ -128,8 +128,9 @@ def _recover_abandoned():
         recovered = models.Job.objects.filter(state="running").update(
             state="retry", retry_at=timezone.now()
         )
-        for record in models.ImportRecord.objects.filter(manifest__status="running"):
-            imports._update_manifest(record, {"status": "pending"})
+        for record in models.ImportRecord.objects.filter(
+                manifest__status=models.ImportRecord.Status.RUNNING):
+            record.update_manifest({"status": models.ImportRecord.Status.PENDING})
             recovered += 1
         return recovered
 
@@ -319,11 +320,11 @@ def _claim_imports(limit=4):
     claimed = []
     with transaction.atomic():
         records = (models.ImportRecord.objects
-                   .filter(manifest__status="pending")
+                   .filter(manifest__status=models.ImportRecord.Status.PENDING)
                    .select_for_update()[:limit])
         for rec in records:
             manifest = dict(rec.manifest)
-            manifest["status"] = "running"
+            manifest["status"] = models.ImportRecord.Status.RUNNING
             rec.manifest = manifest
             rec.save(update_fields=["manifest"])
             claimed.append(rec)
@@ -331,20 +332,26 @@ def _claim_imports(limit=4):
 
 
 def _run_import(record, say=None):
+    # Lifecycle: the commit checkpoint in imports._commit_import writes the
+    # one "done" update, atomic with the rows it describes. This function
+    # only labels a failed import; a failed bookkeeping write is logged and
+    # never relabels an already committed import.
     try:
         result = imports.run_staged_import(record)
-        imports._update_manifest(record, {"status": "done",
-                                          "completed_at": timezone.now().isoformat(),
-                                          "result": result})
-        if say:
-            say(f"import {record.id}: done ({result.get('counts', {})})")
     except Exception as exc:
         log.exception("import %s failed", record.id)
-        imports._update_manifest(record, {"status": "error",
-                                          "completed_at": timezone.now().isoformat(),
-                                          "error": str(exc)[:2000]})
+        try:
+            record.update_manifest({"status": models.ImportRecord.Status.ERROR,
+                                    "completed_at": timezone.now().isoformat(),
+                                    "error": str(exc)[:2000]})
+        except Exception:
+            log.exception("import %s: status write failed; status unchanged",
+                          record.id)
         if say:
             say(f"import {record.id}: failed ({exc})")
+        return
+    if say:
+        say(f"import {record.id}: done ({result.get('counts', {})})")
 
 
 # ------------------------------------------------- staging retention (review S12)
@@ -383,6 +390,7 @@ def _staging_sweep_candidates(manifest_paths, accepts, now=None):
     now = now or timezone.now()
     cutoff = now - timedelta(days=STAGING_RETENTION_DAYS)
     claims = {}
+    finished = {models.ImportRecord.Status.DONE, models.ImportRecord.Status.ERROR}
     for record in models.ImportRecord.objects.only("manifest", "created_at").iterator():
         manifest = record.manifest or {}
         for rel in manifest_paths(manifest):
@@ -396,8 +404,8 @@ def _staging_sweep_candidates(manifest_paths, accepts, now=None):
                  _staging_finished_at(manifest, record.created_at)))
     return sorted(
         path for path, owners in claims.items()
-        if all(status in ("done", "error") for status, _ in owners)
-        and any(finished <= cutoff for _, finished in owners))
+        if all(status in finished for status, _ in owners)
+        and any(finished_at <= cutoff for _, finished_at in owners))
 
 
 def _upload_staging_cleanup_candidates(now=None):

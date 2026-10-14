@@ -71,15 +71,6 @@ def run_staged_import(record):
     )
 
 
-def _update_manifest(record, updates):
-    with transaction.atomic():
-        record = models.ImportRecord.objects.select_for_update().get(pk=record.pk)
-        manifest = dict(record.manifest)
-        manifest.update(updates)
-        record.manifest = manifest
-        record.save(update_fields=["manifest"])
-
-
 # ------------------------------------------------------------- import engine
 
 def _canonical(obj):
@@ -352,7 +343,7 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
         if isinstance(prior, str) and prior and prior != new_rel:
             updates["retained_media_staging"] = sorted(
                 {*(manifest.get("retained_media_staging") or []), prior})
-        _update_manifest(record, updates)
+        record.update_manifest(updates)
     try:
         staged, files_record = _stage_items(items, cache_dir, staging)
         sources = []
@@ -588,8 +579,12 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
             models.ImportRecord.objects.create(
                 user=user, input_digest=digest, manifest=manifest)
         else:
-            # Commit the checkpoint with its rows: a restart must not import twice.
-            _update_manifest(record, {"status": "done", "result": result})
+            # Commit the checkpoint with its rows: a restart must not import
+            # twice. This is the import's one "done" write, atomic with the
+            # rows it describes — the worker adds none after the commit.
+            record.update_manifest({"status": models.ImportRecord.Status.DONE,
+                                    "completed_at": timezone.now().isoformat(),
+                                    "result": result})
     return result
 
 

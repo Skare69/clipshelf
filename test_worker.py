@@ -13,6 +13,7 @@ from urllib.error import HTTPError, URLError
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db.utils import OperationalError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
@@ -509,6 +510,47 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
         self.assertEqual((models.Job.objects.count(), models.Contribution.objects.count(),
                           models.Entry.objects.count()), before)
 
+    def test_committed_import_survives_a_failed_late_status_write(self):
+        """A bookkeeping-write failure after the commit must not relabel a
+        committed import as error: the checkpoint write inside the commit
+        transaction is the only "done" write (v0.11.0 review finding)."""
+        staging_rel = f"staging/import-{uuid.uuid4().hex}.json"
+        items = [{"url": "https://example.com/committed", "title": "From browser"}]
+        with override_settings(DATA_DIR=str(self.tmp)):
+            (Path(self.tmp) / "staging").mkdir(parents=True, exist_ok=True)
+            (Path(self.tmp) / staging_rel).write_text(_json(items), encoding="utf-8")
+        record = models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "pending", "staging": staging_rel,
+                      "collection_id": str(self.personal.id),
+                      "format": "tiktok",
+                      "client_request_id": str(uuid.uuid4())})
+        manifest_saves = []
+        real_save = models.ImportRecord.save
+
+        def fault_third_manifest_save(instance, *args, **kwargs):
+            update_fields = kwargs.get("update_fields")
+            if update_fields and "manifest" in update_fields:
+                manifest_saves.append(list(update_fields))
+                if len(manifest_saves) == 3:
+                    raise OperationalError("database is locked")
+            return real_save(instance, *args, **kwargs)
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.import_export",
+                           side_effect=lambda batch, directory:
+                               [fake_acquire(item["url"], directory) for item in batch]), \
+                mock.patch.object(models.ImportRecord, "save",
+                                  fault_third_manifest_save):
+            worker._run_import(record)
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "done")
+        self.assertTrue(record.manifest["completed_at"])
+        self.assertEqual(record.manifest["result"]["counts"]["entries"], 1)
+        self.assertTrue(models.Entry.objects.filter(
+            collection=self.personal, kind="link",
+            key="https://example.com/committed").exists())
+
 
 class AddExtractedCommandTests(WorkerMixin, TestCase):
     def test_rejects_malformed_nested_links_and_prompts_before_merge(self):
@@ -833,12 +875,16 @@ class StagingRetentionTests(WorkerMixin, TestCase):
     def test_run_import_stamps_completion_and_retains_the_upload(self):
         path, record = self.stage()
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch("clipshelf.imports.import_items",
-                           return_value={"counts": {}}):
+                mock.patch("clipshelf.acquisition.import_export",
+                           side_effect=lambda batch, directory:
+                               [fake_acquire(item["url"], directory) for item in batch]):
             worker._run_import(record)
         record.refresh_from_db()
-        self.assertEqual(record.manifest["status"], "done")
+        # The commit checkpoint stamps completion, atomic with its rows; the
+        # worker adds no second "done" write.
+        self.assertEqual(record.manifest["status"], models.ImportRecord.Status.DONE)
         self.assertTrue(record.manifest["completed_at"])
+        self.assertEqual(record.manifest["result"]["counts"]["entries"], 1)
         self.assertTrue(path.is_file())
         self.assertEqual(self.candidates(0), [])
         self.assertEqual(self.candidates(31), [path.resolve()])

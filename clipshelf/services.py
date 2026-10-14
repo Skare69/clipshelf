@@ -262,7 +262,7 @@ def admit_import(user, request_id, input_digest, collection, staging_rel, fmt):
                     "client_request_id": str(request_id),
                     "staging": staging_rel,
                     "collection_id": str(collection.id),
-                    "status": "pending",
+                    "status": ImportRecord.Status.PENDING,
                     "format": fmt,
                 },
             )

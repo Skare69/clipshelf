@@ -37,6 +37,7 @@ from clipshelf.models import (
     Collection,
     Contribution,
     Entry,
+    ImportRecord,
     Job,
     Membership,
     User,
@@ -619,11 +620,11 @@ def _import_replay(record, spooled):
     manifest = record.manifest or {}
     payload = {
         "id": str(record.id),
-        "status": manifest.get("status", "pending"),
+        "status": manifest.get("status", ImportRecord.Status.PENDING),
     }
     # The digest dedupe means a failed import is never reprocessed, so the
     # replay is the uploader's only chance to learn why it failed.
-    if payload["status"] == "error":
+    if payload["status"] == ImportRecord.Status.ERROR:
         payload["error"] = str(manifest.get("error") or "import failed")[:300]
     return JsonResponse({"import": payload})
 
