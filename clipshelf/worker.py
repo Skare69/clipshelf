@@ -94,14 +94,22 @@ def main(once=False, stdout=None):
             say(f"recovered {recovered} abandoned running job(s)")
         pool = ThreadPoolExecutor(max_workers=_concurrency(), thread_name_prefix="clipshelf-worker")
         # Refill keeps a slot busy while a long import runs; --once still
-        # drains every claimable job before breaking.
+        # drains every claimable job before breaking. Imports never take
+        # the whole pool: at least one slot stays free for captures.
         pending = set()
+        import_futures = set()
         try:
             while True:
                 free = _concurrency() - len(pending)
                 if free > 0:
-                    pending.update(pool.submit(_run_import, r, say) for r in _claim_imports())
-                    pending.update(pool.submit(_process, job) for job in _claim_batch(free))
+                    slots = min(free, max(1, _concurrency() - 1) - len(import_futures))
+                    claimed = _claim_imports(slots) if slots > 0 else []
+                    for record in claimed:
+                        future = pool.submit(_run_import, record, say)
+                        import_futures.add(future)
+                        pending.add(future)
+                    pending.update(pool.submit(_process, job)
+                                   for job in _claim_batch(free - len(claimed)))
                 if not pending:
                     if once:
                         break
@@ -109,6 +117,7 @@ def main(once=False, stdout=None):
                     continue
                 done, _ = wait(pending, return_when=FIRST_COMPLETED)
                 pending.difference_update(done)
+                import_futures -= done
                 for f in done:
                     f.result()
         except KeyboardInterrupt:
@@ -311,12 +320,21 @@ def _job_staging_cleanup_candidates(now=None):
 
 # ------------------------------------------------------------ browser import
 
-def _claim_imports(limit=4):
-    """Atomically claim pending ImportRecords queued by the upload endpoint."""
+def _claim_imports(limit=None):
+    """Atomically claim pending ImportRecords queued by the upload endpoint.
+
+    The caller bounds the claim so at least one pool slot stays free for
+    capture jobs while imports run (a 1-slot pool still runs one import:
+    never claiming would starve uploads instead). Inactive users' imports
+    stay unclaimed.
+    """
+    if limit is None:
+        limit = max(1, _concurrency() - 1)
     claimed = []
     with transaction.atomic():
         records = (models.ImportRecord.objects
-                   .filter(manifest__status=models.ImportRecord.Status.PENDING)
+                   .filter(manifest__status=models.ImportRecord.Status.PENDING,
+                           user__is_active=True)
                    .select_for_update()[:limit])
         for rec in records:
             manifest = dict(rec.manifest)

@@ -363,7 +363,8 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
         record.update_manifest(updates)
     try:
         staged, files_record = _stage_items(items, cache_dir, staging)
-        sources = acquisition.import_export(staged, str(staging))
+        budget = acquisition.ImportBudget()  # total per-import fetch/time bound
+        sources = acquisition.import_export(staged, str(staging), budget=budget)
         if len(sources) != len(staged):
             raise ValidationError("import validation returned mismatched results")
         plans = _plans(staged, sources)

@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.parse
 
 from PIL import Image
@@ -46,6 +47,31 @@ _IMAGE_FORMAT_TYPE = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/w
 
 class AcquisitionError(Exception):
     """Invalid or oversized input; per-URL failures become source status."""
+
+
+class ImportBudgetExhausted(AcquisitionError):
+    """ImportBudget.spend failed; import_export turns it into per-item errors."""
+
+
+IMPORT_TIME_BUDGET = 30 * 60      # inline network work per import, seconds
+IMPORT_FETCH_BUDGET = 2000        # network fetches per import
+
+
+class ImportBudget:
+    """Total fetch and wall-clock allowance for one import_items call, so one
+    upload with many slow media URLs cannot hold a worker slot for days.
+    import_export fails the remaining media items honestly once it is spent."""
+
+    def __init__(self, fetches=None, seconds=None):
+        self.left = IMPORT_FETCH_BUDGET if fetches is None else fetches
+        self.deadline = time.monotonic() + (
+            IMPORT_TIME_BUDGET if seconds is None else seconds)
+
+    def spend(self):
+        """Charge one network fetch; raise once either bound is spent."""
+        if self.left <= 0 or time.monotonic() >= self.deadline:
+            raise ImportBudgetExhausted("import fetch budget exhausted")
+        self.left -= 1
 
 
 def new_source(original_url):
@@ -479,7 +505,7 @@ def _decode_b64(value, cap):
         raise AcquisitionError(f"malformed base64 media: {exc}")
 
 
-def _media_bytes(value, cap):
+def _media_bytes(value, cap, budget=None):
     """Media bytes from {b64}|{url}|{path}|plain-URL string, bounded; None if
     the source cannot be fetched (honest per-item warning), raise on invalid."""
     if isinstance(value, str):
@@ -498,6 +524,8 @@ def _media_bytes(value, cap):
             return fh.read()
     url = value.get("url")
     if isinstance(url, str) and norm(url):
+        if budget is not None:
+            budget.spend()
         try:
             return network.fetch_public(url, max_bytes=cap, timeout=120)["body"]
         except network.NetworkError:
@@ -505,12 +533,12 @@ def _media_bytes(value, cap):
     raise AcquisitionError("media entry has no b64/url/path")
 
 
-def _import_images(item, directory, source):
+def _import_images(item, directory, source, budget=None):
     images = item.get("images") or []
     if len(images) > 100:
         raise AcquisitionError("too many images in item")
     for index, entry in enumerate(images):
-        data = _media_bytes(entry, IMPORT_MEDIA_MAX_BYTES)
+        data = _media_bytes(entry, IMPORT_MEDIA_MAX_BYTES, budget)
         if data is None:
             _warn(source, f"slide {index} could not be fetched")
             continue
@@ -523,7 +551,7 @@ def _import_images(item, directory, source):
                     data, "image", ctype)
 
 
-def _import_video(item, directory, source):
+def _import_video(item, directory, source, budget=None):
     """b64/path/url/mirror candidates, container-checked before publishing."""
     entry = item.get("video")
     if not entry:
@@ -541,7 +569,9 @@ def _import_video(item, directory, source):
     data = None
     for cand in candidates[:6]:
         try:
-            data = _media_bytes(cand, IMPORT_MEDIA_MAX_BYTES)
+            data = _media_bytes(cand, IMPORT_MEDIA_MAX_BYTES, budget)
+        except ImportBudgetExhausted:
+            raise
         except AcquisitionError:
             data = None
         if data and (data[4:8] == b"ftyp" or data[:4] == b"\x1aE\xdf\xa3"):
@@ -560,14 +590,14 @@ def _import_video(item, directory, source):
         _warn(source, f"video failed validation: {exc}")
 
 
-def _import_item(item, directory):
+def _import_item(item, directory, budget=None):
     source = new_source(item.get("resolvedUrl") or item.get("url"))
     source["title"] = str(item.get("title") or "")[:500]
     if not source["title"] and item.get("author"):
         source["title"] = f"@{item['author']}"[:200]
     source["desc"] = str(item.get("desc") or "")[:4000]
-    _import_images(item, directory, source)
-    _import_video(item, directory, source)
+    _import_images(item, directory, source, budget)
+    _import_video(item, directory, source, budget)
     media = _media_summary(source)
     source["metadata"].update({"media": media, "metadata": "none" if media == "none" else "export",
                                "captions": "none", "tier": "browser-export",
@@ -583,10 +613,11 @@ def _import_item(item, directory):
     return source
 
 
-def import_export(items, directory):
+def import_export(items, directory, budget=None):
     """Normalize tiktok.json / staged-media items; input order preserved 1:1."""
     if not isinstance(items, list):
         raise AcquisitionError("import items must be a list")
+    budget = ImportBudget() if budget is None else budget
     directory = os.path.abspath(directory)
     os.makedirs(directory, exist_ok=True)
     out = []
@@ -606,6 +637,7 @@ def import_export(items, directory):
                 source["title"] = str(item.get("title") or "")[:500]
                 source["desc"] = str(item.get("desc") or "")[:4000]
             elif server_ingest:
+                budget.spend()  # server-tier ingest fetches the page inline
                 source = acquire(item["url"], directory)  # server tier ingests directly
                 source["title"] = source["title"] or str(item.get("title") or "")[:500]
                 source["desc"] = source["desc"] or str(item.get("desc") or "")[:4000]
@@ -616,7 +648,7 @@ def import_export(items, directory):
                                            "tier": "browser-export", "failure": "unavailable"})
                 _warn(source, f"browser export error: {str(item['error'])[:300]}")
             else:
-                source = _import_item(item, directory)
+                source = _import_item(item, directory, budget)
         except AcquisitionError as exc:  # one bad item fails honestly, not the batch
             source = new_source(item["url"])
             source["acquisition"] = "error"

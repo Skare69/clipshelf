@@ -6,6 +6,7 @@ import os
 import shutil
 import threading
 import tempfile
+import time
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -27,7 +28,7 @@ django.setup()
 
 from PIL import Image
 
-from clipshelf import cli, imports, lib, models, publication, services, worker
+from clipshelf import cli, imports, lib, models, network, publication, services, worker
 
 FINDINGS = {"source": "", "summary": "good findings", "repos": [], "prompts": [],
             "links": [], "categories": [], "installs": [], "warnings": []}
@@ -528,6 +529,7 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
             (Path(self.tmp) / "staging").mkdir(parents=True, exist_ok=True)
             (Path(self.tmp) / staging_rel).write_text(_json(items), encoding="utf-8")
 
+
         record = models.ImportRecord.objects.create(
             user=self.user, input_digest=uuid.uuid4().hex,
             manifest={"status": "pending", "staging": staging_rel,
@@ -601,7 +603,7 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
 
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("clipshelf.acquisition.import_export",
-                           side_effect=lambda batch, directory:
+                           side_effect=lambda batch, directory, budget=None:
                                [fake_acquire(item["url"], directory) for item in batch]), \
                 mock.patch.object(models.ImportRecord, "save",
                                   fault_third_manifest_save):
@@ -613,6 +615,139 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
         self.assertTrue(models.Entry.objects.filter(
             collection=self.personal, kind="link",
             key="https://example.com/committed").exists())
+    def _tar_pit_items(self, posts=3):
+        """3 items x 106 media URLs (100 slides + 1 video + 5 mirrors), the
+        shape the release review flagged as able to hold a slot for days."""
+        return [
+            {"url": f"https://example.com/post{i}", "title": f"p{i}",
+             "images": [{"url": f"https://pit.example/img{j}"} for j in range(100)],
+             "video": {"url": "https://pit.example/v0",
+                       "urls": [f"https://pit.example/m{j}" for j in range(5)]}}
+            for i in range(posts)]
+
+    def _import_jobs(self):
+        return {job.url: job for job in models.Job.objects.filter(
+            url__startswith="https://example.com/post")}
+
+    def test_time_budget_stops_slow_import_media_honestly(self):
+        attempts = []
+
+        def tar_pit(url, **kwargs):
+            attempts.append(url)
+            time.sleep(0.01)
+            raise network.NetworkError("tar-pit host")
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.IMPORT_TIME_BUDGET", 0.15), \
+                mock.patch("clipshelf.network.fetch_public", side_effect=tar_pit):
+            result = imports.import_items(
+                user=self.user, collection_id=self.personal.id,
+                items=self._tar_pit_items(), origin="test")
+        self.assertTrue(result["created"])
+        # The import stopped at the wall-clock budget instead of attempting
+        # all 318 fetches against the tar-pit host.
+        self.assertLess(len(attempts), 318)
+        self.assertGreater(len(attempts), 0)
+        jobs = self._import_jobs()
+        self.assertEqual(len(jobs), 3)
+        for url, job in jobs.items():
+            self.assertEqual((job.state, job.acquisition), ("blocked", "error"))
+            self.assertIn("import item rejected: import fetch budget exhausted",
+                          job.source["warnings"])
+
+    def test_fetch_count_budget_stops_after_bound(self):
+        attempts = []
+
+        def tar_pit(url, **kwargs):
+            attempts.append(url)
+            raise network.NetworkError("tar-pit host")
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.IMPORT_FETCH_BUDGET", 5), \
+                mock.patch("clipshelf.network.fetch_public", side_effect=tar_pit):
+            imports.import_items(
+                user=self.user, collection_id=self.personal.id,
+                items=self._tar_pit_items(posts=1), origin="test")
+        # Exactly the bound: the sixth media fetch is refused by the budget,
+        # and the remaining items fail without any fetch attempt.
+        self.assertEqual(len(attempts), 5)
+        job = self._import_jobs()["https://example.com/post0"]
+        self.assertIn("import item rejected: import fetch budget exhausted",
+                      job.source["warnings"])
+
+    def test_inactive_users_imports_stay_unclaimed(self):
+        models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "pending"})
+        self.user.is_active = False
+        self.user.save(update_fields=["is_active"])
+        self.assertEqual(worker._claim_imports(), [])
+        self.assertEqual(
+            models.ImportRecord.objects.get().manifest["status"], "pending")
+
+    def test_capture_runs_while_imports_hold_slots(self):
+        """Two slow imports no longer occupy the whole pool: a queued capture
+        job of another user is processed while the imports still run."""
+        other = models.User.objects.create_user(username="w2", email="w2@example.com")
+        other_personal = services.personal_collection(other)
+        capture = models.Capture.objects.create(
+            user=other, client_request_id=str(uuid.uuid4()),
+            raw_text="https://example.com/capture", requested_collection_id=None,
+            collection=other_personal, request_hash="h",
+            received_at=timezone.now(), notice="")
+        job = models.Job.objects.create(
+            capture=capture, url="https://example.com/capture",
+            state="queued", acquisition="pending", interpretation="pending",
+            collection=other_personal, attempts=0)
+        records = [models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "pending",
+                      "collection_id": str(self.personal.id)})
+            for _ in range(2)]
+        gate = threading.Event()
+        release = threading.Event()
+        imports_run = []
+
+        def slow_import(record, say=None):
+            imports_run.append(record.id)
+            gate.set()
+            release.wait(10)
+            # Mirror the real commit checkpoint: the engine's commit is the
+            # one "done" writer; a fake engine must stamp it to complete.
+            record.update_manifest({"status": models.ImportRecord.Status.DONE,
+                                    "result": {"counts": {}}})
+            return {"counts": {}}
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch.object(worker, "_concurrency", lambda: 2), \
+                mock.patch.object(worker.imports, "run_staged_import",
+                                  side_effect=slow_import), \
+                mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire), \
+                mock.patch("clipshelf.interpretation.interpret",
+                           side_effect=lambda source, config, cats, **kw:
+                               {**FINDINGS, "source": source.get("url")}):
+            thread = threading.Thread(target=worker.main, kwargs={"once": True},
+                                      daemon=True)
+            thread.start()
+            self.assertTrue(gate.wait(5))
+            done = False
+            for _ in range(100):
+                job.refresh_from_db()
+                if job.state == "done":
+                    done = True
+                    break
+                time.sleep(0.05)
+            self.assertTrue(done, "capture must run while the import holds a slot")
+            # The import share is capped: the second import waits until the
+            # first releases its slot instead of squeezing out captures.
+            self.assertEqual(len(imports_run), 1)
+            release.set()
+            thread.join(10)
+            self.assertFalse(thread.is_alive())
+        for record in records:
+            record.refresh_from_db()
+            self.assertEqual(record.manifest["status"], "done")
+        self.assertEqual(len(imports_run), 2)
 
 
 class AddExtractedCommandTests(WorkerMixin, TestCase):
@@ -972,7 +1107,7 @@ class StagingRetentionTests(WorkerMixin, TestCase):
         path, record = self.stage()
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("clipshelf.acquisition.import_export",
-                           side_effect=lambda batch, directory:
+                           side_effect=lambda batch, directory, budget=None:
                                [fake_acquire(item["url"], directory) for item in batch]):
             worker._run_import(record)
         record.refresh_from_db()
@@ -1351,7 +1486,7 @@ class CoordinatorRefillTests(WorkerMixin, TransactionTestCase):
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch.object(worker, "_concurrency", lambda: 2), \
                 mock.patch.object(worker, "_claim_imports",
-                                  side_effect=lambda: calls.__setitem__(
+                                  side_effect=lambda limit: calls.__setitem__(
                                       "imports", calls["imports"] + 1) or []), \
                 mock.patch.object(worker, "_run_import",
                                   side_effect=AssertionError("no imports")), \
@@ -1388,7 +1523,7 @@ class CoordinatorRefillTests(WorkerMixin, TransactionTestCase):
 
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch.object(worker, "_concurrency", lambda: 2), \
-                mock.patch.object(worker, "_claim_imports", side_effect=lambda: []), \
+                mock.patch.object(worker, "_claim_imports", side_effect=lambda limit: []), \
                 mock.patch.object(worker, "_run_import",
                                   side_effect=AssertionError("no imports")), \
                 mock.patch.object(worker, "_claim_batch", side_effect=fake_claims), \

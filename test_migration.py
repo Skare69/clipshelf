@@ -564,9 +564,9 @@ class ImportTests(MigrationMixin, TestCase):
         calls = []
         real_import_export = acquisition.import_export
 
-        def spy(items, directory):
+        def spy(items, directory, budget=None):
             calls.append(len(items))
-            return real_import_export(items, directory)
+            return real_import_export(items, directory, budget=budget)
 
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire), \

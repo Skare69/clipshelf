@@ -1368,7 +1368,7 @@ class ImportTests(ApiTestCase):
             "sources": [f"https://example.com/ps{i}" for i in range(500)],
         }]
 
-        def fake_import_export(batch, directory):
+        def fake_import_export(batch, directory, budget=None):
             return [{"url": i["url"], "original_url": i["url"], "title": "",
                      "desc": "", "text": "", "links": [], "assets": [],
                      "acquisition": "complete", "warnings": [], "metadata": {}}
