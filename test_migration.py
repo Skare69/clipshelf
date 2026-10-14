@@ -504,8 +504,8 @@ class ImportTests(MigrationMixin, TestCase):
                 manifest={"status": "pending", "format": "tiktok",
                           "staging": staging_rel,
                           "collection_id": str(self.personal.id)})
-            with mock.patch("clipshelf.acquisition.import_export",
-                            side_effect=fake_import_export):
+            with mock.patch("clipshelf.acquisition.acquire",
+                            side_effect=fake_acquire):
                 result = imports.run_staged_import(record)
         record.refresh_from_db()
         self.assertEqual(record.manifest["status"], "done")
