@@ -227,6 +227,25 @@ def test_redirects_and_bounds():
         net.socket = original
 
 
+def test_non_ascii_path_percent_encoded():
+    # a raw non-ASCII path/query must reach the wire RFC 3986-encoded;
+    # http.client sends the request line as ascii, so a raw "Bücher"
+    # would raise UnicodeEncodeError before any connect
+    fake, original = patched({"example.com": [PUBLIC]},
+                             [http(body=b"ok"), http(body=b"ok")])
+    try:
+        out = net.fetch_public("http://example.com/wiki/Bücher?q=Straße")
+        assert fake.connected == [PUBLIC]
+        request = fake.sent[0].split(b"\r\n", 1)[0]
+        assert request == b"GET /wiki/B%C3%BCcher?q=Stra%C3%9Fe HTTP/1.1", request
+        assert out["url"] == "http://example.com/wiki/Bücher?q=Straße"
+        # already-encoded hops keep their escapes (no double encoding)
+        net.fetch_public("http://example.com/a%20b")
+        assert fake.sent[1].startswith(b"GET /a%20b HTTP/1.1"), fake.sent[1]
+    finally:
+        net.socket = original
+
+
 def test_deadline_bounded_reads():
     # a slow trickle must fail at the whole-fetch deadline, not when the last
     # byte finally arrives through a blocking buffered read
@@ -1823,6 +1842,8 @@ def test():
     print("ssrf/pin ok")
     test_redirects_and_bounds()
     print("redirect/bounds ok")
+    test_non_ascii_path_percent_encoded()
+    print("non-ascii path ok")
     test_deadline_bounded_reads()
     print("deadline bounds ok")
     test_deadline_bounded_connect()

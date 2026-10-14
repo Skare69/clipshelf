@@ -112,6 +112,10 @@ def validate_url(url):
     path = parts.path or "/"
     if parts.query:
         path += "?" + parts.query
+    # http.client sends the request line as ascii; raw non-ASCII would raise
+    # UnicodeEncodeError. %-encode as UTF-8; % stays safe so existing
+    # escapes survive a redirect hop without double encoding.
+    path = urllib.parse.quote(path, safe="/?&=%:@!$'()*+,;~[]")
     return parts.scheme, host, port, path, resolve_public(host, port)
 
 
