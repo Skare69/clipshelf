@@ -68,6 +68,9 @@ async function boundedBlob(response) {
 // (CLIPSHELF_MAX_IMPORT_BYTES); the rest waits for the next run. Lower this
 // if your server's ceiling is smaller.
 const FILE_BUDGET = 30e6;
+// mirrors clipshelf services.MAX_IMPORT_ITEMS: the server rejects an upload
+// with more link entries than this
+const ITEM_BUDGET = 5000;
 
 async function tiktokExtract(urls, onProgress, budget = FILE_BUDGET) {
   const toB64 = async (blob) =>
@@ -85,6 +88,10 @@ async function tiktokExtract(urls, onProgress, budget = FILE_BUDGET) {
   const rest = [];
   let i = 0, bytes = 0;
   for (const url of urls) {
+    if (out.length >= ITEM_BUDGET) {
+      rest.push(...urls.slice(i));
+      break;
+    }
     // no onProgress?.(++i, ...): an optional call skips argument evaluation
     i++;
     onProgress?.(i, urls.length, url);
@@ -468,6 +475,19 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
       assert.deepStrictEqual(tiktokExtract.lastUrls, []);
       const savedSize = (await savedBlob.text()).length;
       assert.ok(savedSize <= 300, `saved file is ${savedSize} bytes > budget 300`);
+      // item budget: passthrough and failed links count too, or the server
+      // rejects the whole upload (services.MAX_IMPORT_ITEMS)
+      const many = Array.from({ length: ITEM_BUDGET + 1 }, (_, k) =>
+        `https://example.com/p/${k}`
+      );
+      const capped = await tiktokExtract(many);
+      assert.strictEqual(capped.length, ITEM_BUDGET);
+      assert.deepStrictEqual(capped[0], { url: many[0], passthrough: true });
+      assert.deepStrictEqual(capped[ITEM_BUDGET - 1], {
+        url: many[ITEM_BUDGET - 1],
+        passthrough: true,
+      });
+      assert.deepStrictEqual(tiktokExtract.lastUrls, [many[ITEM_BUDGET]]);
     } finally {
       if (previousWindow === undefined) delete global.window;
       else global.window = previousWindow;
