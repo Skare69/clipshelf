@@ -52,7 +52,7 @@ const cases = [
     { done: 3, now: -1, stop: -1 }, ["warn", "Shelved as a link: this site is not read"]],
   ["findings withheld, non-terminal", job({ state: "done", acquisition: "complete",
       interpretation: "blocked", active: false, error: "withheld: danger 2.5" }),
-    { done: 1, now: -1, stop: 2 }, ["stop", "Read, but the findings were withheld"]],
+    { done: 1, now: -1, stop: 2 }, ["stop", "Read, but the findings were withheld", "withheld: danger 2.5"]],
 ];
 for (const [label, j, route, [kind, sentence, note = ""]] of cases) {
   assert.deepEqual(progress(j), route, `${label}: route position`);
