@@ -66,7 +66,7 @@ argon2-cffi-bindings = { observed = "26.1.0", license = "MIT",        meta = "MI
 httpx2            = { observed = "2.13.1",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 pydantic          = { observed = "2.13.5",  license = "MIT",          meta = "MIT" }
 pydantic-core     = { observed = "2.46.5",  license = "MIT",          meta = "MIT" }
-tenacity          = { observed = "9.1.4",   license = "Apache-2.0",   meta = "Apache 2.0" }
+tenacity          = { observed = "9.2.1",   license = "Apache-2.0",   meta = "Apache-2.0" }
 typing-extensions = { observed = "4.16.0",  license = "PSF-2.0",      meta = "PSF-2.0" }
 httpcore2         = { observed = "2.13.1",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 h11               = { observed = "0.16.0",  license = "MIT",          meta = "MIT" }

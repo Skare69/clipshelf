@@ -73,7 +73,7 @@ are the source of record; every wheel ships its license text inside
 | httpx2 | 2.13.1 | BSD-3-Clause | |
 | pydantic | 2.13.5 | MIT | |
 | pydantic-core | 2.46.5 | MIT | |
-| tenacity | 9.1.4 | Apache-2.0 | |
+| tenacity | 9.2.1 | Apache-2.0 | |
 | typing-extensions | 4.16.0 | PSF-2.0 | |
 | httpcore2 | 2.13.1 | BSD-3-Clause | |
 | h11 | 0.16.0 | MIT | |
