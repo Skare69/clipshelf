@@ -41,25 +41,10 @@ jobs:
       - run: ruff check
       # --no-deps: audit the pinned set itself, not a fresh re-resolution.
       - run: pip-audit -r requirements.lock --no-deps
-      - run: python clipshelf.py check
-      - run: python clipshelf.py migrate
-      - run: python clipshelf.py test --verbosity 1
-      - run: python test_clipshelf.py
-      - run: python test_sources.py
-      # Publish-tag regression: docker-publish derives tags from the validated
-      # version, never the raw GITHUB_REF_NAME (v0.11.0 release-review finding).
-      - run: python test_workflow_tags.py
-      # JS regression checks pinning the v0.10.0 fixes, plus the mutation
-      # harness's own target-confinement/sampling asserts.
-      - run: node test_dom_events.mjs
-      - run: node test_web_assets.mjs
-      - run: node tiktok-extract.js
-      - run: node whatsapp-extract.js
-      - run: python mutate.py self-check
-      # Inbox tracking line: each job state maps to its route and status text.
-      - run: node test_inbox_status.mjs
-      # Release-workflow gate pins: signed-apk (and attach-apk) need wait-ci.
-      - run: node test_release_gates.mjs
+      # The one test list, shared with the agents' "Verified" block (AGENTS.md).
+      - run: sh scripts/test.sh
+        env:
+          PY: python
 
   android:
     # Debug-build gate for the Android client. Versions are stamped from the
