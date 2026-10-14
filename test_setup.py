@@ -5,7 +5,7 @@ Real database, real URLconf, real middleware — no mocks.
 """
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.test import Client, TestCase
+from django.test import Client, TestCase, override_settings
 from allauth.account.models import EmailAddress
 
 from clipshelf import setup
@@ -74,6 +74,54 @@ class SetupWizardTests(TestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertEqual(User.objects.count(), 0)
+
+    def test_proxied_origin_rejection_names_the_remedy(self):
+        # A TLS-terminating reverse proxy (Tailscale Serve, Caddy, a NAS
+        # ingress) forwards Origin https://nas.example while the app still
+        # sees http. The wizard must refuse the POST, but name the
+        # CLIPSHELF_ORIGIN remedy instead of Django's generic page.
+        client = Client(enforce_csrf_checks=True)
+        page = client.get("/setup", HTTP_HOST="nas.example")
+        self.assertEqual(page.status_code, 200)
+        response = client.post(
+            "/setup",
+            data={
+                "csrfmiddlewaretoken": str(page.context["csrf_token"]),
+                "email": "owner@example.com",
+                "password1": PASSWORD,
+                "password2": PASSWORD,
+            },
+            HTTP_HOST="nas.example",
+            HTTP_ORIGIN="https://nas.example",
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertContains(response, "CLIPSHELF_ORIGIN", status_code=403)
+        self.assertEqual(User.objects.count(), 0)
+
+    def test_proxied_https_origin_accepted_when_proto_is_honored(self):
+        # With CLIPSHELF_ORIGIN=https://nas.example the app also trusts the
+        # proxy's X-Forwarded-Proto, so is_secure() and the browser's Origin
+        # agree and the same POST creates the admin. The remedy page must
+        # only ever advise this working configuration.
+        client = Client(enforce_csrf_checks=True)
+        page = client.get("/setup", HTTP_HOST="nas.example")
+        with override_settings(
+            SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https")
+        ):
+            response = client.post(
+                "/setup",
+                data={
+                    "csrfmiddlewaretoken": str(page.context["csrf_token"]),
+                    "email": "owner@example.com",
+                    "password1": PASSWORD,
+                    "password2": PASSWORD,
+                },
+                HTTP_HOST="nas.example",
+                HTTP_ORIGIN="https://nas.example",
+                HTTP_X_FORWARDED_PROTO="https",
+            )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(User.objects.count(), 1)
 
     def test_get_then_post_with_token_creates_admin_and_logs_in(self):
         client = Client(enforce_csrf_checks=True)

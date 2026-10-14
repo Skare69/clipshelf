@@ -73,8 +73,12 @@ docker compose up -d
 ```
 
 The container migrates itself on start; open the web UI and complete the setup
-wizard to create the first administrator. `docker compose --profile ops run
---rm verify` optionally re-checks the SQLite WAL/synchronous settings. The
+wizard to create the first administrator. Behind a reverse proxy that changes
+the scheme or hostname (Tailscale Serve, Caddy, a NAS ingress), set
+`CLIPSHELF_ORIGIN` to the proxied URL before the first visit — the setup wizard
+checks the browser's Origin header and refuses the form until it matches.
+`docker compose --profile ops run --rm verify` optionally re-checks the SQLite
+WAL/synchronous settings. The
 image runs as an unprivileged UID/GID you choose, mounts one local dataset, and
 publishes the web port on the LAN — reaching it remotely is your tailnet's job,
 not the app's.

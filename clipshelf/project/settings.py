@@ -80,6 +80,11 @@ if DEBUG:
         "http://127.0.0.1:8000",
     ]
 
+# While setup is pending, a rejected cross-site POST renders through
+# clipshelf.setup.csrf_failure: behind a reverse proxy that rewrites scheme
+# or host, the first-visit form otherwise dies on Django's generic page.
+CSRF_FAILURE_VIEW = "clipshelf.setup.csrf_failure"
+
 # --- SQLite: durable WAL, single-writer-friendly, version deployment guard ---
 SQLITE_MIN_VERSION = (3, 51, 3)  # WAL-reset corruption fix (contract, server-plan §7)
 if (

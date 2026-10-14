@@ -8,6 +8,7 @@ from django.core.validators import EmailValidator
 from django.db import transaction
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_protect
+from django.views.csrf import csrf_failure as django_csrf_failure
 
 from clipshelf.models import User
 
@@ -96,4 +97,32 @@ def setup_view(request):
         request,
         "clipshelf/setup.html",
         {"email": email, "errors": errors},
+    )
+
+
+def csrf_failure(request, reason="", template_name="403_csrf.html"):
+    """Rejected wizard POSTs name the CLIPSHELF_ORIGIN remedy.
+
+    Behind a TLS-terminating reverse proxy the browser's Origin is https://
+    while the app still sees http, so the first-visit form dies with Django's
+    generic "Origin checking failed" page. The rejection is unchanged: the
+    same checks run and the answer is still 403; once setup is done this
+    falls back to Django's default page.
+    """
+    if not needs_setup():
+        return django_csrf_failure(request, reason, template_name)
+    return render(
+        request,
+        "clipshelf/setup.html",
+        {
+            "email": "",
+            "errors": [
+                "Setup could not verify this request: the browser's Origin "
+                "does not match this server's address (CSRF check). Reach the "
+                "server directly, or set CLIPSHELF_ORIGIN to the address shown "
+                "in the browser (for example CLIPSHELF_ORIGIN=https://nas.example), "
+                "restart, and reload this page."
+            ],
+        },
+        status=403,
     )
