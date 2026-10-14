@@ -314,9 +314,11 @@ def check(python: str, req: Path, lock: Path) -> int:
     # end-to-end validation: pip must accept the lock on every shipped platform,
     # not just this host (CI runs on x86_64; the image also ships arm64)
     for plats in PLATFORM_SETS:
+        report = tmp / "plat-report.json"
         r = subprocess.run(
             [python, "-m", "pip", "install", "--dry-run", "--ignore-installed",
-             "--require-hashes", "--no-deps", "-r", str(lock)] + plat_args(plats),
+             "--require-hashes", "--no-deps", "--report", str(report),
+             "-r", str(lock)] + plat_args(plats),
             capture_output=True, text=True)
         if r.returncode != 0:
             print("DRIFT:")
@@ -324,6 +326,18 @@ def check(python: str, req: Path, lock: Path) -> int:
             for ln in r.stderr.splitlines()[-15:]:
                 print(f"  {ln}")
             return 1
+        # the resolution passes cannot see a carried pin (e.g. win32-only
+        # tzdata) that pip would actually install yanked on another platform
+        if not report.exists():
+            sys.exit(f"pip wrote no report for {plats}")
+        for item in json.loads(report.read_text(encoding="utf-8"))["install"]:
+            if item.get("is_yanked"):
+                meta = item["metadata"]
+                print("DRIFT:")
+                print(f"  yanked: {canon(meta['name'])}=={meta['version']} "
+                      f"(pip installs yanked files under exact pins; "
+                      f"pip-audit ignores yank status)")
+                return 1
     print(f"ok: {len(current)} pins match current resolution")
     return 0
 

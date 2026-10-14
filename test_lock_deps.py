@@ -1,4 +1,7 @@
+import contextlib
 import importlib.util
+import io
+import json
 import subprocess
 import tempfile
 import unittest
@@ -63,6 +66,52 @@ class MakeTests(unittest.TestCase):
                 start += 1
             # one distinct wheel hash per platform set
             self.assertEqual(len(hashes), len(lock_deps.PLATFORM_SETS))
+
+
+class CheckTests(unittest.TestCase):
+    LOCK = ("demo==1.0 \\\n"
+            "    --hash=sha256:aaaa\n"
+            "tzdata==2026.5 \\\n"
+            "    --hash=sha256:bbbb\n")
+
+    def check(self, report_items):
+        """Run check() with resolve patched and each per-platform pip install
+        succeeding while writing the given report items."""
+        with tempfile.TemporaryDirectory() as d:
+            lock = Path(d) / "requirements.lock"
+            lock.write_text(self.LOCK, encoding="utf-8")
+
+            def run(cmd, **kwargs):
+                report = Path(cmd[cmd.index("--report") + 1])
+                report.write_text(json.dumps({"install": report_items}),
+                                  encoding="utf-8")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+
+            out = io.StringIO()
+            with patch.object(lock_deps, "resolve", return_value=lock_deps.Resolution(
+                    pins={"demo": "1.0", "tzdata": "2026.5"}, yanked=set(),
+                    gated={"demo": "1.0", "tzdata": "2026.5"})), \
+                    patch.object(lock_deps.subprocess, "run", side_effect=run), \
+                    contextlib.redirect_stdout(out):
+                code = lock_deps.check("python", Path("requirements.txt"), lock)
+            return code, out.getvalue()
+
+    def test_yanked_pin_in_platform_report_fails(self):
+        # the carried win32-only tzdata pin: yanked upstream, invisible to the
+        # Linux resolution, visible only in the per-platform pip report
+        code, out = self.check([
+            {"is_yanked": False, "metadata": {"name": "demo", "version": "1.0"}},
+            {"is_yanked": True, "metadata": {"name": "tzdata", "version": "2026.5"}},
+        ])
+        self.assertEqual(code, 1)
+        self.assertIn("yanked: tzdata==2026.5", out)
+
+    def test_clean_platform_report_passes(self):
+        code, out = self.check([
+            {"is_yanked": False, "metadata": {"name": "demo", "version": "1.0"}},
+            {"is_yanked": False, "metadata": {"name": "tzdata", "version": "2026.5"}},
+        ])
+        self.assertEqual(code, 0)
 
 
 if __name__ == "__main__":

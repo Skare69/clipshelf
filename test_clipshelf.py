@@ -146,11 +146,27 @@ def _lock_check_regressions():
             lock = lock_file(tmp, extra or {})
             if lock_text is not None:
                 lock.write_text(lock_text, encoding="utf-8")
-            ok_run = pip_run or mock.Mock(returncode=0, stdout="", stderr="")
+            if pip_run is not None:
+                fake_run = mock.Mock(return_value=pip_run)
+            else:
+                # pip >= 22.2 writes a --report file on a successful dry run;
+                # every lock pin installs unyanked in these scenarios
+                lock_pins = {**BASE, **(extra or {})}
+                import json
+
+                def ok_run(cmd, **kwargs):
+                    if "--report" in cmd:
+                        items = [{"is_yanked": False,
+                                  "metadata": {"name": n, "version": v}}
+                                 for n, v in sorted(lock_pins.items())]
+                        Path(cmd[cmd.index("--report") + 1]).write_text(
+                            json.dumps({"install": items}), encoding="utf-8")
+                    return mock.Mock(returncode=0, stdout="", stderr="")
+                fake_run = mock.Mock(side_effect=ok_run)
             with mock.patch.object(ld, "resolve", return_value=ld.Resolution(
                     pins=dict(current_pins), yanked=frozenset(),
                     gated=dict(current_pins))), \
-                 mock.patch.object(ld.subprocess, "run", return_value=ok_run), \
+                 mock.patch.object(ld.subprocess, "run", fake_run), \
                  contextlib.redirect_stdout(io.StringIO()) as out:
                 return ld.check(sys.executable, req, lock), out.getvalue()
 
