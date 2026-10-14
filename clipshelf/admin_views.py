@@ -100,6 +100,10 @@ def admin_endpoint(*methods):
 
             return api_guard(request, run)
 
+        # api_csrf set the flag on `protected` only, but the global
+        # CsrfViewMiddleware (CLIPSHELF_CSRF=1) checks the URL callback:
+        # without the flag it answers HTML 403 before api_guard can run.
+        wrapped.csrf_exempt = True
         return wrapped
 
     return decorate

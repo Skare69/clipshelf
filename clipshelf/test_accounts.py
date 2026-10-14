@@ -416,6 +416,54 @@ class TokenAdminReauthTests(AccountTestCase):
             self.assertNotIn(settings.SESSION_COOKIE_NAME, response.cookies)
 
 
+_CSRF_MIDDLEWARE = list(settings.MIDDLEWARE)
+_CSRF_MIDDLEWARE.insert(
+    _CSRF_MIDDLEWARE.index("django.middleware.common.CommonMiddleware") + 1,
+    "django.middleware.csrf.CsrfViewMiddleware",
+)
+
+
+@override_settings(
+    ROOT_URLCONF="clipshelf.test_accounts",
+    TEMPLATES=TEMPLATES,
+    CLIPSHELF_CSRF=True,
+    MIDDLEWARE=_CSRF_MIDDLEWARE,
+)
+class AdminCsrfExemptTests(AccountTestCase):
+    """With the global CsrfViewMiddleware installed, the admin URL callbacks
+    must carry csrf_exempt like the /api wrapper: the middleware never answers
+    before api_guard (401 JSON for anonymous, 200 JSON for token clients)."""
+
+    def test_anonymous_post_answers_401_json(self):
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(
+            "/api/admin/invitations", data="{}", content_type="application/json"
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json(), {"detail": "unauthenticated"})
+
+    def test_token_post_with_reauth_answers_200_json(self):
+        token = self.headless_login(self.admin.email).json()["meta"]["session_token"]
+        target = make_user("csrftarget@clipshelf.test")
+        client = Client(enforce_csrf_checks=True)
+        with override_settings(ACCOUNT_REAUTHENTICATION_TIMEOUT=0):
+            response = client.post(
+                f"/api/admin/users/{target.pk}/status",
+                data=json.dumps({"active": False, "reauth_password": PASSWORD}),
+                content_type="application/json",
+                headers={"x-session-token": token},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(get_user_model().objects.get(pk=target.pk).is_active)
+
+    def test_every_admin_callback_is_csrf_exempt(self):
+        for pattern in admin_views.admin_urlpatterns:
+            self.assertTrue(
+                getattr(pattern.callback, "csrf_exempt", False),
+                f"{pattern.pattern} is not csrf_exempt",
+            )
+
+
 class AdminBoundaryTests(AccountTestCase):
     def test_admin_endpoints_reject_anonymous_and_non_admins(self):
         self.assertEqual(self.client.get("/api/admin/users").status_code, 401)
