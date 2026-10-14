@@ -21,7 +21,7 @@ import urllib.parse
 from PIL import Image
 
 from clipshelf import network
-from clipshelf.lib import MAX_URL_LENGTH, PageParser, is_short, norm
+from clipshelf.lib import MAX_URL_LENGTH, PageParser, is_short, is_tiktok, norm
 
 __all__ = ["AcquisitionError", "acquire", "import_export", "validate_image",
            "validate_video_file"]
@@ -449,8 +449,7 @@ def acquire(url, directory):
     os.makedirs(directory, exist_ok=True)
     source = new_source(url)
     try:
-        host = urllib.parse.urlsplit(url).hostname or ""
-        if "tiktok.com" in host:
+        if is_tiktok(url):
             _acquire_tiktok(url, directory, source)
         else:
             _acquire_page(url, directory, source)

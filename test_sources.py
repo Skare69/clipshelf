@@ -612,6 +612,30 @@ def test_acquisition_regressions(tmp):
     image.load.assert_not_called()
 
 
+def test_tiktok_host_dispatch(tmp):
+    # A lookalike host must take the bounded page path, never the extractors.
+    def page_fetch(url, **kwargs):
+        return {"url": url, "body": b"<html><title>p</title></html>",
+                "content_type": "text/html"}
+
+    for url in ("https://tiktok.com.attacker.example/x",
+                "https://eviltiktok.com/x"):
+        with mock.patch.object(net, "fetch_public", side_effect=page_fetch), \
+             mock.patch.object(acq, "_oembed") as oembed, \
+             mock.patch.object(acq, "_run_extractor") as extractor:
+            source = acq.acquire(url, tmp)
+        assert source["acquisition"] == "complete", (url, source["warnings"])
+        assert source["metadata"]["media"] == "page", source["metadata"]
+        oembed.assert_not_called()
+        extractor.assert_not_called()
+
+    # The real domain and its subdomains keep the TikTok extractor path.
+    for url in ("https://www.tiktok.com/@a/video/1", "https://vm.tiktok.com/x"):
+        with mock.patch.object(acq, "_acquire_tiktok") as tiktok:
+            acq.acquire(url, tmp)
+        tiktok.assert_called_once()
+
+
 def test_interpretation_regressions(tmp):
     config = {"base_url": "http://h/v1", "model": "m"}
     source = {"url": "https://example.com/page", "title": "", "desc": "",
@@ -1896,6 +1920,7 @@ def test():
     with tempfile.TemporaryDirectory(prefix="cs-src-") as tmp:
         test_import_media_bounds(tmp)
         test_acquisition_regressions(tmp)
+        test_tiktok_host_dispatch(tmp)
         test_interpretation_regressions(tmp)
     test_direct_media_single_fetch()
     print("direct media ok")

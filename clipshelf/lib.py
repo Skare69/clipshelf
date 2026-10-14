@@ -63,6 +63,12 @@ def is_terminal(url):
     return host in TERMINAL
 
 
+def is_tiktok(url):
+    """True for tiktok.com itself or a subdomain; never a suffix lookalike."""
+    host = (urlsplit(url).hostname or "").removeprefix("www.")
+    return host == "tiktok.com" or host.endswith(".tiktok.com")
+
+
 def _str(value):
     """None-safe stripped string; the one blank-coercion helper."""
     return "" if value is None else str(value).strip()
