@@ -8,6 +8,7 @@ import random
 import socket
 import struct
 import tempfile
+import urllib.parse
 import os
 import time
 import threading
@@ -463,6 +464,146 @@ def test_deadline_bounded_dns():
         net.socket = real_socket
 
 
+def test_network_message_pins():
+    # an https fetch must hand the pinned TLS context the connection with the
+    # host name set: a lost context would dial 443 in the clear
+    class RecordingTLS:
+        def __init__(self):
+            self.handshakes = []
+
+        def wrap_socket(self, sock, server_hostname=None):
+            self.handshakes.append(server_hostname)
+            return sock
+
+    ctx = RecordingTLS()
+    fake, original = patched({"media.example": [PUBLIC]}, [http(body=b"secure")])
+    real_validate = net.validate_url
+    real_ctx = net._TLS["https"]    # a lost https key dies right here
+    net._TLS["https"] = ctx
+    net.validate_url = lambda url, deadline=None: ("https", "media.example", 443, "/",
+                                                   [(socket.AF_INET, (PUBLIC, 443))])
+    try:
+        out = net.fetch_public("https://media.example/x")
+        assert out["body"] == b"secure"
+        assert ctx.handshakes == ["media.example"], ctx.handshakes
+    finally:
+        net.socket = original
+        net._TLS["https"] = real_ctx
+        net.validate_url = real_validate
+
+    # request headers are pinned: every fetch announces itself the same way
+    fake, original = patched({"example.com": [PUBLIC]}, [http(body=b"ok")])
+    try:
+        net.fetch_public("http://example.com/a")
+        sent = fake.sent[0]
+        assert b"Accept-Encoding: gzip, deflate\r\n" in sent, sent
+        assert b"Connection: close\r\n" in sent, sent
+        assert b"Host: example.com\r\n" in sent, sent
+    finally:
+        net.socket = original
+
+    # user-visible error texts are part of the contract
+    try:
+        urllib.parse.urlsplit("http://example.com:port/x").port
+    except ValueError as inner:
+        expected = f"malformed URL: {inner}"
+    fake, original = patched({}, [])
+    try:
+        try:
+            net.fetch_public("http://example.com:port/x")
+            raise AssertionError("bad port accepted")
+        except net.NetworkError as exc:
+            assert str(exc) == expected, str(exc)
+    finally:
+        net.socket = original
+
+    fake, original = patched({"example.com": [PUBLIC]}, [http(302)])
+    try:
+        try:
+            net.fetch_public("http://example.com/go")
+            raise AssertionError("redirect without location accepted")
+        except net.NetworkError as exc:
+            assert str(exc) == "redirect from example.com without location", str(exc)
+    finally:
+        net.socket = original
+
+    # once the deadline is spent, no further address is dialed
+    class SlowRefusedSock(FakeSock):
+        def connect(self, sa):
+            self.fake.connected.append(sa[0])
+            time.sleep(0.3)
+            raise ConnectionRefusedError("refused")
+
+    class RefuseNet(FakeNet):
+        def socket(self, family, type):
+            return SlowRefusedSock(self)
+
+    fake = RefuseNet({"media.example": [PUBLIC, "203.0.113.9"]}, [])
+    real_socket = net.socket
+    net.validate_url = lambda url, deadline=None: ("http", "media.example", 80, "/",
+                                                   [(socket.AF_INET, (PUBLIC, 80)),
+                                                    (socket.AF_INET, ("203.0.113.9", 80))])
+    net.socket = fake
+    try:
+        try:
+            net.fetch_public("http://media.example/x", timeout=0.2)
+            raise AssertionError("dial past deadline accepted")
+        except net.NetworkError as exc:
+            assert str(exc) == "fetch exceeded time bound", str(exc)
+        assert fake.connected == [PUBLIC], fake.connected
+    finally:
+        net.socket = real_socket
+        net.validate_url = real_validate
+
+    # the proxy forwards exactly the listed safe methods in absolute form;
+    # anything else is refused with 405 and never reaches the upstream dial
+    class FakeClient:
+        def __init__(self):
+            self.sent = []
+
+        def sendall(self, data):
+            self.sent.append(data)
+
+        def settimeout(self, t):
+            pass
+
+    class FakeUpstream:
+        def __init__(self):
+            self.sent = []
+
+        def sendall(self, data):
+            self.sent.append(data)
+
+        def close(self):
+            pass
+
+    real_validate = net.validate_url
+    real_connect, real_relay = net._connect_pinned, net._relay
+    net.validate_url = lambda url, deadline=None: ("http", "example.com", 80, "/a",
+                                                   [(socket.AF_INET, (PUBLIC, 80))])
+    upstream = FakeUpstream()
+    net._connect_pinned = lambda infos, timeout: upstream
+    net._relay = lambda *a: None
+    try:
+        for method in ("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"):
+            handler = object.__new__(net._ProxyHandler)
+            handler.request = FakeClient()
+            head = (f"{method} http://example.com/a HTTP/1.1\r\n"
+                    f"Host: example.com\r\n\r\n").encode("latin1")
+            handler._dispatch(head, b"")
+            sent = b"".join(upstream.sent)
+            assert sent.startswith(f"{method} /a HTTP/1.1\r\n".encode()), (method, sent)
+            upstream.sent.clear()
+        handler = object.__new__(net._ProxyHandler)
+        handler.request = FakeClient()
+        handler._dispatch(b"TRACE http://example.com/a HTTP/1.1\r\n\r\n", b"")
+        assert upstream.sent == []
+        assert b"405" in b"".join(handler.request.sent)
+    finally:
+        net.validate_url = real_validate
+        net._connect_pinned, net._relay = real_connect, real_relay
+
+
 def test_import_media_bounds(tmp):
     good = base64.b64encode(png_bytes()).decode()
 
@@ -673,6 +814,130 @@ def test_extractor_output_bounds():
         assert not any(name.endswith(".mp4") for _, _, files in os.walk(tmp)
                        for name in files), "unadopted or rejected video bytes were kept"
     print("extractor bounds ok")
+def test_acquisition_mutant_pins(tmp):
+    source = acq.new_source("https://www.tiktok.com/@u/video/pins")
+
+    # extractor error codes map to honest failure classes
+    assert acq._tiktok_failure("status code 10216") == "private"
+    assert acq._tiktok_failure("code 10222") == "private"
+    assert acq._tiktok_failure("login required to view") == "private"
+
+    # a probe that rejects the file raises the honest ValueError, text intact
+    junk = os.path.join(tmp, "junk.mp4")
+    with open(junk, "wb") as fh:
+        fh.write(b"not a video")
+    probe = os.path.join(tmp, "ffprobe-fake")
+    with open(probe, "w", encoding="utf-8") as fh:
+        fh.write("#!/bin/sh\nprintf boom >&2\nexit 1\n")
+    os.chmod(probe, 0o755)
+    with mock.patch.object(acq.shutil, "which", return_value=probe):
+        try:
+            acq.validate_video_file(junk)
+            raise AssertionError("junk file accepted")
+        except ValueError as exc:
+            assert str(exc) == "ffprobe rejected file: boom", str(exc)
+
+    # extractor-emitted jpg/jpeg files are adopted as image assets
+    outdir = tempfile.mkdtemp(dir=tmp, prefix="collect-")
+    for name in ("a.jpg", "b.jpeg"):
+        with open(os.path.join(outdir, name), "wb") as fh:
+            fh.write(jpeg_bytes())
+    collector = acq.new_source("https://www.tiktok.com/@u/photo/collect")
+    captions, info = acq._collect_files(outdir, collector, tmp)
+    kinds = [(a["kind"], a["content_type"]) for a in collector["assets"]]
+    assert kinds == [("image", "image/jpeg"), ("image", "image/jpeg")], kinds
+    assert captions == "" and info == {}
+
+    # a direct video link that fails validation stays partial
+    mp4 = b"\x00\x00\x00\x18ftypmp42" + b"\0" * 64
+    fake, original = patched({"example.com": [PUBLIC]},
+                             [http(ctype="video/mp4", body=mp4)])
+    try:
+        with mock.patch.object(acq, "validate_video_file",
+                               side_effect=ValueError("nope")):
+            out = acq.acquire("http://example.com/v.mp4", tmp)
+        assert out["acquisition"] == "partial", out["warnings"]
+        assert any(w.startswith("video failed validation") for w in out["warnings"])
+    finally:
+        net.socket = original
+
+    # a direct image link pins the full metadata contract
+    fake, original = patched({"example.com": [PUBLIC]},
+                             [http(ctype="image/png", body=png_bytes())])
+    try:
+        out = acq.acquire("http://example.com/pic.png", tmp)
+        assert out["metadata"] == {"media": "image", "metadata": "none",
+                                   "captions": "none", "tier": "server",
+                                   "failure": "none"}, out["metadata"]
+        assert out["acquisition"] == "complete"
+    finally:
+        net.socket = original
+
+    # caption text strips timestamps and cue markup
+    srt = (b"1\n00:00:01,000 --> 00:00:02,000\nhello world\n\n"
+           b"2\n00:00:03,000 --> 00:00:04,000\nsecond line\n"
+           b"NOTE metadatay\nSTYLE\n")
+    assert acq._caption_text(srt) == "hello world second line"
+
+    # a short tiktok link is resolved through the pinned fetch
+    resolved = "https://www.tiktok.com/@u/video/77"
+    with mock.patch.object(net, "fetch_public",
+                           return_value={"url": resolved}) as fetch:
+        assert acq._resolve_shortlink("https://www.tiktok.com/t/abc123",
+                                      source) == resolved
+    assert fetch.call_count == 1
+
+    # a canonical tiktok URL is never re-fetched through the shortlink path
+    with mock.patch.object(net, "fetch_public",
+                           side_effect=AssertionError("non-short refetched")):
+        assert acq._resolve_shortlink(
+            "https://www.tiktok.com/@u/video/pins", source) == source["original_url"]
+
+    # extractor stderr is surfaced as its bounded tail
+    with mock.patch.object(acq.subprocess, "run", return_value=mock.Mock(
+            returncode=1, stderr=b"e" * 4500, stdout=b"")):
+        code, tail = acq._run_extractor(["extractor"])
+    assert (code, tail) == (1, "e" * 4000)
+
+    # an info.json title fills the title slot, bounded at 500
+    def emit_info(argv):
+        outdir = argv[argv.index("--paths") + 1]
+        with open(os.path.join(outdir, "v.info.json"), "w", encoding="utf-8") as fh:
+            json.dump({"title": "T" * 600}, fh)
+        return 1, "no media"
+
+    with mock.patch.object(acq, "_oembed", return_value={"title": "", "author": "",
+                                                         "thumbnail_url": ""}), \
+         mock.patch.object(net, "extractor_egress", return_value=mock.MagicMock()), \
+         mock.patch.object(acq, "_run_extractor", side_effect=emit_info):
+        out = acq.acquire("https://www.tiktok.com/@u/video/info", tmp)
+    assert out["title"] == "T" * 500, len(out["title"])
+
+    # oembed metadata alone keeps the entry partial, never blocked
+    def fake_fetch(url, **kwargs):
+        assert url.startswith("https://www.tiktok.com/oembed?"), url
+        return {"body": json.dumps({"title": "Only Meta"}).encode()}
+
+    with mock.patch.object(net, "fetch_public", side_effect=fake_fetch), \
+         mock.patch.object(net, "extractor_egress", return_value=mock.MagicMock()), \
+         mock.patch.object(acq, "_run_extractor", return_value=(1, "statuscode 10216")):
+        out = acq.acquire("https://www.tiktok.com/@u/video/meta", tmp)
+    assert out["acquisition"] == "partial", out["warnings"]
+    assert out["metadata"]["metadata"] == "oembed"
+    assert any(w.startswith("metadata only") for w in out["warnings"])
+
+    # import bounds: title/desc truncation on both import paths
+    long_title, long_desc = "T" * 505, "D" * 4005
+    out = acq.import_export(
+        [{"url": "https://www.tiktok.com/@u/photo/bounds", "title": long_title,
+          "desc": long_desc,
+          "images": [{"b64": base64.b64encode(png_bytes()).decode()}]}], tmp)[0]
+    assert out["title"] == "T" * 500 and out["desc"] == "D" * 4000
+    out = acq.import_export(
+        [{"url": "https://example.com/pending", "title": long_title,
+          "desc": long_desc}], tmp)[0]
+    assert out["acquisition"] == "pending"
+    assert out["title"] == "T" * 500 and out["desc"] == "D" * 4000
 
 
 def test_interpretation_regressions(tmp):
@@ -2062,10 +2327,13 @@ def test():
     print("deadline connect ok")
     test_deadline_bounded_dns()
     print("deadline dns ok")
+    test_network_message_pins()
+    print("network pins ok")
     with tempfile.TemporaryDirectory(prefix="cs-src-") as tmp:
         test_import_media_bounds(tmp)
         test_acquisition_regressions(tmp)
         test_tiktok_host_dispatch(tmp)
+        test_acquisition_mutant_pins(tmp)
         test_interpretation_regressions(tmp)
     test_direct_media_single_fetch()
     print("direct media ok")
