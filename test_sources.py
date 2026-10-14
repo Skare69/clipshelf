@@ -795,7 +795,8 @@ def test_network_status_classification():
 def test_interpretation_bounds():
     categories = ["github", "prompts"]
     source = {"url": "https://example.com/page", "title": "T", "desc": "D",
-              "text": "body", "links": [], "assets": [], "metadata": {}}
+              "text": "body owner/repo github.com/a/b", "links": [],
+              "assets": [], "metadata": {}}
     cfg = {"base_url": "http://127.0.0.1:11434/v1", "model": "m", "api_key": None}
 
     # config failures never invent findings
@@ -989,7 +990,7 @@ def test_screening_policy():
     def check():
         categories = ["github", "prompts"]
         source = {"url": "https://example.com/page", "title": "T", "desc": "D",
-                  "text": "body", "links": [], "assets": [], "metadata": {}}
+                  "text": "body owner/repo", "links": [], "assets": [], "metadata": {}}
         cfg = {"base_url": "http://127.0.0.1:11434/v1", "model": "m", "api_key": None}
         good_raw = '{"summary": "s", "repos": ["owner/repo"], "prompts": [], ' \
                    '"links": [], "categories": ["github"], "installs": ["pip install foo"], ' \
@@ -1593,12 +1594,48 @@ def test_verify_urls_policy():
     print("verify urls ok")
 
 
+def test_links_bound_to_material():
+    """Emitted URLs are fetched and stored only when they occur in the
+    material; an injected off-material link is dropped unfetched."""
+    config = {"base_url": "http://h/v1", "model": "m"}
+    source = {"url": "https://example.com/p", "title": "t",
+              "desc": "start from github.com/o/r",
+              "text": "see https://kept.example/page for details",
+              "links": [{"url": "https://linked.example/x", "title": "l"}],
+              "assets": [], "metadata": {}}
+    attacker = "https://attacker.example/c?v=cat1,cat2"
+    result = {"summary": "s", "repos": ["https://github.com/o/r"],
+              "prompts": [], "installs": [],
+              "links": ["https://linked.example/x", "https://kept.example/page",
+                        attacker],
+              "categories": [], "warnings": []}
+    fetched = []
+
+    def fake_post(base, key, payload, timeout):
+        return {"choices": [{"message": {"content": json.dumps(result)}}]}
+
+    def fake_fetch(url, **k):
+        fetched.append(url)
+        raise net.NetworkError("down")
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=fake_post), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        findings = interp.interpret(source, config, [])
+    assert attacker not in findings["links"], findings["links"]
+    assert set(fetched) == {"https://github.com/o/r", "https://linked.example/x",
+                            "https://kept.example/page"}, fetched
+    assert any(w.startswith(f"link not in the material: {attacker}")
+               for w in findings["warnings"]), findings["warnings"]
+    print("links bound to material ok")
+
+
 def test_interpret_pipeline_contract():
     """One POST with the exact chat contract; unknown reply keys surface in
     warnings; a url-less source is refused without any endpoint call."""
     categories = ["github"]
     source = {"url": "https://example.com/page", "title": "T", "desc": "D",
-              "text": "body", "links": [], "assets": [], "metadata": {}}
+              "text": "body owner/repo", "links": [], "assets": [], "metadata": {}}
     cfg = {"base_url": "http://127.0.0.1:11434/v1", "model": "m", "api_key": None}
     extra_raw = ('{"summary": "s", "repos": ["owner/repo"], "prompts": [], '
                  '"links": [], "categories": ["github"], "installs": [], '
@@ -1646,7 +1683,7 @@ def test_interpret_screening_thresholds():
     preserves findings, zero-steer screening changes nothing."""
     categories = ["github"]
     source = {"url": "https://example.com/page", "title": "T", "desc": "D",
-              "text": "body", "links": [], "assets": [], "metadata": {}}
+              "text": "body owner/repo", "links": [], "assets": [], "metadata": {}}
     cfg = {"base_url": "http://127.0.0.1:11434/v1", "model": "m", "api_key": None}
     good_raw = ('{"summary": "s", "repos": ["owner/repo"], "prompts": [], '
                 '"links": [], "categories": ["github"], "installs": ["pip i x"], '
@@ -1937,6 +1974,7 @@ def test():
     test_parse_json_content_forms()
     test_validated_findings_caps()
     test_verify_urls_policy()
+    test_links_bound_to_material()
     test_interpret_pipeline_contract()
     test_interpret_screening_thresholds()
     test_check_connection_contract()

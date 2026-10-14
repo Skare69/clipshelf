@@ -444,6 +444,33 @@ def _validated(raw, source_url, categories, warnings):
             "installs": installs, "warnings": out_warnings}
 
 
+def _bound_to_material(findings, state, warnings):
+    """Keep only URLs derivable from the material text; the rest are dropped
+    and never fetched, so captured content cannot make the worker probe
+    attacker-chosen URLs (which would leak allowed_categories)."""
+    parts = [state.get("url") or "", state.get("title") or "",
+             state.get("description") or "", state.get("page_text") or ""]
+    for link in state.get("links") or []:
+        parts += [link.get("url") or "", link.get("title") or ""]
+    blob = "\n".join(parts).casefold()
+    for key in ("repos", "links"):
+        kept = []
+        for url in findings[key]:
+            # scheme-stripped form covers bare-host text; for github entries
+            # the owner/name tail also covers bare slugs.
+            # ponytail: images are not OCR'd, so an image-only mention drops
+            # with a warning; add OCR text to the material if that bites.
+            forms = [url.split("://", 1)[-1].casefold()]
+            host, _, tail = forms[0].partition("/")
+            if host in ("github.com", "gist.github.com"):
+                forms.append(tail)
+            if any(form in blob for form in forms if form):
+                kept.append(url)
+            else:
+                warnings.append(f"{key[:-1]} not in the material: {url}"[:300])
+        findings[key] = kept
+
+
 def _verify_urls(findings, warnings):
     """Public enrichment: emitted URLs re-checked under the fetch policy."""
     urls, seen = [], set()
@@ -510,6 +537,7 @@ def interpret(source, config, categories, screening_key=None):
         try:
             findings = _validated(_parse_json_content(content), source["url"],
                                   categories, warnings)
+            _bound_to_material(findings, state, warnings)
             _verify_urls(findings, warnings)
             if screened and steer >= judgment.ACTION_STEER:
                 findings["repos"] = []
