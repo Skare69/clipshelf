@@ -43,6 +43,8 @@ function fakeEl(tag) {
       for (let n = this; n; n = n.parentElement) if (n.dataset[key] != null) return n;
       return null;
     },
+    querySelectorAll() { return []; },
+    focus() { globalThis.document.activeElement = this; },
     showModal() { this.open = true; },
   };
 }
@@ -200,3 +202,19 @@ assert.equal(impErr.hidden, true, "accepted import shows no error");
 clearTimeout(S.libTimer); // drop the deferred library refresh so node exits
 
 console.log("ok: failed import replay shows the stored error and never the success banner");
+
+/* ---------- 4. searching from a non-library view keeps focus in the search box ---------- */
+{
+  S.view = "inbox"; // the user types a search while Inbox is open
+  const qInput = bySel.get("#q");
+  globalThis.document.activeElement = qInput; // focus lives in the search box
+  qInput.value = "react";
+  globalThis.fetch = async () => ({ ok: true, status: 200,
+    text: async () => JSON.stringify({ entries: [], count: 0 }) });
+  for (const fn of qInput.listeners.input || []) fn({});
+  await new Promise((r) => setTimeout(r, 350)); // past the 300 ms debounce
+  assert.equal(S.view, "library", "the search must open the library");
+  assert.equal(globalThis.document.activeElement, qInput,
+    `the debounce must not move focus out of the search box, got ${globalThis.document.activeElement?.id || "none"}`);
+}
+console.log("ok: a search that opens the library keeps focus in the search box");

@@ -767,7 +767,7 @@ qInput.addEventListener("input", () => {
   clearTimeout(qTimer);
   qTimer = setTimeout(() => {
     S.q = qInput.value.trim();
-    if (S.view !== "library") setView("library"); else loadEntries(true);
+    if (S.view !== "library") { setView("library"); qInput.focus(); } else loadEntries(true);
   }, 300);
 });
 qClear.addEventListener("click", () => {
