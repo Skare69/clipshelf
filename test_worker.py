@@ -527,6 +527,41 @@ class AddExtractedCommandTests(WorkerMixin, TestCase):
                         call_command("add_extracted", "--user", self.user.email, str(path))
                     merge_findings.assert_not_called()
 
+    def test_rejects_wrong_skill_findings_shapes_before_merge(self):
+        path = self.tmp / "findings.json"
+        malformed = (
+            ("categories", '["Video generation"]'),  # interpretation shape: a list
+            ("categories", '{"owner/tool": ["Video generation"]}'),
+            ("categories", "null"),
+            ("installs", '["pip install tool"]'),
+            ("repos", '{"owner/tool": "x"}'),
+            ("repos", '["owner/tool", 3]'),
+            ("source", "7"),
+            ("summary", '["s"]'),
+        )
+        for field, value in malformed:
+            with self.subTest(field=field, value=value):
+                path.write_text(f'{{"{field}": {value}}}', encoding="utf-8")
+                with mock.patch(
+                        "clipshelf.management.commands.add_extracted.imports.merge_findings"
+                ) as merge_findings:
+                    with self.assertRaisesMessage(CommandError, f"finding {field}"):
+                        call_command("add_extracted", "--user", self.user.email, str(path))
+                    merge_findings.assert_not_called()
+
+    def test_accepts_skill_shape_categories_and_installs(self):
+        path = self.tmp / "findings.json"
+        path.write_text(
+            '{"source": "https://example.com/a", "summary": "s", '
+            '"repos": ["owner/tool"], '
+            '"categories": {"owner/tool": "Video generation"}, '
+            '"installs": {"owner/tool": "pip install tool"}}', encoding="utf-8")
+        with mock.patch(
+                "clipshelf.management.commands.add_extracted.imports.merge_findings"
+        ) as merge_findings:
+            call_command("add_extracted", "--user", self.user.email, str(path))
+        merge_findings.assert_called_once()
+
     def test_reports_changes_without_calling_them_new_items(self):
         path = self.tmp / "findings.json"
         path.write_text("{}", encoding="utf-8")

@@ -3,7 +3,7 @@
 run_staged_import processes the upload-staged ImportRecords the worker
 coordinator claims; import_items backs the import_library command and
 legacy_payload translates a legacy library.json. merge_findings merges
-interpret-skill findings into the Personal collection for add_extracted.
+skill findings into the Personal collection for add_extracted.
 """
 import hashlib
 import json
@@ -201,10 +201,11 @@ def _append_page_asset(source, item):
 
 
 def _legacy_findings(item, url):
-    """Reconstruct findings-shaped data from legacy merged entry fields.
-
-    The findings contract stores categories/installs as string lists; the
-    legacy per-repo mapping collapses to this entry's own values.
+    """Reconstruct interpretation-shaped findings from legacy merged entry
+    fields. The interpretation contract stores categories/installs as string
+    lists (unlike the skill findings schema merge_findings consumes, where
+    they are objects keyed by repo); the legacy per-repo mapping collapses to
+    this entry's own values.
     """
     return {"source": url, "summary": item.get("desc") or "", "repos": [],
             "prompts": [], "links": [],
@@ -562,9 +563,10 @@ def _legacy_contribution_data(item):
 
 # ------------------------------------------------------- extracted-merge flow
 
-def merge_findings(user, findings, origin="extracted"):
-    """Merge interpret-skill findings into the user's Personal collection with
-    legacy add_extracted semantics (longer text wins, tags/sources union)."""
+def merge_findings(user, skill_findings, origin="extracted"):
+    """Merge skill findings (the SKILL.md schema: categories/installs are
+    objects keyed by repo) into the user's Personal collection with legacy
+    add_extracted semantics (longer text wins, tags/sources union)."""
     personal = services.personal_collection(user)
     stats = {"links": 0, "prompts": 0, "updated": 0}
     now = timezone.now()
@@ -573,7 +575,7 @@ def merge_findings(user, findings, origin="extracted"):
     # and never hit the API; keyword/untagged links go to judgment.tag_links.
     meta = {}
     candidates = []
-    for fi, finding in enumerate(findings):
+    for fi, finding in enumerate(skill_findings):
         for li, link in enumerate(finding.get("links") or []):
             url = lib.norm(str(link.get("url", "")))
             title = " ".join(str(link.get("title", "")).split())
@@ -594,7 +596,7 @@ def merge_findings(user, findings, origin="extracted"):
                                   else "page")
                        for (fi, li, _, _), r in zip(candidates, results)}
     with transaction.atomic():
-        for fi, finding in enumerate(findings):
+        for fi, finding in enumerate(skill_findings):
             source = lib.norm(str(finding.get("source", "")))
             cats = finding.get("categories") or {}
             installs = finding.get("installs") or {}
