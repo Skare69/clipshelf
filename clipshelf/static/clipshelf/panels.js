@@ -340,6 +340,9 @@ async function loadCaptures() {
     S.capsLoaded = true;
     setInboxCount(S.captures);
     renderInbox();
+    // A reload can hand back active work after the poller stopped itself
+    // (retry, another device queueing): polling must cover it again.
+    if (S.captures.some(captureActive)) pollCaptures();
   } catch (e) { if (e.status !== 401) renderError(e); }
 }
 function pollCaptures() {

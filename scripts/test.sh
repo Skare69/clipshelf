@@ -28,3 +28,5 @@ node test_inbox_status.mjs
 node test_release_gates.mjs
 # Category rail: the counts cover the whole library, not only the loaded page.
 node test_cat_rail.mjs
+# Inbox keeps polling after "Try again" restarts a blocked job.
+node test_inbox_retry_poll.mjs
