@@ -16,17 +16,15 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
-import java.io.ByteArrayOutputStream;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.SocketException;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
-import java.util.Locale;
 
 import dev.clipshelf.app.Creds;
 import dev.clipshelf.app.net.Api;
@@ -166,26 +164,24 @@ public class DeliverWorkerTest {
     }
 
     /**
-     * Minimal canned HTTP origin for /api/me and /api/captures. One connection
-     * per request (Connection: close), serial single-client requests only.
+     * Minimal canned HTTP origin for /api/me and /api/captures; unknown paths
+     * get 404. Responses carry the receipt/status the test last configured.
      */
     private static final class FakeOrigin {
-        private final ServerSocket serverSocket;
-        private final Thread thread;
-        private volatile boolean running = true;
+        private final HttpServer server;
         private volatile String meJson = "{}";
         private volatile int captureStatus = 200;
         private volatile String receiptJson = "{}";
 
         FakeOrigin() throws Exception {
-            serverSocket = new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
-            thread = new Thread(this::serve, "fake-origin");
-            thread.setDaemon(true);
-            thread.start();
+            server = HttpServer.create(
+                    new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0);
+            server.createContext("/", this::handle);
+            server.start();
         }
 
         int port() {
-            return serverSocket.getLocalPort();
+            return server.getAddress().getPort();
         }
 
         void meIdentity(String instanceId, String userId) {
@@ -202,69 +198,31 @@ public class DeliverWorkerTest {
                     + "\",\"instance_id\":\"" + instanceId + "\",\"user_id\":\"" + userId + "\"}}";
         }
 
-        void close() throws Exception {
-            running = false;
-            serverSocket.close();
+        void close() {
+            server.stop(0);
         }
 
-        private void serve() {
-            while (running) {
-                try (Socket s = serverSocket.accept()) {
-                    s.setSoTimeout(10_000);
-                    String request = readRequest(s);
-                    if (request.startsWith("GET /api/me ")) {
-                        respond(s, 200, meJson);
-                    } else if (request.startsWith("POST /api/captures ")) {
-                        respond(s, captureStatus, receiptJson);
-                    } else {
-                        respond(s, 404, "{}");
-                    }
-                } catch (SocketException closed) {
-                    return; // closed by close()
-                } catch (Exception e) {
-                    if (!running) {
-                        return;
-                    }
-                    // connection-level failure: keep serving, the client sees a broken response
-                }
+        private void handle(HttpExchange ex) throws IOException {
+            ex.getRequestBody().readAllBytes(); // drain the POST body before answering
+            String json;
+            int status;
+            if ("GET".equals(ex.getRequestMethod()) && "/api/me".equals(ex.getRequestURI().getPath())) {
+                status = 200;
+                json = meJson;
+            } else if ("POST".equals(ex.getRequestMethod())
+                    && "/api/captures".equals(ex.getRequestURI().getPath())) {
+                status = captureStatus;
+                json = receiptJson;
+            } else {
+                status = 404;
+                json = "{}";
             }
-        }
-
-        /** Reads head + declared body; returns the raw head (request line first). */
-        private static String readRequest(Socket s) throws IOException {
-            InputStream in = s.getInputStream();
-            ByteArrayOutputStream head = new ByteArrayOutputStream();
-            int b;
-            while ((b = in.read()) != -1) {
-                head.write(b);
-                byte[] buf = head.toByteArray();
-                int n = buf.length;
-                if (n >= 4 && buf[n - 4] == '\r' && buf[n - 3] == '\n'
-                        && buf[n - 2] == '\r' && buf[n - 1] == '\n') {
-                    break;
-                }
-            }
-            String headers = new String(head.toByteArray(), StandardCharsets.US_ASCII);
-            int contentLength = 0;
-            for (String line : headers.split("\r\n")) {
-                String lower = line.toLowerCase(Locale.ROOT);
-                if (lower.startsWith("content-length:")) {
-                    contentLength = Integer.parseInt(lower.substring(15).trim());
-                }
-            }
-            for (int i = 0; i < contentLength; i++) {
-                in.read(); // drain the POST body before answering
-            }
-            return headers;
-        }
-
-        private static void respond(Socket s, int status, String json) throws IOException {
             byte[] body = json.getBytes(StandardCharsets.UTF_8);
-            OutputStream out = s.getOutputStream();
-            out.write(("HTTP/1.1 " + status + " T\r\nContent-Type: application/json\r\nContent-Length: "
-                    + body.length + "\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
-            out.write(body);
-            out.flush();
+            ex.getResponseHeaders().set("Content-Type", "application/json");
+            ex.sendResponseHeaders(status, body.length);
+            try (OutputStream out = ex.getResponseBody()) {
+                out.write(body);
+            }
         }
     }
 }

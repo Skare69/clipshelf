@@ -18,12 +18,12 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.ConscryptMode;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+
 import java.io.OutputStream;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 
 /**
@@ -86,51 +86,29 @@ public class ApiLogout410Test {
     /** Session DELETE origin answering one configurable status and an allauth-shaped body. */
     private static final class Origin {
         volatile int status = 200;
-        private final ServerSocket server =
-                new ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"));
+        private final HttpServer server;
 
         Origin() throws Exception {
-            Thread t = new Thread(this::serve, "logout-410-origin");
-            t.setDaemon(true);
-            t.start();
+            server = HttpServer.create(
+                    new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0);
+            server.createContext("/", ex -> {
+                byte[] body = ("{\"status\": " + status + ", \"data\": {\"flows\": "
+                        + "[{\"id\": \"login\"}]}}").getBytes(StandardCharsets.UTF_8);
+                ex.getResponseHeaders().set("Content-Type", "application/json");
+                ex.sendResponseHeaders(status, body.length);
+                try (OutputStream out = ex.getResponseBody()) {
+                    out.write(body);
+                }
+            });
+            server.start();
         }
 
         int port() {
-            return server.getLocalPort();
+            return server.getAddress().getPort();
         }
 
-        void close() throws Exception {
-            server.close();
-        }
-
-        private void serve() {
-            while (!server.isClosed()) {
-                try (Socket s = server.accept()) {
-                    s.setSoTimeout(10_000);
-                    readHead(s.getInputStream());
-                    byte[] body = ("{\"status\": " + status + ", \"data\": {\"flows\": "
-                            + "[{\"id\": \"login\"}]}}").getBytes(StandardCharsets.UTF_8);
-                    OutputStream out = s.getOutputStream();
-                    out.write(("HTTP/1.1 " + status + " S\r\nContent-Type: application/json\r\n"
-                            + "Content-Length: " + body.length + "\r\nConnection: close\r\n\r\n")
-                            .getBytes(StandardCharsets.US_ASCII));
-                    out.write(body);
-                    out.flush();
-                } catch (Exception e) {
-                    // closed by close(), or a broken connection the client reports itself
-                }
-            }
-        }
-
-        private static void readHead(InputStream in) throws Exception {
-            ByteArrayOutputStream head = new ByteArrayOutputStream();
-            int b;
-            while ((b = in.read()) != -1) {
-                head.write(b);
-                if (head.toString("US-ASCII").endsWith("\r\n\r\n")) {
-                    return;
-                }
-            }
+        void close() {
+            server.stop(0);
         }
     }
 }

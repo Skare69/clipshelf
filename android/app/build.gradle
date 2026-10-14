@@ -147,6 +147,27 @@ tasks.register("seedRobolectricRepo", Copy) {
     }
 }
 
+// Unit tests compile against android.jar's system modules, so javac cannot
+// see JDK-only packages such as com.sun.net.httpserver. Append the JDK's own
+// jdk.httpserver classes to the unit-test compile classpath at execution
+// time: AGP assembles that classpath itself and drops declared file deps.
+// Compile-only: at test runtime the JVM loads the real module classes.
+def jdkHttpserverClasses = layout.buildDirectory.dir("jdkHttpserver/classes")
+tasks.register("exportJdkHttpserver", Exec) {
+    def classesDir = jdkHttpserverClasses.get().asFile
+    outputs.dir(classesDir)
+    doFirst { classesDir.parentFile.mkdirs() }
+    commandLine "${System.getProperty('java.home')}/bin/jmod", "extract",
+            "--dir", classesDir.parentFile.absolutePath,
+            "${System.getProperty('java.home')}/jmods/jdk.httpserver.jmod"
+}
+tasks.withType(JavaCompile).configureEach {
+    if (name.endsWith("UnitTestJavaWithJavac")) {
+        dependsOn "exportJdkHttpserver"
+        doFirst { classpath = classpath + files(jdkHttpserverClasses) }
+    }
+}
+
 dependencies {
     implementation "androidx.work:work-runtime:2.9.1"
     implementation "com.google.android.material:material:1.13.0"

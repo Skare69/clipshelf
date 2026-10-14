@@ -21,13 +21,14 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
-import java.io.ByteArrayOutputStream;
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
+import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.Key;
@@ -276,88 +277,32 @@ public class LibrarySessionReloadTest {
 
     /** {path, X-Session-Token} per request the origin received. */
     private static final class Origin {
-        private final ServerSocket listener;
-        private final Thread loop;
+        private final HttpServer server;
         final String url;
         final List<String[]> hits = Collections.synchronizedList(new ArrayList<>());
 
         Origin() throws IOException {
-            listener = new ServerSocket(0, 16, InetAddress.getByName("127.0.0.1"));
+            server = HttpServer.create(
+                    new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), 0);
             // Debug builds allow plain http to loopback (Api.checkScheme); the
             // unit-test JVM makes the calls with real sockets either way.
-            url = "http://127.0.0.1:" + listener.getLocalPort();
-            loop = new Thread(this::serve, "origin-" + listener.getLocalPort());
-            loop.setDaemon(true);
-            loop.start();
-        }
-
-        private void serve() {
-            while (!listener.isClosed()) {
-                try (Socket sock = listener.accept()) {
-                    handle(sock);
-                } catch (IOException closed) {
-                    return; // listener shut down
+            url = "http://127.0.0.1:" + server.getAddress().getPort();
+            server.createContext("/", ex -> {
+                hits.add(new String[]{ex.getRequestURI().getPath(),
+                        ex.getRequestHeaders().getFirst("X-Session-Token")});
+                String body = "/api/me".equals(ex.getRequestURI().getPath()) ? ME_JSON : ENTRIES_JSON;
+                byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+                ex.getResponseHeaders().set("Content-Type", "application/json");
+                ex.sendResponseHeaders(200, bytes.length);
+                try (OutputStream out = ex.getResponseBody()) {
+                    out.write(bytes);
                 }
-            }
-        }
-
-        private void handle(Socket sock) throws IOException {
-            String head = readHead(sock.getInputStream());
-            String path = head.substring(head.indexOf(' ') + 1,
-                    head.indexOf(' ', head.indexOf(' ') + 1));
-            int query = path.indexOf('?');
-            if (query >= 0) {
-                path = path.substring(0, query);
-            }
-            String token = null;
-            for (String line : head.split("\r\n")) {
-                int colon = line.indexOf(':');
-                if (colon > 0 && "x-session-token"
-                        .equals(line.substring(0, colon).trim().toLowerCase(java.util.Locale.ROOT))) {
-                    token = line.substring(colon + 1).trim();
-                }
-            }
-            hits.add(new String[]{path, token});
-            String body = "/api/me".equals(path) ? ME_JSON : ENTRIES_JSON;
-            byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-            OutputStream out = sock.getOutputStream();
-            out.write(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-                    + bytes.length + "\r\nConnection: close\r\n\r\n")
-                    .getBytes(StandardCharsets.US_ASCII));
-            out.write(bytes);
-            out.flush();
-            // Drain the rest so closing does not RST the client mid-read.
-            try {
-                sock.setSoTimeout(250);
-                InputStream rest = sock.getInputStream();
-                while (rest.read() != -1) {
-                    // discard
-                }
-            } catch (IOException ignored) {
-                // the response is already out
-            }
-        }
-
-        private static String readHead(InputStream in) throws IOException {
-            ByteArrayOutputStream head = new ByteArrayOutputStream();
-            int b;
-            while ((b = in.read()) != -1) {
-                head.write(b);
-                byte[] bytes = head.toByteArray();
-                int n = bytes.length;
-                if (n >= 4 && bytes[n - 4] == '\r' && bytes[n - 3] == '\n'
-                        && bytes[n - 2] == '\r' && bytes[n - 1] == '\n') {
-                    return new String(bytes, StandardCharsets.US_ASCII);
-                }
-            }
-            throw new IOException("Connection closed before request head completed");
+            });
+            server.start();
         }
 
         void close() {
-            try {
-                listener.close();
-            } catch (IOException ignored) {
-            }
+            server.stop(0);
         }
     }
 
