@@ -672,7 +672,7 @@ def api_import(request):
         with open(spooled, "rb") as fh:
             try:
                 data = json.load(fh)
-            except ValueError:
+            except (ValueError, RecursionError):
                 raise ApiError(400, detail="file is not valid JSON")
         if isinstance(data, list):
             if not all(isinstance(item, dict) for item in data):

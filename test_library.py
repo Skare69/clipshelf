@@ -486,6 +486,26 @@ class MalformedRequestTests(ApiTestCase):
         self.assertTrue(response["Content-Type"].startswith("application/json"))
         self.assertFalse(Capture.objects.exists())
 
+    def test_deep_json_import_file_is_json_400(self):
+        alice = self._login(self.alice)
+        response = alice.post(
+            "/api/import",
+            data={
+                "client_request_id": str(uuid.uuid4()),
+                "collection_id": str(self.alice_personal.id),
+                "instance_id": self.instance_id,
+                "user_id": str(self.alice.id),
+                "file": SimpleUploadedFile(
+                    "tiktok.json", b"[" * 60000, content_type="application/json"
+                ),
+            },
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response["Content-Type"].startswith("application/json"))
+        self.assertEqual(response.json()["detail"], "file is not valid JSON")
+        staging = os.path.join(os.path.realpath(self._data_dir()), "staging")
+        self.assertEqual(os.listdir(staging), [])
+
     def test_bad_request_off_api_is_plain_text(self):
         from django.test import RequestFactory
 
