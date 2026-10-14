@@ -166,7 +166,7 @@ def _resolve_media(value, cache_dir, staging, files_record, copy=True):
         return {"path": str(src)}
     dest = staging / f"{digest}{src.suffix}"
     if not dest.exists():
-        shutil.copy2(src, dest)
+        shutil.copyfile(src, dest)  # copy2 would copy the cache file's mode
     return {"path": str(dest)}
 
 

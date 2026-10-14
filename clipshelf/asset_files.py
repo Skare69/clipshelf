@@ -92,7 +92,7 @@ def publish(source, staging, *, move):
             os.replace(src, dest)  # atomic: file appears complete at final path
         else:
             part = dest.with_name(f".{dest.name}.part")
-            shutil.copy2(src, part)
+            shutil.copyfile(src, part)  # copy2 would copy the staged file's mode
             os.replace(part, dest)
         published.append({**asset, "path": str(dest)})
     source["assets"] = published

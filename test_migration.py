@@ -644,6 +644,54 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
                          "the snapshot database was readable by others")
 
     @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
+    def test_restore_publishes_private_modes_under_private_umask(self):
+        """Restoring a public-mode (pre-0.11) backup under umask 077 must not
+        republish the backup's modes: the restored database holds session
+        keys, password hashes and API keys."""
+        self.run_import_command()
+        backup_dir = self.tmp / "public-bk"
+        with override_settings(DATA_DIR=str(self.tmp)):
+            call_command("backup", "--output", str(backup_dir), stdout=io.StringIO())
+        os.chmod(backup_dir, 0o755)  # simulate a backup made under umask 0022
+        os.chmod(backup_dir / "db.sqlite3", 0o644)
+        for path in (backup_dir / "assets").rglob("*"):
+            os.chmod(path, 0o755 if path.is_dir() else 0o644)
+
+        fresh = self.tmp / "fresh-modes"
+        fresh.mkdir()
+        fresh_db = fresh / "restored.db"
+        old_umask = os.umask(0o077)
+        try:
+            with override_settings(
+                    DATA_DIR=str(fresh),
+                    DATABASES={"default": {"ENGINE": "django.db.backends.sqlite3",
+                                           "NAME": str(fresh_db)}}):
+                call_command("restore", "--input", str(backup_dir), stdout=io.StringIO())
+        finally:
+            os.umask(old_umask)
+        self.assertEqual(stat.S_IMODE(fresh_db.stat().st_mode), 0o600,
+                         "the restored database was readable by others")
+        for path in (fresh / "assets").rglob("*"):
+            expected = 0o700 if path.is_dir() else 0o600
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), expected,
+                             f"restored {path.name} kept the backup's mode")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
+    def test_imported_legacy_media_publishes_private_modes(self):
+        """A 0644 legacy cache page published as an asset lands 0600 under the
+        pinned private umask: copy2 used to copy the cache file's mode."""
+        cache_page = self.cache_dir / Path(CACHE_NAME).name
+        os.chmod(cache_page, 0o644)  # the runner pins umask 077; force a public page
+        old_umask = os.umask(0o077)
+        try:
+            self.run_import_command()
+        finally:
+            os.umask(old_umask)
+        asset = models.Asset.objects.get()
+        self.assertEqual(stat.S_IMODE((self.tmp / asset.path).stat().st_mode), 0o600,
+                         "published legacy media kept the cache file's mode")
+
+    @unittest.skipUnless(os.name == "posix", "POSIX permission bits")
     def test_cli_main_pins_private_umask(self):
         """cli.main sets umask 077 before anything else, so the data directory,
         WAL/SHM sidecars and backups are private whatever umask the caller had."""

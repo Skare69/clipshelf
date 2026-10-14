@@ -95,7 +95,9 @@ class Command(BaseCommand):
         staged_assets = data_dir / f"restore-staging-{token}"
         has_assets = (backup / ASSETS).is_dir()
         try:
-            shutil.copy2(db_src, staged_db)
+            # copyfile, never copy2: copystat would republish the backup's
+            # (pre-0.11, world-readable) modes onto the staged copy.
+            shutil.copyfile(db_src, staged_db)
             con = sqlite3.connect(str(staged_db))
             try:
                 if con.execute("PRAGMA quick_check").fetchall() != [("ok",)]:
@@ -111,7 +113,10 @@ class Command(BaseCommand):
             finally:
                 con.close()
             if has_assets:
-                shutil.copytree(backup / ASSETS, staged_assets)
+                shutil.copytree(backup / ASSETS, staged_assets,
+                                copy_function=shutil.copyfile)
+                for root, _dirs, _files in os.walk(staged_assets):
+                    os.chmod(root, 0o700)  # private even without the pinned umask
         except sqlite3.Error as exc:
             raise CommandError(
                 f"backup db.sqlite3 is not a readable SQLite database: {exc}") from exc
