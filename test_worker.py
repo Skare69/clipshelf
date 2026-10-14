@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 from urllib.error import HTTPError, URLError
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db.utils import OperationalError
@@ -749,6 +749,52 @@ class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
 
         self.assertTrue(result["created"])
         self.assertFalse(models.Entry.objects.filter(key=url).exists())
+
+
+class ImportDestinationRecheckTests(WorkerMixin, TransactionTestCase):
+    """The import commit rechecks account and destination after staging:
+    access lost during the long fetch never commits into the shared
+    collection (the same rule store_source applies per job)."""
+
+    def _import_to_shared(self, revoke):
+        other = models.User.objects.create_user(username="w2", email="w2@example.com")
+        shared = models.Collection.objects.create(name="s", kind="shared", owner=other)
+        models.Membership.objects.create(collection=shared, user=self.user)
+        real_stage = imports._stage_items
+
+        def stage_then_revoke(items, cache_dir, staging):
+            revoke(shared)
+            return real_stage(items, cache_dir, staging)
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire), \
+                mock.patch.object(imports, "_stage_items", side_effect=stage_then_revoke):
+            return shared, imports.import_items(
+                user=self.user, collection_id=shared.id,
+                items=[{"url": "https://example.com/late", "title": "legacy"}])
+
+    def test_membership_lost_during_staging_lands_in_personal(self):
+        def revoke(shared):
+            models.Membership.objects.filter(collection=shared, user=self.user).delete()
+
+        shared, result = self._import_to_shared(revoke)
+        self.assertEqual(result["collection_id"], str(self.personal.id))
+        self.assertIn("Personal collection", result["notice"])
+        self.assertFalse(models.Entry.objects.filter(collection=shared).exists())
+        self.assertFalse(models.Contribution.objects.filter(entry__collection=shared).exists())
+        self.assertFalse(models.Capture.objects.filter(collection=shared).exists())
+        self.assertTrue(models.Entry.objects.filter(
+            collection=self.personal, key="https://example.com/late").exists())
+
+    def test_account_disabled_during_staging_fails_the_import(self):
+        def revoke(shared):
+            models.User.objects.filter(pk=self.user.pk).update(is_active=False)
+
+        with self.assertRaises(PermissionDenied):
+            self._import_to_shared(revoke)
+        self.assertFalse(models.Entry.objects.exists())
+        self.assertFalse(models.Contribution.objects.exists())
+        self.assertFalse(models.Capture.objects.exists())
 
 
 class GuardrailBlockedTests(WorkerMixin, TransactionTestCase):

@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path, PureWindowsPath
 
 from django.conf import settings
-from django.core.exceptions import ValidationError
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.utils import timezone
 
@@ -484,7 +484,9 @@ def _prompt_plans(prompts):
 def _commit_import(user, collection, plans, prompt_plans, digest, origin,
                    client_request_id, record, notice, staging, files_record,
                    seen_map=None, removed_keys=(), removed_urls=()):
-    """Publish all files, then create every row in one transaction."""
+    """Publish all files, then create every row in one transaction. The
+    account and destination are rechecked after staging: a lost destination
+    falls back to Personal with a notice, a disabled account raises."""
     # Publish job files first: complete bytes at final paths before any reference.
     for plan in plans:
         plan["published"] = asset_files.publish(plan["source"], staging, move=False)
@@ -511,6 +513,15 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
                          seen_map or {}, removed_keys, files_record, origin)
     counts = {"entries": 0, "jobs": 0, "assets": 0, "prompts": 0}
     with transaction.atomic():
+        # Recheck account and destination after staging: membership or account
+        # state may have changed during the long fetch. One resolution for
+        # every row written below (the same rule store_source applies per job).
+        user = models.User.objects.get(pk=user.pk)
+        collection = models.Collection.objects.filter(pk=collection.pk).first()
+        if not services.can_write(user, collection):
+            if not user.is_active:
+                raise PermissionDenied("Account is disabled.")
+            collection, notice = services.destination_for(user, str(collection.id))
         capture, created = models.Capture.objects.get_or_create(
             user=user, client_request_id=crid,
             defaults={
