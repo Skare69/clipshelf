@@ -80,7 +80,6 @@ public class LibraryActivity extends AppCompatActivity {
         androidx.core.view.ViewCompat.replaceAccessibilityAction(toolbar,
                 androidx.core.view.accessibility.AccessibilityNodeInfoCompat.AccessibilityActionCompat.ACTION_CLICK,
                 getString(R.string.choose_collection), null);
-        toolbar.inflateMenu(R.menu.menu_library);
         TextInputEditText search = findViewById(R.id.library_search);
         ListView list = findViewById(R.id.library_list);
         adapter = new Adapter();
