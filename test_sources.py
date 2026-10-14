@@ -753,9 +753,25 @@ def test_interpretation_bounds():
              "VIDEO GENERATION", "Claude Code ecosystem", "video generation", " ",
              legacy.upper(), "x" * 40, "y" * 41, "hidden\u200binstruction"]},
         source["url"], ["Video generation", legacy], warnings)
-    assert mixed["categories"] == [
-        "Video generation", "Claude Code ecosystem", legacy, "x" * 40]
+    assert mixed["categories"] == ["Video generation", "Claude Code ecosystem", legacy]
     assert sum("not a short visible label" in w for w in warnings) == 2, warnings
+    assert sum("one new category per capture" in w for w in warnings) == 1, warnings
+
+    # at most one new vocabulary name per capture: with an empty vocabulary the
+    # first invention is kept and the rest drop with a warning; known names
+    # stay uncapped
+    warnings = []
+    capped = interp._validated(
+        {"summary": "s", "repos": [], "prompts": [], "links": [], "installs": [],
+         "warnings": [], "categories": ["a", "b", "c"]},
+        source["url"], [], warnings)
+    assert capped["categories"] == ["a"], capped
+    assert sum("one new category per capture" in w for w in warnings) == 2, warnings
+    head = interp._validated(
+        {"summary": "s", "repos": [], "prompts": [], "links": [], "installs": [],
+         "warnings": [], "categories": ["a", "b", "c"]},
+        source["url"], ["a", "b", "c"], [])
+    assert head["categories"] == ["a", "b", "c"], head
 
     # regression 68df78b9: isprintable() alone keeps invisible characters that
     # render blank or smuggle hidden bytes into later prompts (hangul fillers,

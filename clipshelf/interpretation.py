@@ -400,24 +400,33 @@ def _validated(raw, source_url, categories, warnings):
     installs = _clean_list(raw["installs"], INSTALLS_MAX, 500, "installs")
     out_warnings = _clean_list(raw["warnings"], WARNINGS_MAX, 500, "warnings")
 
-    # reuse before invent: a known category keeps the collection's spelling. A new
-    # name is replayed into later captures' model input, so it must be a short
-    # visible label, never a carrier for hidden or lengthy text.
+    # reuse before invent: a known category keeps the collection's spelling.
     # most used first (worker._categories), so the first spelling of a case
-    # variant wins: the rare variant must not grow
+    # variant wins: the rare variant must not grow. At most one new name per
+    # capture joins the vocabulary (a new name is replayed into later captures'
+    # model input, so it must be a short visible label, never a carrier for
+    # hidden or lengthy text); further inventions drop with a warning.
     known = {}
     for c in (categories or []):
         known.setdefault(str(c).casefold(), str(c))
-    cats = []
+    cats, new_kept = [], False
     for text in _clean_list(raw["categories"], CATEGORIES_MAX, 100, "categories"):
         if text.casefold() in known:
             cats.append(known[text.casefold()])
-        elif (0 < len(text) <= 40 and text.isprintable()
-              and not any(ch in _INVISIBLE_CHARS for ch in text)
-              and any(ch.isalnum() for ch in text)):
-            cats.append(text)
-        elif text:
+        elif not text:
+            continue
+        elif not (0 < len(text) <= 40 and text.isprintable()
+                  and not any(ch in _INVISIBLE_CHARS for ch in text)
+                  and any(ch.isalnum() for ch in text)):
             warnings.append(f"category {text[:50]!r} is not a short visible label; dropped")
+        elif text in cats:
+            continue
+        elif new_kept:
+            warnings.append(f"category {text[:50]!r} not added: "
+                            "one new category per capture")
+        else:
+            new_kept = True
+            cats.append(text)
     cats = list(dict.fromkeys(cats))
     return {"source": source_url, "summary": summary.strip(), "repos": repos,
             "prompts": prompts, "links": links, "categories": cats,
