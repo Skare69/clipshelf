@@ -41,6 +41,7 @@
             android:textAppearance="@style/TextAppearance.Parcel.T3Title" />
 
         <LinearLayout
+            android:id="@+id/entry_from_row"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"

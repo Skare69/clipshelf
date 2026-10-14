@@ -346,6 +346,15 @@ public class LibraryActivity extends AppCompatActivity {
         }
     }
 
+    /** Binds the From row; hidden entirely when the entry has no host. */
+    static void bindFrom(View row, String url) {
+        TextView from = row.findViewById(R.id.entry_from);
+        String host = url.isEmpty() ? "" : host(url);
+        from.setText(host);
+        row.findViewById(R.id.entry_from_row)
+                .setVisibility(host.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
     private class Adapter extends BaseAdapter {
         @Override
         public int getCount() {
@@ -374,7 +383,6 @@ public class LibraryActivity extends AppCompatActivity {
             TextView kind = v.findViewById(R.id.entry_kind);
             TextView date = v.findViewById(R.id.entry_date);
             TextView title = v.findViewById(R.id.entry_title);
-            TextView from = v.findViewById(R.id.entry_from);
             TextView summary = v.findViewById(R.id.entry_summary);
             LinearLayout tags = v.findViewById(R.id.entry_tags);
             Button copyPrompt = v.findViewById(R.id.entry_copy_prompt);
@@ -385,9 +393,7 @@ public class LibraryActivity extends AppCompatActivity {
                     ? R.string.entry_kind_prompt : R.string.entry_kind_link);
             date.setText(Ui.date(e.found));
             title.setText(e.title.isEmpty() ? (e.url.isEmpty() ? e.text : e.url) : e.title);
-            String host = e.url.isEmpty() ? "" : host(e.url);
-            from.setText(host);
-            from.setVisibility(host.isEmpty() ? View.GONE : View.VISIBLE);
+            bindFrom(v, e.url);
             String body = !e.summary.isEmpty() ? e.summary : (!e.desc.isEmpty() ? e.desc : e.text);
             summary.setText(body);
             summary.setVisibility(body.isEmpty() ? View.GONE : View.VISIBLE);
