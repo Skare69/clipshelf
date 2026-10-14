@@ -3,7 +3,6 @@ package dev.clipshelf.app.ui;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
-import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -131,20 +130,9 @@ public class EntryActivity extends AppCompatActivity {
         }
 
         tags.removeAllViews();
-        LayoutInflater inflater = getLayoutInflater();
         for (String tag : e.tags) {
-            TextView tv = new TextView(this);
-            tv.setText(tag);
-            tv.setBackgroundResource(R.drawable.tag_bg);
-            tv.setTextAppearance(this, R.style.TextAppearance_Parcel_T1);
-            tv.setTextColor(getColor(R.color.ink2));
+            TextView tv = Ui.tag(this, tag);
             tv.setMaxLines(1);
-            int h = dp(8);
-            tv.setPadding(h, dp(3), h, dp(3));
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMarginEnd(h);
-            tv.setLayoutParams(lp);
             tags.addView(tv);
         }
         tags.setVisibility(tags.getChildCount() == 0 ? View.GONE : View.VISIBLE);

@@ -1,6 +1,5 @@
 package dev.clipshelf.app.ui;
 
-import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 import android.os.Bundle;
@@ -392,12 +391,11 @@ public class LibraryActivity extends AppCompatActivity {
             summary.setVisibility(body.isEmpty() ? View.GONE : View.VISIBLE);
 
             tags.removeAllViews();
-            LayoutInflater inflater = (LayoutInflater) getSystemService(Context.LAYOUT_INFLATER_SERVICE);
             for (int i = 0; i < e.tags.size() && i < MAX_TAGS; i++) {
-                tags.addView(makeTag(inflater, e.tags.get(i)));
+                tags.addView(Ui.tag(LibraryActivity.this, e.tags.get(i)));
             }
             if (e.tags.size() > MAX_TAGS) {
-                tags.addView(makeTag(inflater,
+                tags.addView(Ui.tag(LibraryActivity.this,
                         getString(R.string.tag_overflow, e.tags.size() - MAX_TAGS)));
             }
             tags.setVisibility(tags.getChildCount() == 0 ? View.GONE : View.VISIBLE);
@@ -421,22 +419,6 @@ public class LibraryActivity extends AppCompatActivity {
             // open action itself.
             row.setOnClickListener(b -> details.performClick());
             return v;
-        }
-
-        private TextView makeTag(LayoutInflater inflater, String text) {
-            TextView tv = new TextView(LibraryActivity.this);
-            tv.setText(text);
-            tv.setBackgroundResource(R.drawable.tag_bg);
-            tv.setTextAppearance(LibraryActivity.this, R.style.TextAppearance_Parcel_T1);
-            tv.setTextColor(getColor(R.color.ink2));
-            int h = (int) (8 * getResources().getDisplayMetrics().density);
-            int vv = (int) (3 * getResources().getDisplayMetrics().density);
-            tv.setPadding(h, vv, h, vv);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-            lp.setMarginEnd(h);
-            tv.setLayoutParams(lp);
-            return tv;
         }
     }
 }

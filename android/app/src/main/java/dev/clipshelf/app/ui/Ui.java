@@ -6,6 +6,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.LinearLayout;
+import android.widget.TextView;
 
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
@@ -180,5 +182,22 @@ final class Ui {
             // way its own item must stay the selected one.
             return false;
         });
+    }
+
+    /** A tag chip: T1 text on the tag background, 8/3dp padding, 8dp end margin. */
+    static TextView tag(Context c, String text) {
+        TextView tv = new TextView(c);
+        tv.setText(text);
+        tv.setBackgroundResource(R.drawable.tag_bg);
+        tv.setTextAppearance(c, R.style.TextAppearance_Parcel_T1);
+        tv.setTextColor(c.getColor(R.color.ink2));
+        int h = Math.round(8 * c.getResources().getDisplayMetrics().density);
+        int v = Math.round(3 * c.getResources().getDisplayMetrics().density);
+        tv.setPadding(h, v, h, v);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.setMarginEnd(h);
+        tv.setLayoutParams(lp);
+        return tv;
     }
 }
