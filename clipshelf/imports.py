@@ -31,9 +31,6 @@ def _data(*parts):
     return Path(settings.DATA_DIR).joinpath(*parts)
 
 
-IMPORT_BATCH = acquisition.IMPORT_MAX_ITEMS
-
-
 def run_staged_import(record):
     """Process one upload-staged import record created by the HTTP surface."""
     manifest = record.manifest or {}
@@ -346,9 +343,7 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
         record.update_manifest(updates)
     try:
         staged, files_record = _stage_items(items, cache_dir, staging)
-        sources = []
-        for i in range(0, len(staged), IMPORT_BATCH):
-            sources.extend(acquisition.import_export(staged[i:i + IMPORT_BATCH], str(staging)))
+        sources = acquisition.import_export(staged, str(staging))
         if len(sources) != len(staged):
             raise ValidationError("import validation returned mismatched results")
         plans = _plans(staged, sources)

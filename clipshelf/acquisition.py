@@ -29,7 +29,6 @@ __all__ = ["AcquisitionError", "acquire", "import_export", "validate_image",
 PAGE_MAX_BYTES = 8 << 20          # HTML/JSON page fetch ceiling
 MEDIA_MAX_BYTES = 256 << 20       # direct image/video/audio link ceiling
 IMPORT_MEDIA_MAX_BYTES = 96 << 20 # per embedded/imported media file ceiling
-IMPORT_MAX_ITEMS = 500
 EXTRACTOR_TIMEOUT = 900           # per extractor subprocess run, seconds
 VIDEO_MAX_DURATION = 900          # seconds of video we are willing to keep
 IMAGE_MAX_PIXELS = 16384          # per-axis decoded image bound
@@ -593,8 +592,6 @@ def import_export(items, directory):
     """Normalize tiktok.json / staged-media items; input order preserved 1:1."""
     if not isinstance(items, list):
         raise AcquisitionError("import items must be a list")
-    if len(items) > IMPORT_MAX_ITEMS:
-        raise AcquisitionError(f"import exceeds {IMPORT_MAX_ITEMS} item bound")
     directory = os.path.abspath(directory)
     os.makedirs(directory, exist_ok=True)
     out = []

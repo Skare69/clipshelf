@@ -546,6 +546,25 @@ class ImportTests(MigrationMixin, TestCase):
         contribution.save()
         self.assertEqual(services.serialize_entry(entry, self.user)["cat"], [])
 
+    def test_import_calls_import_export_once_above_the_old_500_bound(self):
+        """501 URL-only items must reach import_export in one call: the retired
+        acquisition.IMPORT_MAX_ITEMS = 500 bound used to force a second batch
+        call whose only purpose was to pass that deleted check."""
+        items = [{"url": f"https://www.tiktok.com/@u/video/{i}"} for i in range(501)]
+        calls = []
+
+        def spy(batch, directory):
+            calls.append(len(batch))
+            return fake_import_export(batch, directory)
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.import_export", side_effect=spy):
+            result = imports.import_items(user=self.user, collection_id=None,
+                                          items=items, prompts=[],
+                                          cache_dir=str(self.cache_dir))
+        self.assertEqual(calls, [501], "import_export must be called once")
+        self.assertEqual(result["manifest"]["counts"]["links"], 501)
+
 
 class BackupRestoreTests(MigrationMixin, TransactionTestCase):
     def test_backup_rejects_assets_destinations_before_creating_files(self):
