@@ -293,6 +293,8 @@ only; the original files are never modified and a repeated import is a no-op.
 
 Tests: `python clipshelf.py test` plus `python test_clipshelf.py` and
 `python test_sources.py` (both use project dependencies and avoid external network).
+`python test_properties.py` fuzzes the trust-boundary parsers with a seeded
+stdlib loop (fixed seed, 150 runs per property) — no new dependencies.
 CI runs the same suite plus the JS regression checks (`node test_dom_events.mjs`,
 `node test_web_assets.mjs`, `node tiktok-extract.js`, `node whatsapp-extract.js`,
 `node test_inbox_status.mjs`, `node test_release_gates.mjs`) and the mutation

@@ -51,12 +51,13 @@ SCOPE_ROOTS = ("clipshelf/", "scripts/", "deploy/")
 GATE_SCRIPTS = ("check_licenses.py",)  # repo root; the launcher and this harness stay out
 
 # Per-mutant test commands: the full CI suite (ci.yml) = Django unittest
-# discovery plus the two standalone script suites it runs separately. Tests
+# discovery plus the three standalone script suites it runs separately. Tests
 # fake all transports, so a mutant run makes no requests.
 SUITE_CMDS = [
     [sys.executable, "clipshelf.py", "test", "--verbosity", "0"],
     [sys.executable, "test_clipshelf.py"],
     [sys.executable, "test_sources.py"],
+    [sys.executable, "test_properties.py"],
 ]
 # suite baseline ~13s; 120s absorbs pathological mutants without stalling runs
 DEFAULT_TIMEOUT = 120

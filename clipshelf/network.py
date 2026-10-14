@@ -68,6 +68,9 @@ def _assert_public_ip(text):
     check = ip
     if isinstance(ip, ipaddress.IPv6Address):
         # belt over 3.13's patched is_global: unwrap embedded IPv4 explicitly
+        # (mapped, 6to4, and the NAT64 well-known prefix 64:ff9b::/96; none of
+        # them is refused by is_global alone when the payload address is
+        # loopback/private)
         emb = ip.ipv4_mapped or ip.sixtofour
         if emb is None and ip in _NAT64:
             emb = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
