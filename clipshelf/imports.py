@@ -490,14 +490,13 @@ def _plans(items, sources):
 def _prompt_plans(prompts):
     plans = []
     for p in prompts:
-        text = (p.get("text") or "").strip()
+        text = lib._str(p.get("text"))[:services.PROMPT_MAX]
         if not text:
             continue
         plans.append({"key": publication.prompt_key(text), "data": {
-            "title": p.get("title", ""), "text": text,
-            "sources": list(p.get("sources") or []),
-            "cat": _bound_category(p.get("cat", "")),
-            "found": p.get("found", ""), "interpreted": p.get("interpreted", ""),
+            "title": lib._str(p.get("title"))[:services.TITLE_MAX], "text": text,
+            "sources": _sources(p.get("sources")), "cat": _bound_category(p.get("cat", "")),
+            "interpreted": bool(p.get("interpreted")),
         }})
     return plans
 
@@ -615,16 +614,72 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
     return result
 
 
+def _string_items(value, cap, max_len):
+    """Bounded string list; non-strings and blanks drop. Import data is
+    untrusted, so nothing here raises mid-commit."""
+    if not isinstance(value, list):
+        return []
+    out = []
+    for v in value:
+        if len(out) >= cap:
+            break
+        if isinstance(v, str) and (text := lib._str(v)):
+            out.append(text[:max_len])
+    return out
+
+
+def _labels(value):
+    """Category labels under interpretation's visible-label rule: a category
+    name is replayed into later captures' model input, so it stays short
+    visible text, never a carrier for hidden or lengthy content."""
+    return [t for t in _string_items(value, services.TAGS_MAX, services.TAG_MAX)
+            if interpretation.is_category_label(t)]
+
+
+def _sources(value):
+    """Source list in the capture-path shapes (services._link_list), capped at
+    SOURCES_MAX; invalid entries drop because serialize_entry skips them at
+    read time anyway."""
+    out = []
+    for s in value if isinstance(value, list) else []:
+        if len(out) >= services.SOURCES_MAX:
+            break
+        if isinstance(s, dict):
+            url, source = lib._str(s.get("url")), {
+                "url": "", "title": lib._str(s.get("title"))[:services.TITLE_MAX]}
+        elif isinstance(s, str):
+            url, source = lib._str(s), None
+        else:
+            continue
+        try:
+            services._require_url(url)
+        except ValidationError:
+            continue
+        out.append(url if source is None else source | {"url": url})
+    return out
+
+
 def _legacy_contribution_data(item):
-    """Keep every useful legacy field on the contribution; media now lives in
-    published assets, so drop the transient path specs."""
-    skip = {"images", "video", "cache", "b64", "url"}
-    data = {k: v for k, v in item.items() if k not in skip}
-    data["cat"] = _bound_category(data.get("cat"))
-    data.setdefault("title", "")
-    data.setdefault("desc", "")
-    data.setdefault("sources", [])
-    data.setdefault("tags", [])
+    """Keep the known legacy fields, bounded like the capture path
+    (services.store_source): serialize_entry merges and serves contribution
+    data to every collection member, so an import must not store wider
+    fields than a capture would. Unknown or reader-less keys (found, pending,
+    archived, stars, browser extras) drop; media lives in published assets."""
+    data = {
+        "title": lib._str(item.get("title"))[:services.TITLE_MAX],
+        "desc": lib._str(item.get("desc"))[:services.DESC_MAX],
+        "sources": _sources(item.get("sources")),
+        "tags": _string_items(item.get("tags"), services.TAGS_MAX, services.TAG_MAX),
+    }
+    for key, value in {
+        "text": lib._str(item.get("text"))[:services.TEXT_MAX],
+        "install": lib._str(item.get("install"))[:services.INSTALL_MAX],
+        "cat": _bound_category(item.get("cat")),
+        "categories": _labels(item.get("categories")),
+        "interpreted": bool(item.get("interpreted")),
+    }.items():
+        if value not in ("", [], False):
+            data[key] = value
     return data
 
 

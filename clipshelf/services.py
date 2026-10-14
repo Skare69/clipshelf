@@ -39,6 +39,14 @@ MAX_TEXT_BYTES = 32768
 MAX_URLS = 50
 URL_PATTERN = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
 
+# store_source field bounds: the widest contribution data any write path may
+# store. imports.py applies the same bounds to imported data, which
+# serialize_entry merges and serves to every collection member.
+TITLE_MAX, DESC_MAX, TEXT_MAX = 500, 2000, 50000
+TAGS_MAX, TAG_MAX = 50, 100
+SOURCES_MAX = 200
+INSTALL_MAX, PROMPT_MAX = 2000, 20000  # findings caps in _validate_findings
+
 
 # ---------------------------------------------------------------------------
 # Settings and collections
@@ -456,13 +464,13 @@ def store_source(job, source):
             # categories only when present: an empty list in the merge would
             # wipe the categories a good earlier interpretation published.
             data = {
-                "title": _str(source.get("title"))[:500],
-                "desc": _str(source.get("desc"))[:2000],
-                "text": _str(source.get("text"))[:50000],
+                "title": _str(source.get("title"))[:TITLE_MAX],
+                "desc": _str(source.get("desc"))[:DESC_MAX],
+                "text": _str(source.get("text"))[:TEXT_MAX],
                 "sources": links,
             }
             for field in ("tags", "categories"):
-                values = _string_list(metadata.get(field), 50, 100)
+                values = _string_list(metadata.get(field), TAGS_MAX, TAG_MAX)
                 if values:
                     data[field] = values
             publication.contribute_link(

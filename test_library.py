@@ -10,6 +10,7 @@ import shutil
 import tempfile
 import uuid
 from datetime import timedelta
+from unittest import mock
 from urllib.parse import urlencode
 
 from django.contrib.auth import get_user_model
@@ -19,7 +20,7 @@ from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 from allauth.account.models import EmailAddress
 
-from clipshelf import services, worker
+from clipshelf import imports, services, worker
 from clipshelf.models import ImportRecord, ImportRequest
 from clipshelf.models import Asset, Capture, Collection, Contribution, Entry, History, Job, Membership
 
@@ -1347,6 +1348,59 @@ class ImportTests(ApiTestCase):
         self.assertEqual(len(staged), 1)
         self.assertEqual(
             [p.name for p in worker.staging_cleanup_candidates()], staged)
+
+    def test_imported_fields_hold_capture_path_bounds(self):
+        """Regression (v0.11.0 review): an import must not store wider fields
+        than the capture path (services.store_source) — /api/entries merges
+        and serves contribution data to every collection member."""
+        item = {
+            "url": "https://example.com/clip",
+            "title": "t" * 600,
+            "desc": "d" * 10000,
+            "tags": [f"tag{i}" for i in range(500)],
+            "sources": [f"https://example.com/s{i}" for i in range(500)],
+            "cat": "c" * 60,
+            "install": "pip install " + "x" * 3000,
+            "resolvedUrl": "https://example.com/clip?r=1",
+        }
+        prompts = [{
+            "text": "p" * 25000, "title": "T" * 600,
+            "sources": [f"https://example.com/ps{i}" for i in range(500)],
+        }]
+
+        def fake_import_export(batch, directory):
+            return [{"url": i["url"], "original_url": i["url"], "title": "",
+                     "desc": "", "text": "", "links": [], "assets": [],
+                     "acquisition": "complete", "warnings": [], "metadata": {}}
+                    for i in batch]
+
+        with mock.patch("clipshelf.acquisition.import_export",
+                        side_effect=fake_import_export):
+            result = imports.import_items(user=self.alice, collection_id=None,
+                                          items=[item], prompts=prompts)
+        self.assertTrue(result["created"])
+
+        data = Contribution.objects.get(
+            origin="legacy-import", entry__kind=Entry.Kind.LINK).data
+        self.assertEqual(data["desc"], "d" * 2000)
+        self.assertEqual(data["title"], "t" * 500)
+        self.assertLessEqual(len(data["tags"]), 50)
+        self.assertLessEqual(len(data["sources"]), 200)
+        self.assertEqual(len(data["install"]), services.INSTALL_MAX)
+        self.assertEqual(data.get("cat", ""), "", "60-char cat is not a short visible label")
+        self.assertNotIn("resolvedUrl", data, "unknown keys stay out of contribution data")
+
+        prompt = Contribution.objects.get(
+            origin="legacy-import", entry__kind=Entry.Kind.PROMPT).data
+        self.assertEqual(prompt["text"], "p" * 20000)
+        self.assertLessEqual(len(prompt["sources"]), 200)
+
+        entries = self._login(self.alice).get("/api/entries").json()["entries"]
+        self.assertEqual(len(entries), 2)
+        for served in entries:
+            self.assertLessEqual(len(served["desc"]), 2000)
+            self.assertLessEqual(len(served["tags"]), 50)
+            self.assertLessEqual(len(served["sources"]), 200)
 
     def test_malformed_multipart_gets_json_400(self):
         alice = self._login(self.alice)
