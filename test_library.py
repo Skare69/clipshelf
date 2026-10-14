@@ -1400,3 +1400,43 @@ class ShellAndHealthTests(ApiTestCase):
         hosts = json.loads(out.stdout)
         self.assertEqual(hosts[0], "nas.example")
         self.assertIn("127.0.0.1", hosts)
+
+
+class SqliteFloorTests(TestCase):
+    """The settings module's SQLite version floor is the only runtime guard,
+    and every in-process test skips it (the suite runs with DEBUG or sets
+    CLIPSHELF_SQLITE_VERIFIED=1), so these subprocesses check it directly:
+    an old runtime must be refused, and the operator override must admit it.
+    """
+
+    def _setup_on_old_sqlite(self, **extra_env):
+        import subprocess
+        import sys
+
+        with tempfile.TemporaryDirectory() as data_dir:
+            env = {k: v for k, v in os.environ.items() if not k.startswith("CLIPSHELF_")}
+            env.update(
+                CLIPSHELF_DATA_DIR=data_dir,
+                DJANGO_SETTINGS_MODULE="clipshelf.project.settings",
+                **extra_env,
+            )
+            # Simulate a pre-floor runtime by patching before django.setup()
+            # imports the settings module that reads these values.
+            code = (
+                "import sqlite3;"
+                "sqlite3.sqlite_version_info = (3, 0, 0);"
+                "sqlite3.sqlite_version = '3.0.0';"
+                "import django; django.setup()"
+            )
+            return subprocess.run(
+                [sys.executable, "-c", code], env=env, capture_output=True, text=True
+            )
+
+    def test_old_sqlite_refused_without_overrides(self):
+        out = self._setup_on_old_sqlite()
+        self.assertNotEqual(out.returncode, 0, out.stdout)
+        self.assertIn("lacks the verified WAL-reset fix", out.stderr)
+
+    def test_verified_override_admits_old_sqlite(self):
+        out = self._setup_on_old_sqlite(CLIPSHELF_SQLITE_VERIFIED="1")
+        self.assertEqual(out.returncode, 0, out.stderr)
