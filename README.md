@@ -54,7 +54,11 @@ Published image (linux/amd64 + linux/arm64), built and verified by CI:
 `ghcr.io/skare69/clipshelf:0.10.0` (releases from v0.11.0 on also publish
 the raw release tag as `v<version>`). The signed Android APK is attached to each
 [release](https://github.com/Skare69/clipshelf/releases) — there is no app
-store, you sideload it.
+store, you sideload it. The API can change between releases: since v0.11.0,
+`/api/entries` returns the stored description as `desc` and the
+interpretation summary as the new `summary` field, so a v0.10.0 app on a
+v0.11.0 server shows the stored description where it showed the summary
+before — update the app to v0.11.0 or later.
 
 Android APK versions come from the release tag: `versionName` is the tag
 without its `v`, and `versionCode` is `major*1_000_000 + minor*1_000 + patch`
