@@ -29,6 +29,7 @@ __all__ = ["NetworkError", "fetch_public", "resolve_public", "extractor_egress",
            "scrub_env"]
 
 MAX_REDIRECTS = 10
+_NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
 DEFAULT_MAX_BYTES = 8 << 20      # decompressed body ceiling for fetch_public
 DEFAULT_TIMEOUT = 30             # whole-fetch wall clock, seconds
 HDR_CAP = 64 << 10
@@ -60,6 +61,8 @@ def _assert_public_ip(text):
     if isinstance(ip, ipaddress.IPv6Address):
         # belt over 3.13's patched is_global: unwrap embedded IPv4 explicitly
         emb = ip.ipv4_mapped or ip.sixtofour
+        if emb is None and ip in _NAT64:
+            emb = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
         if emb is not None:
             check = emb
     if not ip.is_global or not check.is_global:

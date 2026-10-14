@@ -169,6 +169,20 @@ def test_ssrf_pinned_transport():
         net.socket = original
 
 
+def test_nat64_unwrapped():
+    # 64:ff9b::/96 carries the destination IPv4 in its low 32 bits; check it
+    # too, or a translated 192.168.x/127.x address slips past is_global
+    for bad in ("64:ff9b::c0a8:101",   # 192.168.1.1
+                "64:ff9b::7f00:1"):    # 127.0.0.1
+        try:
+            net._assert_public_ip(bad)
+            raise AssertionError(f"accepted {bad}")
+        except net.NetworkError:
+            pass
+    net._assert_public_ip("64:ff9b::808:808")   # 8.8.8.8 stays reachable
+    print("nat64 unwrap ok")
+
+
 def test_redirects_and_bounds():
     # redirect into a private net is re-validated and refused
     fake, original = patched(
@@ -1866,6 +1880,7 @@ def test_list_models():
 def test():
     test_ssrf_pinned_transport()
     print("ssrf/pin ok")
+    test_nat64_unwrapped()
     test_redirects_and_bounds()
     print("redirect/bounds ok")
     test_non_ascii_path_percent_encoded()
