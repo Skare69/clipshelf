@@ -190,7 +190,15 @@ async function tiktokExtract(urls, onProgress, budget = FILE_BUDGET) {
         images,
         ...(video && { video }),
       };
-      const size = new Blob([JSON.stringify(entry)]).size;
+      let size = new Blob([JSON.stringify(entry)]).size;
+      // a post over budget even alone would make a file the server rejects
+      // (413): drop the media bytes, keep the URLs; the server fetches them
+      // at import
+      if (size > budget) {
+        entry.images = entry.images.map(({ url }) => ({ url }));
+        if (entry.video) delete entry.video.b64;
+        size = new Blob([JSON.stringify(entry)]).size;
+      }
       // the first entry always fits: dropping it too would just hit the same
       // oversized post again on the next run
       if (bytes && bytes + size > budget) {
@@ -436,6 +444,30 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
       assert.deepStrictEqual(split.map((o) => o.url), [budgetUrls[0]]);
       assert.deepStrictEqual(tiktokExtract.lastUrls, budgetUrls.slice(1));
       assert.match(tiktokExtract.lastFile, /^tiktok-/);
+
+      // one post over budget even alone must lose its media bytes, not make
+      // an unimportable file: b64 goes, URLs stay, the file stays <= budget
+      global.fetch = async (url) => {
+        const video = new Uint8Array(400);
+        video.set([0, 0, 0, 0, 102, 116, 121, 112]);
+        const bytes = url === imageUrl ? new Uint8Array([1, 2]) : video;
+        return new Response(bytes, { headers: { "Content-Length": String(bytes.length) } });
+      };
+      let savedBlob = null;
+      const previousObjectURL = URL.createObjectURL;
+      URL.createObjectURL = (blob) => {
+        savedBlob = blob;
+        return "blob:self-test";
+      };
+      const [huge] = await tiktokExtract(
+        ["https://www.tiktok.com/@test/video/7"], null, 300,
+      );
+      URL.createObjectURL = previousObjectURL;
+      assert.deepStrictEqual(huge.images, [{ url: imageUrl }]);
+      assert.deepStrictEqual(huge.video, { urls: [videoUrl] });
+      assert.deepStrictEqual(tiktokExtract.lastUrls, []);
+      const savedSize = (await savedBlob.text()).length;
+      assert.ok(savedSize <= 300, `saved file is ${savedSize} bytes > budget 300`);
     } finally {
       if (previousWindow === undefined) delete global.window;
       else global.window = previousWindow;
