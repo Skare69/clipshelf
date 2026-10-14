@@ -291,6 +291,11 @@ def _lock_gate_regressions():
         assert ld._floor_free("yt-dlp[curl-cffi]>=2026.8.19") == "yt-dlp[curl-cffi]"
         assert ld._floor_free("# comment") == "# comment"
         assert ld._floor_free("foo>=1; python_version < '3.10'") == "foo ; python_version < '3.10'"
+        # an exact pin survives as an upper bound: dropped, the gate could
+        # hold a newer release the real pin then conflicts with
+        assert ld._floor_free("foo==1.9") == "foo <=1.9"
+        assert ld._floor_free("foo===1.9") == "foo <=1.9"
+        assert ld._floor_free("foo==1.*") == "foo"  # wildcard: not a bound, still dropped
         req2 = tmp / "req-floor.txt"
         req2.write_text("Django>=5.2.19,<5.3\n", encoding="utf-8")
 
@@ -308,6 +313,25 @@ def _lock_gate_regressions():
         with mock.patch.object(ld, "dry_run", side_effect=floor_fake):
             res = ld.resolve("python", req2, tmp, {"django": "5.2.17"}, fresh=["django"])
         assert res.pins == {"django": "5.2.19"}
+
+        # 3b. an exact pin stays inside the gate: the copy keeps <=V, so the
+        # held pass never constrains the real pin against a newer release
+        req3 = tmp / "req-pin.txt"
+        req3.write_text("foo==1.9\n", encoding="utf-8")
+
+        def pin_fake(python, req, tmp, extra):
+            if extra and extra[0] == "--uploaded-prior-to":
+                if "<=" in Path(req).read_text():
+                    return {"foo": "1.9"}, set()
+                return {"foo": "2.0.1"}, set()  # unbounded copy: newest week-old
+            if extra and extra[0] == "-c":
+                if "foo==2.0.1" in Path(extra[1]).read_text():
+                    sys.exit("ERROR: ResolutionImpossible: foo==1.9 vs constraint foo==2.0.1")
+                return {"foo": "1.9"}, set()
+            return {"foo": "1.9"}, set()
+
+        with mock.patch.object(ld, "dry_run", side_effect=pin_fake):
+            assert ld.resolve("python", req3, tmp).pins == {"foo": "1.9"}
 
         # 4. --fresh that backtracks exits naming the held pins that block it
         bt = {"pydantic": "2.13.5", "pydantic-core": "2.46.5"}

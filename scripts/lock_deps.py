@@ -6,8 +6,8 @@ Usage:
   python scripts/lock_deps.py check [requirements.txt] [requirements.lock]
 
 Both resolve only releases uploaded at least MIN_RELEASE_AGE ago (pip >= 26.0);
-the age-gated pass resolves a floor-free copy of requirements.txt (lower
-bounds dropped, upper bounds kept), so a floor raised to a release younger
+the age-gated pass resolves a copy of requirements.txt without lower bounds
+(exact pins kept as upper bounds), so a floor raised to a release younger
 than that keeps working via `make --fresh NAME`.
 A newer pin already in the lock stays, so the gate never reverts a security
 bump; `make --fresh NAME` admits the newest release of NAME at once (it exits
@@ -82,20 +82,31 @@ class Resolution(NamedTuple):
 
 
 def _floor_free(line: str) -> str:
-    """Drop lower-bound specifiers (>=, >, ==) from a requirement line, keeping
-    the name, extras, upper bounds/compatible ranges and any environment
-    marker; comments, blank lines and unparseable lines pass through. The
-    age-gated pass resolves this copy: a floor raised to a too-young security
-    release cannot break the gate, while bounds like <5.3 keep the copy inside
-    the real resolution range."""
+    """Drop lower-bound specifiers (>=, >) and wildcard pins (==N.*) from a
+    requirement line, turning an exact pin (==V, ===V) into <=V; keeping the
+    name, extras, remaining bounds and any environment marker; comments, blank
+    lines and unparseable lines pass through. The age-gated pass resolves this
+    copy: a floor raised to a too-young security release cannot break the
+    gate, while the copy stays inside the real resolution range — an exact pin
+    that vanished would let the gate hold a newer release the pin conflicts
+    with."""
     if not line.strip() or line.lstrip().startswith("#") or line.lstrip().startswith("-"):
         return line
     m = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9_.-]*(?:\[[^\]]*\])?)\s*([^;@]*?)\s*(;.*)?$", line)
     if not m:
         return line
     name, specs, marker = m.group(1), m.group(2), m.group(3) or ""
-    kept = [c.strip() for c in specs.split(",")
-            if c.strip() and not re.match(r"^(===|==|>=|>)", c.strip())]
+    kept = []
+    for c in specs.split(","):
+        c = c.strip()
+        m = re.fullmatch(r"={2,3}(.+)", c)
+        if m and "*" not in m.group(1):
+            # exact pin: keep it as an upper bound so the gated copy stays
+            # inside the pinned range; dropped, the gate could hold a newer
+            # release the real pin then conflicts with
+            kept.append("<=" + m.group(1))
+        elif c and not re.match(r"^(===|==|>=|>)", c):
+            kept.append(c)
     return name + (" " + ",".join(kept) if kept else "") + ((" " + marker) if marker else "")
 
 
@@ -111,9 +122,10 @@ def resolve(python: str, req: Path, tmp: Path, keep: dict[str, str] | None = Non
     are unheld and re-resolved, never shipped. `--fresh` exits naming the
     held pins to add when the fresh name does not move."""
     cutoff = (datetime.now(timezone.utc) - MIN_RELEASE_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
-    # pass 1: floor-free copy, so a young security floor (e.g. Django>=5.2.19
-    # for a release days old) still resolves under the age gate; upper bounds
-    # like <5.3 survive, keeping the copy inside the real resolution range
+    # pass 1: copy without lower bounds, so a young security floor
+    # (e.g. Django>=5.2.19 for a release days old) still resolves under the age
+    # gate; bounds like <5.3 survive, and an exact pin ==V survives as <=V,
+    # keeping the copy inside the real resolution range
     gated_req = tmp / "requirements.gated.txt"
     gated_req.write_text("".join(_floor_free(l) + "\n"
                                  for l in req.read_text(encoding="utf-8").splitlines()),
