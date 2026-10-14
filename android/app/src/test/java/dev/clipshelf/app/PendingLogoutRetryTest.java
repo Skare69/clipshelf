@@ -80,6 +80,7 @@ public class PendingLogoutRetryTest {
 
     @After
     public void tearDown() throws Exception {
+        origin.release(); // idempotent: unblocks a held attempt so no thread outlives a failed run
         origin.close();
         Security.removeProvider(PROVIDER);
     }
@@ -118,15 +119,16 @@ public class PendingLogoutRetryTest {
     @Test
     public void pendingLabelsReturnsWhileARevokeAttemptIsBlocked() throws Exception {
         Context ctx = RuntimeEnvironment.getApplication();
-        origin.hold(); // accepted, never answered: the logout attempt parks in its read
-        PendingLogout.signOut(ctx, endpoint, EMAIL, "tok-a");
+        PendingLogout.signOut(ctx, endpoint, EMAIL, "tok-a"); // 503: the record is kept at once
         assertEquals(Collections.singletonList(EMAIL), PendingLogout.pendingLabels(ctx));
 
+        origin.hold(); // accepted, never answered: the retry attempt parks in its read
         Thread revoker = new Thread(() -> PendingLogout.revokeAll(ctx), "revokeAll");
+        origin.hits.clear(); // gate on the retry's own hit; the sign-out already recorded one
         revoker.start();
         long deadline = System.currentTimeMillis() + 10_000;
         while (origin.hits.isEmpty() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(20); // wait until the attempt is parked inside Api.logout
+            Thread.sleep(20); // wait until the retry parks inside Api.logout, holding LOCK
         }
         assertFalse("revokeAll never reached the held endpoint", origin.hits.isEmpty());
 
@@ -223,7 +225,7 @@ public class PendingLogoutRetryTest {
                     if (holdConnections) {
                         // Bounded so a failed run cannot park this thread forever.
                         held.await(60, TimeUnit.SECONDS);
-                        return; // close unanswered: the client attempt fails
+                        continue; // close unanswered: the client attempt fails; serve() stays up
                     }
                     int status = accepted.contains(token) ? 200 : 503;
                     OutputStream out = s.getOutputStream();
