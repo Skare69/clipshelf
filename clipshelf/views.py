@@ -30,7 +30,7 @@ from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.static import serve as _static_serve
 
 from clipshelf.api import ApiError, json_body, json_error, vmessage
-from clipshelf import accounts, asset_files, services
+from clipshelf import accounts, asset_files, imports, services
 from clipshelf.models import (
     Asset,
     Capture,
@@ -674,30 +674,12 @@ def api_import(request):
                 data = json.load(fh)
             except (ValueError, RecursionError):
                 raise ApiError(400, detail="file is not valid JSON")
-        if isinstance(data, list):
-            if not all(isinstance(item, dict) for item in data):
-                raise ApiError(400, detail="tiktok.json must be a list of objects")
-            fmt = "tiktok"
-        elif isinstance(data, dict) and isinstance(data.get("links"), dict):
-            fmt = "legacy"
-        else:
-            raise ApiError(
-                400,
-                detail="file must be a tiktok.json list of objects "
-                "or a legacy library.json object with a 'links' object",
-            )
+        # The engine's parser is the one shape authority: admission raises the
+        # same rejections the worker would, and api_guard maps them to a 400
+        # the uploader sees instead of a later failure with no entries.
+        fmt, _args = imports.parse_upload(data)
         _scan_import_keys(data)
-        # Admission rejects an over-cap payload before the ImportRecord
-        # exists; the worker's own check is a backstop for other paths.
-        prompts = (data.get("prompts") or {}) if fmt == "legacy" else {}
-        if not isinstance(prompts, dict):
-            raise ApiError(400, detail="legacy 'prompts' must be a JSON object")
-        count = len(data) if fmt == "tiktok" else len(data["links"]) + len(prompts)
-        if count > services.MAX_IMPORT_ITEMS:
-            raise ApiError(
-                400,
-                detail=f"too many items ({count} > {services.MAX_IMPORT_ITEMS})",
-            )
+
 
         record, created = services.admit_import(
             user, request_id, digest.hexdigest(), collection, rel_path, fmt

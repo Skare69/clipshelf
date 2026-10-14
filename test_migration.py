@@ -507,6 +507,28 @@ class ImportTests(MigrationMixin, TestCase):
                 entry__collection=self.personal)},
             {"legacy-import"})
 
+    def test_staged_upload_reads_the_same_bytes_as_admission(self):
+        # Admission parses the spooled bytes with json's BOM/UTF-16 sniffing;
+        # the worker must use the same decoder, or a 201 upload dies in the
+        # worker on its UTF-8 BOM (was read_text(encoding="utf-8")).
+        staging_rel = "staging/bom-tiktok.json"
+        payload = b"\xef\xbb\xbf" + json.dumps(
+            [{"url": "https://example.com/bom", "desc": "clip"}]).encode()
+        with override_settings(DATA_DIR=str(self.tmp)):
+            (Path(self.tmp) / "staging").mkdir(parents=True, exist_ok=True)
+            (Path(self.tmp) / staging_rel).write_bytes(payload)
+            record = models.ImportRecord.objects.create(
+                user=self.user, input_digest=uuid.uuid4().hex,
+                manifest={"status": "pending", "format": "tiktok",
+                          "staging": staging_rel,
+                          "collection_id": str(self.personal.id)})
+            with mock.patch("clipshelf.acquisition.import_export",
+                            side_effect=fake_import_export):
+                result = imports.run_staged_import(record)
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "done")
+        self.assertEqual(result["manifest"]["counts"]["links"], 1)
+
     def test_legacy_scalar_category_filters_on_api_without_assets(self):
         """A legacy item with a scalar `cat` and no cached page still lands in
         the right API category filter: regression for release e2233859, where

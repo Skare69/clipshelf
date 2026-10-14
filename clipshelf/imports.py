@@ -42,33 +42,32 @@ def run_staged_import(record):
     root = Path(settings.DATA_DIR).resolve()
     if not path.resolve().is_relative_to(root) or not path.is_file():
         raise ValidationError("import record staging path is missing or outside DATA_DIR")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if manifest.get("format") == "legacy" or isinstance(payload, dict):
+    # read_bytes: the same decoder admission used on the binary spool, so a
+    # BOM/UTF-16 upload accepted with a 201 cannot die here on decoding.
+    payload = json.loads(path.read_bytes())
+    fmt, args = parse_upload(payload)
+    if fmt == "legacy":
         # Legacy library.json upload: media referenced as cache/<sha1>.<ext> is
         # resolved from <DATA_DIR>/import-cache — copy the old installation's
         # cache/ directory there before importing to retain its media;
         # unresolved files are recorded in the manifest's missing list.
-        args = legacy_payload(payload)
         cache = _data("import-cache")
         return import_items(
             user=record.user,
             collection_id=manifest.get("collection_id"),
-            items=args["items"], prompts=args["prompts"],
-            seen=args["seen"], removed=args["removed"],
             client_request_id=manifest.get("client_request_id"),
             record=record,
             cache_dir=str(cache) if cache.is_dir() else None,
             origin="legacy-import",
+            **args,
         )
-    if not isinstance(payload, list):
-        raise ValidationError("import payload must be a JSON list")
     return import_items(
         user=record.user,
         collection_id=manifest.get("collection_id"),
-        items=payload,
         client_request_id=manifest.get("client_request_id"),
         record=record,
         origin="browser-import",
+        **args,
     )
 
 
@@ -239,9 +238,50 @@ def legacy_payload(data):
             if entry.get(k):
                 item[k] = entry[k]
         items.append(item)
-    prompts = [p for p in data.get("prompts", {}).values() if isinstance(p, dict)]
-    return {"items": items, "prompts": prompts,
-            "seen": data.get("seen", {}), "removed": data.get("removed", {})}
+    prompts_raw = data.get("prompts", {})
+    seen = data.get("seen", {})
+    removed = data.get("removed", {})
+    if not isinstance(prompts_raw, dict):
+        raise ValidationError("library.json prompts must be a JSON object")
+    if not isinstance(seen, dict) or not isinstance(removed, dict):
+        raise ValidationError("legacy seen and removed must be JSON objects")
+    prompts = [p for p in prompts_raw.values() if isinstance(p, dict)]
+    return {"items": items, "prompts": prompts, "seen": seen, "removed": removed}
+
+
+def _url_item(item):
+    """The engine's one per-item rule: a dict carrying a url."""
+    if not isinstance(item, dict) or not item.get("url"):
+        raise ValidationError("every import item needs a dict with a url")
+
+
+_UPLOAD_SHAPE = (
+    "file must be a tiktok.json list of objects or a legacy library.json "
+    "object with a 'links' object")
+
+
+def parse_upload(data):
+    """Validate one uploaded payload with the engine's own rules; return
+    (format, import_items kwargs). Admission and the worker both call this,
+    so a bad shape is a 400 the uploader sees instead of a later worker
+    failure, and the shape rules keep one owner instead of a partial copy.
+    """
+    if isinstance(data, dict):
+        if not isinstance(data.get("links"), dict):
+            raise ValidationError(_UPLOAD_SHAPE)
+        fmt, args = "legacy", legacy_payload(data)
+        count = len(args["items"]) + len(data.get("prompts") or {})
+    elif isinstance(data, list):
+        fmt, args = "tiktok", {"items": data}
+        count = len(data)
+    else:
+        raise ValidationError(_UPLOAD_SHAPE)
+    for item in args["items"]:
+        _url_item(item)
+    if count > services.MAX_IMPORT_ITEMS:
+        raise ValidationError(
+            f"too many items ({count} > {services.MAX_IMPORT_ITEMS})")
+    return fmt, args
 
 
 def import_items(*, user, collection_id, items, prompts=None, client_request_id=None,
@@ -337,8 +377,7 @@ def _dedupe(items, removed_keys):
     seen_keys = set()
     out = []
     for item in items:
-        if not isinstance(item, dict) or not item.get("url"):
-            raise ValidationError("every import item needs a dict with a url")
+        _url_item(item)
         key = publication.link_key(str(item["url"]))
         keys = publication.link_keys(key)
         if keys & removed_keys or keys & seen_keys:

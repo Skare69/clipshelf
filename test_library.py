@@ -1038,7 +1038,7 @@ class ImportTests(ApiTestCase):
     def test_import_idempotency_and_conflict(self):
         alice = self._login(self.alice)
         r1 = str(uuid.uuid4())
-        content = json.dumps([{"id": "1", "desc": "clip one"}]).encode()
+        content = json.dumps([{"id": "1", "desc": "clip one", "url": "https://example.com/clip-one"}]).encode()
         first = self._post_import(alice, content, crid=r1)
         self.assertEqual(first.status_code, 201)
         record_id = first.json()["import"]["id"]
@@ -1058,7 +1058,8 @@ class ImportTests(ApiTestCase):
         # Same request id reused with a different payload: conflict.
         replay_conflict = self._post_import(
             alice,
-            json.dumps([{"id": "2", "desc": "clip two"}]).encode(),
+            json.dumps([{"id": "2", "desc": "clip two",
+                         "url": "https://example.com/clip-two"}]).encode(),
             crid=r2,
         )
         self.assertEqual(replay_conflict.status_code, 409)
@@ -1081,7 +1082,7 @@ class ImportTests(ApiTestCase):
 
     def test_import_replay_reports_stored_error(self):
         alice = self._login(self.alice)
-        content = json.dumps([{"id": "1", "desc": "clip one"}]).encode()
+        content = json.dumps([{"id": "1", "desc": "clip one", "url": "https://example.com/clip-one"}]).encode()
         self.assertEqual(self._post_import(alice, content).status_code, 201)
         record = ImportRecord.objects.get()
         # The shape the worker stores when run_staged_import raises.
@@ -1101,7 +1102,7 @@ class ImportTests(ApiTestCase):
         other = Collection.objects.create(
             name="Other", kind="shared", owner=self.alice
         )
-        content = json.dumps([{"id": "1", "desc": "clip one"}]).encode()
+        content = json.dumps([{"id": "1", "desc": "clip one", "url": "https://example.com/clip-one"}]).encode()
         first = self._post_import(alice, content, collection=self.alice_personal)
         self.assertEqual(first.status_code, 201)
         staging = os.path.join(os.path.realpath(self._data_dir()), "staging")
@@ -1160,6 +1161,32 @@ class ImportTests(ApiTestCase):
             ImportRecord.objects.get(id=record_id).manifest.get("status"),
             "pending",
         )
+
+    def test_import_rejects_malformed_shapes_at_admission(self):
+        # The engine's parser runs at admission: shapes the worker used to
+        # reject after a 201 now fail with a 400 and leave nothing behind.
+        cases = [
+            ([{"id": "1", "desc": "clip one"}],
+             "every import item needs a dict with a url"),
+            ({"links": {"https://x.example/a": "not an object"}},
+             "legacy link entries must be JSON objects"),
+            ({"links": {}, "prompts": []},
+             "library.json prompts must be a JSON object"),
+            ({"links": {}, "seen": [], "removed": {}},
+             "legacy seen and removed must be JSON objects"),
+            ({"seen": {}},
+             "file must be a tiktok.json list of objects or a legacy "
+             "library.json object with a 'links' object"),
+        ]
+        alice = self._login(self.alice)
+        staging = os.path.join(os.path.realpath(self._data_dir()), "staging")
+        for payload, detail in cases:
+            with self.subTest(detail=detail):
+                response = self._post_import(alice, json.dumps(payload).encode())
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(response.json()["detail"], detail)
+                self.assertFalse(ImportRecord.objects.exists())
+                self.assertEqual(os.listdir(staging), [])
 
     def test_import_request_id_unique_across_payloads(self):
         # The database constraint is the race backstop: the pre-insert check
@@ -1243,7 +1270,8 @@ class ImportTests(ApiTestCase):
         )
         ImportRequest.objects.create(user=self.alice, request_id=crid, record=record)
         response = self._post_import(
-            alice, json.dumps([{"id": "2", "desc": "other payload"}]).encode(), crid=crid
+            alice, json.dumps([{"id": "2", "desc": "other payload",
+                                "url": "https://example.com/other"}]).encode(), crid=crid
         )
         self.assertEqual(response.status_code, 409)
         self.assertEqual(
@@ -1295,7 +1323,7 @@ class ImportTests(ApiTestCase):
         self.assertIn(response.status_code, (403, 404))
 
     def test_replayed_import_keeps_one_owned_upload(self):
-        content = json.dumps([{"id": "1", "desc": "clip one"}]).encode()
+        content = json.dumps([{"id": "1", "desc": "clip one", "url": "https://example.com/clip-one"}]).encode()
         first = self._post_import(self._login(self.alice), content)
         self.assertEqual(first.status_code, 201)
         record = ImportRecord.objects.get(pk=first.json()["import"]["id"])
