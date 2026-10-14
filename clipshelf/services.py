@@ -453,20 +453,26 @@ def store_source(job, source):
         if tombstoned:
             warnings.append("URL was removed from this collection; not re-adding it.")
         else:
+            # Acquisition never classifies; findings do. Contribute tags and
+            # categories only when present: an empty list in the merge would
+            # wipe the categories a good earlier interpretation published.
+            data = {
+                "title": _str(source.get("title"))[:500],
+                "desc": _str(source.get("desc"))[:2000],
+                "text": _str(source.get("text"))[:50000],
+                "sources": links,
+            }
+            for field in ("tags", "categories"):
+                values = _string_list(metadata.get(field), 50, 100)
+                if values:
+                    data[field] = values
             publication.contribute_link(
                 collection=job.collection,
                 user=user,
                 capture=job.capture,
                 job=job,
                 key=canonical,
-                data={
-                    "title": _str(source.get("title"))[:500],
-                    "desc": _str(source.get("desc"))[:2000],
-                    "text": _str(source.get("text"))[:50000],
-                    "sources": links,
-                    "tags": _string_list(metadata.get("tags"), 50, 100),
-                    "categories": _string_list(metadata.get("categories"), 50, 100),
-                },
+                data=data,
             )
         job.warnings = list(dict.fromkeys(list(job.warnings or []) + warnings))[:100]
         job.save()

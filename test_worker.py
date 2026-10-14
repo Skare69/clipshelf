@@ -2,6 +2,7 @@
 import base64
 from contextlib import redirect_stdout
 import io
+import os
 import shutil
 import threading
 import tempfile
@@ -17,6 +18,12 @@ from django.core.management.base import CommandError
 from django.db.utils import OperationalError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
+
+# Standalone self-check (`$PY test_worker.py`): models import at module level,
+# so Django must be up first. Idempotent under Django's own test discovery.
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "clipshelf.project.settings")
+import django
+django.setup()
 
 from PIL import Image
 
@@ -300,6 +307,32 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.assertEqual(job.attempts, 1)
         self.assertIn("malformed output", job.error)
         self.assertEqual(job.findings["summary"], "good findings")
+
+    def test_recapture_keeps_categories_when_interpretation_fails(self):
+        # A good earlier findings blob must survive a later failed reprocess:
+        # the re-acquisition contributes no categories, so its empty list must
+        # not overwrite the ones store_findings published.
+        job = self.make_job()
+        self.run_worker(interpret=lambda source, config, cats, **kw:
+                        {**FINDINGS, "source": source["url"],
+                         "categories": ["Video generation"]})
+        self.assertEqual(self.refresh(job).interpretation, "complete")
+
+        second = self.make_job()  # same URL captured again: new capture, new job
+        self.assertEqual(second.url, job.url)
+
+        def boom(source, config, cats, **kw):
+            from clipshelf import interpretation
+            raise interpretation.InterpretationError("malformed output")
+
+        self.run_worker(interpret=boom)
+        self.assertEqual(self.refresh(second).state, "retry")
+
+        entry = models.Entry.objects.get(
+            collection=self.personal, key=publication.link_key(job.url))
+        self.assertEqual(
+            services.serialize_entry(entry, self.user)["cat"], ["Video generation"])
+        self.assertEqual(worker._categories(self.personal), ["Video generation"])
 
     def test_access_lost_during_interpretation_blocks_without_losing_findings(self):
         owner = models.User.objects.create_user(username="owner", email="owner@example.com")
@@ -1312,3 +1345,9 @@ class CoordinatorRefillTests(WorkerMixin, TransactionTestCase):
         # The third, empty claim round proves it kept claiming after work
         # remained claimable, then broke once nothing was claimable.
         self.assertEqual(claims["n"], 3)
+
+
+if __name__ == "__main__":
+    from django.conf import settings
+    from django.test.utils import get_runner
+    raise SystemExit(bool(get_runner(settings)().run_tests(["test_worker"])))
