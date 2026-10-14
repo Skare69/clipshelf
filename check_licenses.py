@@ -204,7 +204,7 @@ APT_ARG_OPTS = {"-o", "--option", "-c", "--config-file", "-t", "--target-release
 DEB_NAME = re.compile(r"[a-z0-9][a-z0-9+.-]+")
 # Any apt source reconfiguration breaks the "Debian DFSG set from deb.debian.org"
 # assumption behind the image inventory, so mentioning it fails closed.
-APT_SOURCE = re.compile(r"sources\.list|/etc/apt/|apt-key|trusted\.gpg", re.I)
+APT_SOURCE = re.compile(r"sources\.list|/etc/apt/|apt-key|trusted\.gpg|Dir::Etc|APT_CONFIG", re.I)
 # ADD sources that fetch instead of copying from the build context.
 ADD_EXTERNAL = re.compile(r"^[a-z][a-z0-9+.-]*://|^git@|\.git$", re.I)
 
@@ -289,12 +289,12 @@ def check_image() -> None:
     bases = []
     stage_pkgs = [set()]  # [0]: before any FROM (Docker rejects RUN there anyway)
     for kw, flags, args, bodies in dockerfile_instructions(text):
-        if m := APT_SOURCE.search("\n".join([args, *bodies])):
+        if m := APT_SOURCE.search("\n".join([*flags, args, *bodies])):
             fail(f"image: {kw} touches an apt package source ({m.group(0)}) — the "
                  "inventory assumes only Debian's own (DFSG) packages; review it, "
                  "then extend check_licenses.py")
         if kw == "ADD":
-            for src in args.split():
+            for src in re.findall(r'[^\s\[\]",]+', args):
                 if ADD_EXTERNAL.search(src):
                     fail(f"image: ADD pulls external content {src} — fetch only "
                          "pinned, checksum-verified content, then extend "

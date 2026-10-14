@@ -404,6 +404,10 @@ class CheckImageTests(unittest.TestCase):
             "COPY dmo.gpg /etc/apt/trusted.gpg.d/",
             "RUN <<EOF\nprintf 'deb http://x y main' "
             "| tee /etc/apt/sources.list.d/x.list\nEOF",
+            "RUN --mount=type=bind,source=dmo.list,"
+            "target=/etc/apt/sources.list.d/dmo.list "
+            "apt-get update && apt-get install -y --no-install-recommends ffmpeg",
+            "RUN apt-get -o Dir::Etc::SourceList=/tmp/dmo.list update",
         ):
             with self.subTest(snippet=snippet):
                 errors = image_errors(runtime_plus(snippet))
@@ -417,6 +421,8 @@ class CheckImageTests(unittest.TestCase):
             "ADD git@github.com:yt-dlp/FFmpeg-Builds.git /opt/ff",
             "ADD https://github.com/yt-dlp/FFmpeg-Builds.git /opt/ff",
             "ADD --chown=0:0 https://example.com/f.tar.xz /opt/",
+            'ADD ["https://example.com/ffmpeg.tar.xz", "/opt/"]',
+            'ADD ["git@github.com:yt-dlp/FFmpeg-Builds.git", "/opt/ff"]',
         ):
             with self.subTest(snippet=snippet):
                 errors = image_errors(runtime_plus(snippet))
