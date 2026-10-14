@@ -4,8 +4,9 @@
 
 Share a link from your phone and your own server fetches what is actually in the
 post: TikTok photo carousels slide by slide with their audio, video with its ASR
-captions, pages as text. A vision model you host turns that into typed repo,
-prompt and guide entries — not tags. The Android app queues shares while offline
+captions, pages as text. A vision model you host turns that into typed link
+and prompt entries (a repo is a link) with a summary and a category, not only
+tags. The Android app queues shares while offline
 and delivers them when it can. Self-hosted and account-based. A local model
 needs no third-party service when optional screening is off.
 
@@ -20,14 +21,15 @@ needs no third-party service when optional screening is off.
 | Android app (`android/`) | share-sheet capture with a durable outbox, background delivery, online browsing |
 | Container (`Dockerfile`, `compose.yaml`) | one image, web + worker roles, SQLite and retained media on one data volume |
 | `tiktok-extract.js` | browser export for login-required posts; the server never takes TikTok cookies |
-| `whatsapp-extract.js` | browser export of one WhatsApp Web chat as a `library.json` file for the web Import dialog: links, images, and URL-free notes (imported as prompts); re-runs export only new messages |
+| `whatsapp-extract.js` | browser export of one WhatsApp Web chat as a `library.json` file for the import section of the web **Add** dialog: links, images, and URL-free notes (imported as prompts); re-runs export only new messages |
 
 The Android outbox holds at most 500 rows and 8 MiB of UTF-8 share text across
 all accounts on the phone. One share may hold at most 32768 UTF-8 bytes and 50
 URLs. A full outbox rejects new shares and never evicts stored rows; delivered
 rows count until you clear them, and paused or rejected rows can be deleted.
-Android OS backup is off (`android:allowBackup="false"`), so undelivered shares
-remain on this phone only.
+Android OS backup and device-to-device transfer are off
+(`android:allowBackup="false"` plus the exclude-all `data_extraction_rules.xml`
+and `backup_rules.xml`), so undelivered shares remain on this phone only.
 
 Data lives in one directory (`CLIPSHELF_DATA_DIR`): `db.sqlite3` plus `assets/`
 (retained pages, images, video). The worker fetches sources and calls the model
@@ -100,8 +102,10 @@ regardless. Setting `CLIPSHELF_CSRF=1` turns CSRF verification on and then
 requires `CLIPSHELF_ORIGIN` or a concrete `CLIPSHELF_ALLOWED_HOSTS`. Setting
 `CLIPSHELF_ORIGIN` to an `https://` URL additionally enables the HTTPS
 redirect, HSTS and secure cookies — set it only when a TLS ingress actually
-terminates in front of the app. Wildcard hosts permit DNS rebinding; narrow
-them by setting `CLIPSHELF_ALLOWED_HOSTS`.
+terminates in front of the app. Behind such an ingress, set it before you open
+the setup wizard. Without it, the wizard's CSRF check sees an `https://` Origin
+on a plain-HTTP request and answers 403. Wildcard hosts permit DNS rebinding;
+narrow them by setting `CLIPSHELF_ALLOWED_HOSTS`.
 
 ### Dependency and build pinning
 
@@ -234,8 +238,8 @@ flag are withheld with the findings, and only a blocked job remains. Paste the
 key into **Admin →
 Screening** (or set `TYPESAFE_API_KEY` in the compose `.env`) and press Test.
 Screening degrades to a visible warning on failure, and without a key nothing
-changes. A job blocked by the guard rail is badged `guardrail` in the inbox;
-one that ran with warnings is badged `screened`.
+changes. In the Inbox, a job that the guard rail blocks shows "Held by screening" with
+the reason, and screening warnings show in its notes.
 
 ## Accounts and privacy
 
@@ -256,8 +260,8 @@ one that ran with warnings is badged `screened`.
 
 ## Migrating an existing `library.json`
 
-From the running app, an old `library.json` goes through the same import dialog
-as a TikTok export; entries land in the collection you pick. Media referenced
+From the running app, an old `library.json` goes through the import section of
+the **Add** dialog, like a TikTok export; entries land in the collection you pick. Media referenced
 by the old library is retained only when the old `cache/` directory was copied
 to `<data dir>/import-cache` on the server first; otherwise the manifest lists
 what was missing.
@@ -293,7 +297,10 @@ CI runs the same suite plus the JS regression checks (`node test_dom_events.mjs`
 `node test_web_assets.mjs`, `node tiktok-extract.js`, `node whatsapp-extract.js`,
 `node test_inbox_status.mjs`, `node test_release_gates.mjs`) and the mutation
 harness self-check
-(`python mutate.py self-check`), all with Node 24.
+(`python mutate.py self-check`), all with Node 24. The android job builds the
+debug APK, runs `check_licenses.py android` on it, then
+`./gradlew :app:testDebugUnitTest` and `./gradlew :app:lintDebug`. A lint
+warning fails the build.
 
 ### Mutation testing
 
@@ -317,7 +324,8 @@ suite still passes is a survived mutant — a behavior no test guards.
   wiring (settings, urls) are never mutated (the suite is the oracle), and
   modules a branch deletes are skipped instead of failing the run.
 - Release review: `python mutate.py --diff <previous tag> --max-mutants 116`
-  mutates everything the release touched, gate scripts included.
+  samples 116 evenly spaced sites from every in-scope module the release
+  touched, gate scripts included.
 - Gate: use the project Python 3.13 virtual environment and run
   `python mutate.py --max-mutants 116` from the repository root. It runs the
   full CI test suite for each of exactly 116 evenly spaced sites across
@@ -352,4 +360,7 @@ suite still passes is a survived mutant — a behavior no test guards.
 
 MIT — see [LICENSE](LICENSE). Bundled third-party code is inventoried in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and gated by
-`check_licenses.py` against `license_inventory.toml`.
+`check_licenses.py` against `license_inventory.toml`. The bundled Archivo font
+is OFL-1.1, which the inventory allows for font files only.
+`check_licenses.py` does not scan fonts, so its notice and `[fonts.entries]`
+change by hand.

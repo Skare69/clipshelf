@@ -182,7 +182,7 @@ Only two floating elements carry a shadow: the snackbar (`0 10px 28px -8px rgb(0
 
 ## Shapes
 
-Small, print-like corners. Labels use 6 px, controls and chips use 4 px, dialogs use 8 px, and routing blocks are nearly square at 2 px. Interactive shapes are never pills or circles. Only the spinner, the count badge, and the tracking dots are round. The perforation line is a 1 px dashed `edge` border. It appears above card actions and between the links of one capture.
+Small, print-like corners. Labels use 6 px, controls and chips use 4 px, dialogs use 8 px, and routing blocks are nearly square at 2 px. Interactive shapes are never pills or circles. Only the spinner, the count badge, and the tracking dots are round. Exception: the phone navigation indicator is a pill on both platforms. The web rail styles it 56×32 px with a 16 px radius. Android `Widget.Parcel.BottomNav` sets no `itemActiveIndicatorStyle`, so Material Components draws its default rounded indicator. The perforation line is a 1 px dashed `edge` border. It appears above card actions and between the links of one capture.
 
 ## Components
 

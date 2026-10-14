@@ -16,7 +16,7 @@ Clipshelf ships as a web app (any browser, desktop and phone) and as a native An
 
 ## Product Purpose
 
-Share a link from your phone, and your own server fetches what is actually in the post: TikTok photo carousels slide by slide with their audio, video with its captions, pages as text. A vision model that you choose turns that material into typed entries (repos, prompts, guides) with a summary, a category, and tags.
+Share a link from your phone, and your own server fetches what is actually in the post: TikTok photo carousels slide by slide with their audio, video with its captions, pages as text. A vision model that you choose turns that material into typed entries (links, repos among them, and prompts) with a summary, a category, and tags.
 
 Success: a person finds a saved item again in seconds, reads its summary without a click, copies the prompt or the install command in one action, and sees in plain words what the server did with each capture.
 
@@ -38,11 +38,11 @@ Imports: a TikTok browser export (`tiktok.json`) or a legacy `library.json`.
 ## Capabilities and Constraints
 
 - Web views: Library, Inbox, Collections, Settings, Admin, entry details, the add dialog, the setup wizard, and the account pages (django-allauth).
-- Android screens: home, setup, share receiver, outbox, library, entry, asset viewer, collections, collection detail, settings.
+- Android screens: setup, share receiver, outbox, library, entry, asset viewer, collections, collection detail, settings.
 - Terms that the UI uses: capture, Inbox, Library, entry (a link or a prompt), collection (Personal or shared), category, tag, source, retained source, job.
 - Web stack: Django templates, vanilla JavaScript modules, native CSS. No framework, no build step, no CDN, and no third-party requests. Fonts and images must ship from the app itself.
 - Model and source text goes into the DOM through `textContent` only. URLs must be http(s). `localStorage` holds the layout preferences only.
-- Android stack: Java with framework Views, minSdk 26, targetSdk 35. The only runtime dependency is `androidx.work`. A license gate (`check_licenses.py`, `license_inventory.toml`) checks every Android runtime dependency and the APK.
+- Android stack: Java with AppCompat and Material Components views, minSdk 26, targetSdk 35. Runtime dependencies: `androidx.work`, AppCompat 1.7.0, Material Components 1.13.0. A license gate (`check_licenses.py`, `license_inventory.toml`) checks every Android runtime dependency and the APK.
 - Both light and dark themes exist on the web today.
 - Install instructions are copy-only. The app never runs them.
 
