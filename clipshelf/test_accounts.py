@@ -28,8 +28,8 @@ from clipshelf.accounts import (
     SESSION_INVITATION_KEY,
     api_user,
     invitation_token_hash,
-    json_error,
 )
+from clipshelf.api import json_error
 from clipshelf.models import Collection, Invitation, Job, Membership, ServerSettings
 from clipshelf.interpretation import _TransportError
 from clipshelf.services import accessible_collections

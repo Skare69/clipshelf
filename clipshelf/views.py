@@ -29,7 +29,7 @@ from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.static import serve as _static_serve
 
-from clipshelf.accounts import ApiError, json_error
+from clipshelf.api import ApiError, json_body, json_error, vmessage
 from clipshelf import accounts, asset_files, services
 from clipshelf.models import (
     Asset,
@@ -270,7 +270,7 @@ def api_collections(request):
                 ]
             }
         )
-    body = accounts.json_body(request)
+    body = json_body(request)
     name = str(body.get("name") or "").strip()
     if not name or len(name) > MAX_NAME_LEN:
         raise ApiError(400, detail="name must be 1-200 characters")
@@ -306,7 +306,7 @@ def api_collection_members(request, collection_id):
         raise ApiError(403, detail="personal collections have no members")
     if collection.owner_id != user.id:
         raise ApiError(403, detail="only the owner manages members")
-    body = accounts.json_body(request)
+    body = json_body(request)
     email = str(body.get("email") or "").strip()
     target = User.objects.filter(email__iexact=email, is_active=True).first()
     if target is None:
@@ -352,7 +352,7 @@ def api_collection_member(request, collection_id, user_id):
 @require_http_methods(["POST"])
 def api_settings(request):
     user = request.user
-    body = accounts.json_body(request)
+    body = json_body(request)
     collection = _accessible_collection(user, body.get("default_collection_id"))
     if not services.can_write(user, collection):
         raise ApiError(403, detail="destination is not writable")
@@ -530,7 +530,7 @@ def api_captures(request):
             captures = captures.filter(collection=collection)
         return JsonResponse({"captures": [_capture_json(c) for c in captures]})
 
-    body = accounts.json_body(request)
+    body = json_body(request)
     request_id = _uuid_or_400(body.get("client_request_id"), "client_request_id")
     _check_identity(body, user)
     collection_id = body.get("collection_id") or None
@@ -544,7 +544,7 @@ def api_captures(request):
         )
     except ValidationError as exc:
         if getattr(exc, "code", None) == "oversized":
-            raise ApiError(413, detail=accounts.vmessage(exc))
+            raise ApiError(413, detail=vmessage(exc))
         raise
     except PermissionDenied:
         raise ApiError(403, detail="destination not available")

@@ -267,7 +267,7 @@ only; the original files are never modified and a repeated import is a no-op.
 |---|---|
 | `clipshelf/models.py`, `services.py` | collections, captures, jobs, entries/contributions, assets |
 | `clipshelf/views.py`, `urls.py` | JSON API and app shell |
-| `clipshelf/accounts.py`, `admin_views.py` | invitation admission, native sessions, admin endpoints |
+| `clipshelf/accounts.py`, `admin_views.py`, `api.py` | invitation admission, native sessions, the shared JSON envelope, admin endpoints |
 | `clipshelf/network.py`, `acquisition.py`, `interpretation.py` | bounded fetching, extractors, model calls |
 | `clipshelf/worker.py`, `management/commands/` | job coordinator and operator commands |
 | `clipshelf/templates/`, `static/` | web UI |
