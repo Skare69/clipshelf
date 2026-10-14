@@ -46,6 +46,9 @@ jobs:
       - run: python clipshelf.py test --verbosity 1
       - run: python test_clipshelf.py
       - run: python test_sources.py
+      # Publish-tag regression: docker-publish derives tags from the validated
+      # version, never the raw GITHUB_REF_NAME (v0.11.0 release-review finding).
+      - run: python test_workflow_tags.py
       # JS regression checks pinning the v0.10.0 fixes, plus the mutation
       # harness's own target-confinement/sampling asserts.
       - run: node test_dom_events.mjs

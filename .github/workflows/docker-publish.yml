@@ -161,11 +161,13 @@ jobs:
           echo "version=$v" >> "$GITHUB_OUTPUT"
           image="$(printf '%s' 'ghcr.io/${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
           major="${v%%.*}"; minor="${v#*.}"; minor="${minor%%.*}"
+          # Every tag derives from the validated $v, never GITHUB_REF_NAME: on
+          # workflow_dispatch that is the starting branch, not the version.
           {
             echo "tags<<TAGS"
             echo "${image}:${v}"
             echo "${image}:${major}.${minor}"
-            echo "${image}:${GITHUB_REF_NAME}"
+            echo "${image}:v${v}"
             echo "TAGS"
           } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
