@@ -561,18 +561,6 @@ def api_captures(request):
 
 
 @api
-@require_GET
-def api_capture_detail(request, capture_id):
-    user = request.user
-    capture = Capture.objects.filter(id=capture_id, user=user).first()
-    if capture is None:
-        raise Http404("no such capture")
-    if not services.accessible_collections(user).filter(id=capture.collection_id).exists():
-        raise Http404("no such capture")
-    return JsonResponse(_capture_json(capture))
-
-
-@api
 @require_http_methods(["POST"])
 def api_job_retry(request, job_id):
     user = request.user

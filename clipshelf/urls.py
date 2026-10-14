@@ -28,7 +28,6 @@ urlpatterns = [
     path("", include(accounts.account_urlpatterns)),
     path("api/", include((admin_urlpatterns, "clipshelf_accounts_admin"))),
     path("api/captures", views.api_captures),
-    path("api/captures/<uuid:capture_id>", views.api_capture_detail),
     path("api/jobs/<uuid:job_id>/retry", views.api_job_retry),
     path("api/import", views.api_import),
     re_path(r"^static/(?P<path>.*)$", views.static_asset, name="static"),

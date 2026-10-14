@@ -214,7 +214,7 @@ class PrivacyTests(ApiTestCase):
         self.assertEqual(bob.get(f"/api/entries/{self.entry.id}").status_code, 404)
         self.assertEqual(bob.get(f"/api/assets/{self.asset.id}").status_code, 404)
         self.assertEqual(
-            bob.get(f"/api/captures/{self.job.capture_id}").status_code, 404
+            [c["id"] for c in bob.get("/api/captures").json()["captures"]], []
         )
 
     def test_counts_reveal_nothing_about_others(self):
@@ -564,6 +564,10 @@ class CaptureTests(ApiTestCase):
             content_type="application/json",
         )
 
+    def _capture(self, client, capture_id):
+        listing = client.get("/api/captures").json()["captures"]
+        return next(c for c in listing if c["id"] == str(capture_id))
+
     def test_idempotent_retry_and_conflict(self):
         alice = self._login(self.alice)
         body = self._capture_body(self.alice, self.alice_personal)
@@ -659,7 +663,7 @@ class CaptureTests(ApiTestCase):
             ),
         )
         self.assertEqual(response.status_code, 201)
-        detail = alice.get(f"/api/captures/{response.json()['receipt']['id']}").json()
+        detail = self._capture(alice, response.json()["receipt"]["id"])
         self.assertEqual(
             [j["url"] for j in detail["jobs"]], ["https://example.com/widget"]
         )
@@ -681,7 +685,7 @@ class CaptureTests(ApiTestCase):
         )
         self.assertEqual(response.status_code, 201)
         capture_id = response.json()["receipt"]["id"]
-        detail = alice.get(f"/api/captures/{capture_id}").json()
+        detail = self._capture(alice, capture_id)
         self.assertEqual([job["url"] for job in detail["jobs"]], [url])
 
     def test_unavailable_destination_falls_back_with_notice(self):
@@ -704,13 +708,16 @@ class CaptureTests(ApiTestCase):
         capture_id = first.json()["receipt"]["id"]
         listing = alice.get("/api/captures").json()
         self.assertEqual([c["id"] for c in listing["captures"]], [capture_id])
-        detail = alice.get(f"/api/captures/{capture_id}")
-        self.assertEqual(detail.status_code, 200)
-        self.assertEqual(detail.json()["receipt"]["id"], capture_id)
+        self.assertEqual(self._capture(alice, capture_id)["receipt"]["id"], capture_id)
         # Other users cannot see the capture; wrong collection scoping 404s.
         self.assertEqual(
-            self._login(self.bob).get(f"/api/captures/{capture_id}").status_code,
-            404,
+            [
+                c["id"]
+                for c in self._login(self.bob).get("/api/captures").json()[
+                    "captures"
+                ]
+            ],
+            [],
         )
         response = alice.get(
             "/api/captures", {"collection_id": str(self.bob_personal.id)}
@@ -733,7 +740,7 @@ class CaptureTests(ApiTestCase):
         body = self._capture_body(self.alice, self.alice_personal)
         response = self._post_capture(alice, body)
         capture_id = response.json()["receipt"]["id"]
-        detail = alice.get(f"/api/captures/{capture_id}").json()
+        detail = self._capture(alice, capture_id)
         job = detail["jobs"][0]
         job_row = Job.objects.get(id=job["id"])
         job_row.state = "blocked"
@@ -771,14 +778,14 @@ class CaptureTests(ApiTestCase):
         def projected(state, **fields):
             Job.objects.filter(id=job_id).update(**{"error": "", "retry_at": None, **fields})
             Job.objects.filter(id=job_id).update(state=state)
-            detail = alice.get(f"/api/captures/{capture_id}").json()["jobs"][0]
+            detail = self._capture(alice, capture_id)["jobs"][0]
             self.assertEqual(detail["id"], str(job_id))
             return detail
 
         # In-flight jobs cannot be requeued.
         for state in ("queued", "running"):
             Job.objects.filter(id=job_id).update(state=state)
-            detail = alice.get(f"/api/captures/{capture_id}").json()["jobs"][0]
+            detail = self._capture(alice, capture_id)["jobs"][0]
             self.assertEqual(detail["state"], state)
             self.assertTrue(detail["active"])
             self.assertFalse(detail["can_retry"])
@@ -842,7 +849,7 @@ class CaptureTests(ApiTestCase):
             error="interpreter-directed content detected; findings withheld")
         self.assertTrue(detail["guardrail"])
         self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 200)
-        detail = alice.get(f"/api/captures/{capture_id}").json()["jobs"][0]
+        detail = self._capture(alice, capture_id)["jobs"][0]
         # requeued with the error still on the row: no longer a guardrail block
         self.assertFalse(detail["guardrail"])
         detail = projected(
