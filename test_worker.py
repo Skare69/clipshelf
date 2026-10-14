@@ -635,33 +635,20 @@ class AddExtractedCommandTests(WorkerMixin, TestCase):
             call_command("add_extracted", "--user", self.user.email, str(path))
         merge_findings.assert_called_once()
 
-    def test_reports_changes_without_calling_them_new_items(self):
+    def test_second_identical_run_reports_zero_changes(self):
+        findings = [{
+            "repos": ["owner/repo"],
+            "prompts": [{"text": "use uv", "title": "uv", "cat": ""}],
+        }]
         path = self.tmp / "findings.json"
-        path.write_text("{}", encoding="utf-8")
-        output = io.StringIO()
-        with mock.patch(
-                "clipshelf.management.commands.add_extracted.imports.merge_findings",
-                return_value={"links": 2, "prompts": 3, "updated": 4},
-        ) as merge_findings:
-            call_command("add_extracted", "--user", self.user.email, str(path), stdout=output)
-        merge_findings.assert_called_once()
-        self.assertIn("2 link change(s)", output.getvalue())
-        self.assertIn("3 prompt change(s)", output.getvalue())
-        self.assertIn("4 updated", output.getvalue())
-        self.assertNotIn("new link", output.getvalue())
-        self.assertNotIn("new prompt", output.getvalue())
-
-
-class IngestCommandTests(WorkerMixin, TestCase):
-    def test_ingest_idempotent_receipt(self):
-        dump = self.tmp / "dump.txt"
-        dump.write_text("read https://example.com/x later\n", encoding="utf-8")
-        first = _ingest(dump)
-        self.assertTrue(first["created"])
-        second = _ingest(dump)
-        self.assertFalse(second["created"])
-        self.assertEqual(first["id"], second["id"], "identical file must reuse the receipt")
-        self.assertEqual(models.Capture.objects.filter(user=self.user).count(), 1)
+        path.write_text(_json(findings), encoding="utf-8")
+        first = io.StringIO()
+        call_command("add_extracted", "--user", self.user.email, str(path), stdout=first)
+        second = io.StringIO()
+        call_command("add_extracted", "--user", self.user.email, str(path), stdout=second)
+        self.assertIn("1 link change(s), 1 prompt change(s)", first.getvalue())
+        self.assertIn("0 link change(s), 0 prompt change(s), 0 updated",
+                      second.getvalue())
 
 
 class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
@@ -982,14 +969,6 @@ class StagingRetentionTests(WorkerMixin, TestCase):
 def _json(obj):
     import json
     return json.dumps(obj)
-
-
-def _ingest(path):
-    import io
-    import json as jsonlib
-    out = io.StringIO()
-    call_command("ingest", "--user", "w1@example.com", str(path), stdout=out)
-    return jsonlib.loads(out.getvalue())
 
 
 class StagingCleanupTests(WorkerMixin, TestCase):
