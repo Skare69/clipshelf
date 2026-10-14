@@ -100,22 +100,6 @@ def jpeg_bytes():
     return buf.getvalue()
 
 
-class _Resp:
-    """urlopen stand-in: bounded read + context manager, for post()-level tests."""
-
-    def __init__(self, body):
-        self.body = body
-
-    def read(self, n):
-        return self.body[:n]
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-
 def test_ssrf_pinned_transport():
     # private/loopback literals and private DNS records are refused outright
     for bad in ("http://127.0.0.1/x", "http://10.0.0.1/x", "http://[::1]/x",
@@ -1073,7 +1057,7 @@ def test_post_transport_and_http_errors():
         calls.append((req.full_url, req.get_method(),
                       req.get_header("Authorization"),
                       req.get_header("Content-type")))
-        return _Resp(b'{"choices": []}')
+        return io.BytesIO(b'{"choices": []}')
 
     real_open = interp.urllib.request.urlopen
     interp.urllib.request.urlopen = fake_open
@@ -1120,7 +1104,7 @@ def test_post_transport_and_http_errors():
 
     # a response above the size bound is refused, not parsed
     def huge(req, timeout=None):
-        return _Resp(b"x" * 40)
+        return io.BytesIO(b"x" * 40)
 
     real_max = interp.LLM_RESPONSE_MAX
     interp.LLM_RESPONSE_MAX = 16
@@ -1761,16 +1745,10 @@ def test_list_models():
     """The admin picker's source of truth: what the endpoint says it has."""
     calls = []
 
-    class Resp:
-        def __init__(self, body): self.body = body
-        def read(self, n): return self.body[:n]
-        def __enter__(self): return self
-        def __exit__(self, *a): return False
-
     def fake_open(req, timeout=None):
         calls.append((req.full_url, req.get_header("Authorization"), req.get_method()))
-        return Resp(json.dumps({"data": [{"id": "b"}, {"id": "a"}, {"id": "a"},
-                                         {"id": 7}, {"id": " "}, {}, None, "junk"]}).encode())
+        return io.BytesIO(json.dumps({"data": [{"id": "b"}, {"id": "a"}, {"id": "a"},
+                                                {"id": 7}, {"id": " "}, {}, None, "junk"]}).encode())
 
     real_open = interp.urllib.request.urlopen
     interp.urllib.request.urlopen = fake_open
@@ -1784,7 +1762,7 @@ def test_list_models():
 
         # an endpoint offering more than 500 distinct ids is capped at exactly 500
         def flood(req, timeout=None):
-            return Resp(json.dumps(
+            return io.BytesIO(json.dumps(
                 {"data": [{"id": f"m{i:04d}"} for i in range(501)]}).encode())
 
         interp.urllib.request.urlopen = flood
@@ -1882,13 +1860,13 @@ def test_list_models():
 
         # a server that answers but not with a model list is a config error,
         # never an empty picker that looks like "no models installed"
-        interp.urllib.request.urlopen = lambda req, timeout=None: Resp(b"<html>nope</html>")
+        interp.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b"<html>nope</html>")
         try:
             interp.list_models({"base_url": "http://h/v1"})
             raise AssertionError("garbage accepted")
         except interp.ConfigurationError:
             pass
-        interp.urllib.request.urlopen = lambda req, timeout=None: Resp(b'{"data":{}}')
+        interp.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b'{"data":{}}')
         try:
             interp.list_models({"base_url": "http://h/v1"})
             raise AssertionError("non-list data accepted")
@@ -1897,7 +1875,7 @@ def test_list_models():
         limit = interp.LLM_RESPONSE_MAX
         interp.LLM_RESPONSE_MAX = 16
         try:
-            interp.urllib.request.urlopen = lambda req, timeout=None: Resp(b'{"data":[]}' + b" " * 20)
+            interp.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b'{"data":[]}' + b" " * 20)
             try:
                 interp.list_models({"base_url": "http://h/v1"})
                 raise AssertionError("oversized response accepted")
