@@ -558,6 +558,9 @@ def test():
     assert cs.norm("http://[::1]:80/a") == "http://[::1]:80/a"
     assert cs.norm("  https://example.com/x ,") == "https://example.com/x"
     assert cs.norm("https://example.com/a?si=abc&x=1") == "https://example.com/a?x=1"
+    # every tracking parameter is stripped, not just utm_*
+    assert cs.norm("https://example.com/a?fbclid=z&gclid=y&igsh=x&keep=1") == \
+        "https://example.com/a?keep=1"
 
     # tagging + terminal hosts
     assert cs.tag_for("https://github.com/foo/bar") == "github"
@@ -586,6 +589,7 @@ def test():
                  "why-github", "edu", "open-source"):
         assert not cs.github_repo(f"https://github.com/{word}/x"), word
     assert cs.github_repo("https://github.com/owner/x")
+    assert cs.github_repo("https://www.github.com/owner/x")
 
     assert cs.is_terminal("https://www.arxiv.org/abs/1")
     assert cs.tag_for("https://arxiv.org/abs/1") == "arxiv"

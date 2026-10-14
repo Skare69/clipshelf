@@ -1956,8 +1956,9 @@ def test_parse_json_content_forms():
 
 
 def test_validated_findings_caps():
-    """Findings lists are capped (repos/warnings/categories at 10), the prompt
-    entry bound is 4000 chars, and the result shape is exact."""
+    """Findings lists are capped (repos/warnings/categories at 10,
+    links/prompts/installs at 20), the prompt entry bound is 4000 chars,
+    and the result shape is exact."""
     cats = [f"c{i}" for i in range(12)]
     source_url = "https://example.com/p"
 
@@ -1975,6 +1976,24 @@ def test_validated_findings_caps():
                    "prompts": ["p" * 4000], "links": [],
                    "categories": [f"c{i}" for i in range(10)],
                    "installs": [], "warnings": [f"w{i}" for i in range(10)]}
+
+    # every list cap: 21 valid entries truncate to the first 20
+    out = interp._validated(raw(links=[f"https://e.com/{i}" for i in range(21)],
+                                prompts=[f"p{i}" for i in range(21)],
+                                installs=[f"i{i}" for i in range(21)]),
+                            source_url, cats, [])
+    assert len(out["links"]) == 20 and out["links"][-1] == "https://e.com/19"
+    assert len(out["prompts"]) == 20 and len(out["installs"]) == 20
+
+    # the shared URL storage bound: 2048 chars is kept, 2049 drops with a warning
+    base_url = "https://example.com/"
+    ok_url = base_url + "a" * (2048 - len(base_url))
+    long_url = base_url + "a" * (2049 - len(base_url))
+    dropped = []
+    out = interp._validated(raw(links=[ok_url]), source_url, cats, dropped)
+    assert out["links"] == [ok_url] and not dropped
+    out = interp._validated(raw(links=[long_url]), source_url, cats, dropped)
+    assert out["links"] == [] and any("2048" in w for w in dropped), dropped
 
     # one char past the prompt bound is fatal, and names the offending list
     try:
@@ -2181,6 +2200,36 @@ def test_interpret_screening_thresholds():
     print("screening thresholds ok")
 
 
+def test_interpret_retry_reason_bound():
+    """The retry reason in the final error is truncated to exactly 300 chars."""
+    config = {"base_url": "http://h/v1", "model": "m"}
+    # repr() re-expands these NULs, so str(exc) passes the 300-char reason bound
+    bad = json.dumps({"summary": "s", "repos": [], "prompts": [],
+                      "links": ["\x00" * 100], "categories": [], "installs": [],
+                      "warnings": []})
+    calls = []
+
+    def bad_post(base, key, payload, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": bad}}]}
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=bad_post):
+        try:
+            interp.interpret({"url": "https://example.com/p", "text": "body",
+                              "assets": [], "links": [], "metadata": {}},
+                             config, [])
+            raise AssertionError("invalid model output accepted")
+        except interp.InterpretationError as exc:
+            message = str(exc)
+    assert len(calls) == 2, len(calls)  # exactly one malformed-output retry
+    assert "after retry (" in message and "); preserved excerpt" in message
+    start = message.index("after retry (") + len("after retry (")
+    end = message.index("); preserved excerpt")
+    assert end - start == 300, end - start
+    print("interpret retry reason bound ok")
+
+
 def test_check_connection_contract():
     """The probe ships a system contract + color question + inline PNG; the
     report shape is honest in all outcomes and never leaks the key."""
@@ -2188,7 +2237,8 @@ def test_check_connection_contract():
     real_post = interp.post
 
     def offcontract_post(base, key, payload, timeout):
-        return {"choices": [{"message": {"content": '{"ok": false, "color": "red"}'}}]}
+        return {"choices": [{"message": {"content":
+                '{"ok": false, "color": "' + "0" * 300 + '"}'}}]}
 
     interp.post = offcontract_post
     try:
@@ -2196,6 +2246,9 @@ def test_check_connection_contract():
         assert report["ok"] is False
         assert report["message"].startswith(
             "model replied but not with the JSON contract"), report["message"]
+        # the echoed raw reply is truncated at exactly 200 chars (24-char JSON
+        # prefix + 176 zeros)
+        assert report["message"].count("0") == 176, report["message"]
     finally:
         interp.post = real_post
 
@@ -2212,6 +2265,8 @@ def test_check_connection_contract():
         assert "blue" in report["message"]
         assert ("via " + cfg["model"]) in report["message"], report["message"]
         assert report["message"].endswith(")"), report["message"]
+        assert calls[0]["model"] == cfg["model"]
+        assert calls[0]["max_tokens"] == interp.OUTPUT_TOKENS_MAX
         messages = calls[0]["messages"]
         assert messages[0]["role"] == "system"
         assert messages[0]["content"].endswith("}")
@@ -2221,6 +2276,18 @@ def test_check_connection_contract():
         assert user[0]["text"].endswith("?")
         assert user[1]["type"] == "image_url"
         assert user[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    finally:
+        interp.post = real_post
+
+    # a reply without a color falls back to "?" in the message
+    def nocolor_post(base, key, payload, timeout):
+        return {"choices": [{"message": {"content": '{"ok": true}'}}]}
+
+    interp.post = nocolor_post
+    try:
+        report = interp.check_connection(cfg)
+        assert report["ok"] is True
+        assert report["message"] == "image+JSON ok via m (saw: ?)", report["message"]
     finally:
         interp.post = real_post
 
@@ -2390,6 +2457,36 @@ def test_list_models():
     print("model listing ok")
 
 
+def test_list_models_sends_no_body():
+    """list_models GETs /models with no request body and no Content-Type."""
+    seen = []
+
+    class Resp:
+        def __init__(self, body): self.body = body
+        def read(self, n): return self.body[:n]
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_open(req, timeout=None):
+        seen.append((req.get_method(), req.data, req.get_header("Content-type")))
+        return Resp(json.dumps({"data": []}).encode())
+
+    real_open = interp.urllib.request.urlopen
+    interp.urllib.request.urlopen = fake_open
+    try:
+        assert interp.list_models({"base_url": "http://h/v1"}) == []
+        assert seen == [("GET", None, None)], seen
+    finally:
+        interp.urllib.request.urlopen = real_open
+    print("list models sends no body ok")
+
+
+def test_interpretation_exports():
+    """The module's public entry points stay importable via star-import."""
+    assert {"interpret", "check_connection", "list_models"} <= set(interp.__all__)
+    print("interpretation exports ok")
+
+
 def test():
     test_ssrf_pinned_transport()
     print("ssrf/pin ok")
@@ -2434,8 +2531,11 @@ def test():
     test_links_bound_to_material()
     test_interpret_pipeline_contract()
     test_interpret_screening_thresholds()
+    test_interpret_retry_reason_bound()
     test_check_connection_contract()
     test_list_models()
+    test_list_models_sends_no_body()
+    test_interpretation_exports()
     print("ok")
 
 
