@@ -403,7 +403,11 @@ def _validated(raw, source_url, categories, warnings):
     # reuse before invent: a known category keeps the collection's spelling. A new
     # name is replayed into later captures' model input, so it must be a short
     # visible label, never a carrier for hidden or lengthy text.
-    known = {str(c).casefold(): str(c) for c in (categories or [])}
+    # most used first (worker._categories), so the first spelling of a case
+    # variant wins: the rare variant must not grow
+    known = {}
+    for c in (categories or []):
+        known.setdefault(str(c).casefold(), str(c))
     cats = []
     for text in _clean_list(raw["categories"], CATEGORIES_MAX, 100, "categories"):
         if text.casefold() in known:

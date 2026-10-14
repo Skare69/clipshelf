@@ -770,6 +770,13 @@ def test_interpretation_bounds():
         source["url"], [], warnings)
     assert invisible["categories"] == [], invisible["categories"]
     assert len(warnings) == 10, warnings
+    # case variants in the vocabulary: the most-used (first) spelling wins,
+    # never the rare last one
+    variant = interp._validated(
+        {"summary": "s", "repos": [], "prompts": [], "links": [], "installs": [],
+         "warnings": [], "categories": ["VIDEO GENERATION"]},
+        source["url"], ["Video generation", "video generation"], warnings)
+    assert variant["categories"] == ["Video generation"]
 
     # an over-long copied URL drops with a warning instead of failing the
     # whole interpretation (a retry cannot shorten a URL the model copies)
