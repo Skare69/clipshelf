@@ -5,7 +5,6 @@
 !clipshelf/
 !clipshelf.py
 !deploy/
-!requirements.txt
 !requirements.lock
 !THIRD_PARTY_NOTICES.md
 

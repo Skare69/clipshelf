@@ -37,8 +37,7 @@ def remove_own_probe(probe):
 
 def main():
     print(f"python {sys.version.split()[0]}; runtime SQLite {sqlite3.sqlite_version}")
-    version = tuple(int(part) for part in sqlite3.sqlite_version.split("."))
-    if version < MIN_SQLITE:
+    if sqlite3.sqlite_version_info < MIN_SQLITE:
         fail(
             f"SQLite {sqlite3.sqlite_version} lacks the WAL-reset corruption fix "
             f"(need >= {'.'.join(map(str, MIN_SQLITE))}); see "

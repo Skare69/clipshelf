@@ -117,7 +117,7 @@ def run_sqlite_probe(testcase, data_dir, connect_spy=None):
     out = io.StringIO()
     stack = [
         mock.patch.dict(os.environ, {"CLIPSHELF_DATA_DIR": data_dir}),
-        mock.patch.object(sqlite3, "sqlite_version", "9.9.9"),
+        mock.patch.object(sqlite3, "sqlite_version_info", (9, 9, 9)),
     ]
     if connect_spy is not None:
         stack.append(mock.patch.object(sqlite3, "connect", side_effect=connect_spy))

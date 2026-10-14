@@ -18,7 +18,6 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
 from django.http import (
     Http404,
-    HttpResponseNotAllowed,
     JsonResponse,
 )
 from django.http.multipartparser import MultiPartParserError, RequestDataTooBig
@@ -28,6 +27,7 @@ from django.urls import include, path, reverse
 from django.utils import timezone
 from django.utils.http import urlencode
 from django.utils.translation import gettext_lazy as _
+from django.views.decorators.http import require_GET
 from django.conf import settings as django_settings
 from urllib.parse import urlsplit, urlunsplit
 
@@ -178,10 +178,9 @@ class AccountAdapter(DefaultAccountAdapter):
         super().send_mail(template_prefix, email, context)
 
 
+@require_GET
 def invite_view(request, token):
     """GET /invite/<token>: begin the browser invitation flow."""
-    if request.method != "GET":
-        return HttpResponseNotAllowed(["GET"])
     invitation = Invitation.objects.filter(
         token_hash=invitation_token_hash(token),
         used_by__isnull=True,
