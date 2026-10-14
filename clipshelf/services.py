@@ -37,7 +37,6 @@ from clipshelf.models import (
 
 MAX_TEXT_BYTES = 32768
 MAX_URLS = 50
-MAX_URL_LENGTH = lib.MAX_URL_LENGTH
 URL_PATTERN = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
 
 
@@ -628,7 +627,7 @@ def _extract_urls(text):
         candidates.append(candidate)
     validated = []
     for url in candidates:
-        if not url or len(url) > MAX_URL_LENGTH:
+        if not url or len(url) > lib.MAX_URL_LENGTH:
             raise ValidationError({"text": "A URL in the text is malformed or too long."}, code="invalid")
         parts = urlsplit(url)
         if parts.scheme not in ("http", "https") or not parts.netloc:
@@ -646,7 +645,7 @@ def _require_url(url):
         parts = urlsplit(url)
     except ValueError:
         raise ValidationError({"url": "Invalid URL."}, code="invalid")
-    if parts.scheme not in ("http", "https") or not parts.netloc or len(url) > MAX_URL_LENGTH:
+    if parts.scheme not in ("http", "https") or not parts.netloc or len(url) > lib.MAX_URL_LENGTH:
         raise ValidationError({"url": "Invalid http(s) URL."}, code="invalid")
 
 

@@ -513,9 +513,9 @@ def extractor_egress():
         server.server_close()
 
 
-def scrub_env(base=None):
+def scrub_env():
     """Environment copy without ambient proxy variables (explicit args only)."""
-    env = dict(os.environ if base is None else base)
+    env = dict(os.environ)
     for key in [k for k in env if k.lower().endswith("_proxy")]:
         env.pop(key)
     return env

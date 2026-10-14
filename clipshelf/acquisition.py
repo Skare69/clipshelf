@@ -117,17 +117,13 @@ def validate_image(data):
         im.load()
         return _IMAGE_FORMAT_TYPE.get(im.format, f"image/{(im.format or 'unknown').lower()}")
 
-def _which(basename):
-    return shutil.which(basename)
-
-
 def validate_video_file(path):
     """ffprobe the local published file; raises ValueError when unplayable.
 
     Returns metadata dict {duration,...}; protocol use is file-only because the
     path is a local file and ffprobe is invoked with a fixed argument array.
     """
-    probe = _which("ffprobe")
+    probe = shutil.which("ffprobe")
     if not probe:
         raise OSError("ffprobe not installed")
     cmd = [probe, "-v", "error", "-protocol_whitelist", "file",
@@ -268,7 +264,7 @@ def _oembed(canonical, source):
 
 def _extractor_argv(tool, proxy, outdir, url):
     """Fixed argument arrays; --ignore-config/--no-cookies kill ambient state."""
-    ffmpeg = _which("ffmpeg")
+    ffmpeg = shutil.which("ffmpeg")
     if tool == "ytdlp":
         argv = [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-cookies",
                 "--no-cookies-from-browser", "--proxy", proxy, "--socket-timeout", "30",

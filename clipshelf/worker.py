@@ -47,10 +47,6 @@ CONFIG_ERROR = "llm-not-configured"  # blocked marker; claim resumes when config
 POLL_SECONDS = 5
 
 
-def _data(*parts):
-    return Path(settings.DATA_DIR).joinpath(*parts)
-
-
 def _concurrency():
     try:
         n = int(services.get_settings().llm_concurrency)
@@ -209,7 +205,7 @@ def _process_job(job):
 def _acquire_phase(job):
     """Fetch into staging, publish complete files to their final paths, then
     commit source + assets in one short transaction."""
-    staging = _data("staging", f"job-{job.id}")
+    staging = Path(settings.DATA_DIR).joinpath("staging", f"job-{job.id}")
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=True)
     try:
