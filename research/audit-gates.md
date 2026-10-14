@@ -140,5 +140,5 @@ shipped artifact.)
   python ../check_licenses.py android --deps app/build/license-deps.txt --apk
   app/build/outputs/apk/debug/app-debug.apk` — the enforced android license
   gate, as CI runs it.
-- `git ls-files | grep -iE 'package\.json|bun\.lock|.*lock'` — must return
-  nothing for the JS gates to stay "not applicable".
+- `git ls-files | grep -iE '(^|/)(package\.json|package-lock\.json|bun\.lockb?|yarn\.lock|pnpm-lock\.yaml)$'`
+  — must return nothing for the JS gates to stay "not applicable".
