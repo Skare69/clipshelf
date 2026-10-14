@@ -6,7 +6,6 @@ at every lookup, never minted, never migrated."""
 import shutil
 import tempfile
 import uuid
-from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -186,16 +185,9 @@ class ImportVariantTests(TestCase):
         self.personal = services.personal_collection(self.user)
 
     def _import(self, items, removed=None):
-        def fake_import_export(batch, directory):
-            return [{"url": item["url"], "original_url": item["url"], "title": "",
-                     "desc": "", "text": "", "links": [], "assets": [],
-                     "acquisition": "complete", "warnings": [], "metadata": {}}
-                    for item in batch]
-        with mock.patch("clipshelf.acquisition.import_export",
-                        side_effect=fake_import_export):
-            return imports.import_items(user=self.user, collection_id=None,
-                                       items=items, removed=removed or {},
-                                       cache_dir=self.tmp)
+        return imports.import_items(user=self.user, collection_id=None,
+                                   items=items, removed=removed or {},
+                                   cache_dir=self.tmp)
 
     def test_import_cased_item_reuses_legacy_entry(self):
         legacy_entry = models.Entry.objects.create(

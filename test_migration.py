@@ -59,30 +59,12 @@ def library_dict():
     }
 
 
-def fake_import_export(batch, directory):
-    """Mirror the real flow without network: copy images/video specs handed to
-    us, ignore unknown fields (page caches are appended by the worker itself),
-    and report complete acquisition."""
-    out = []
-    for item in batch:
-        assets = []
-        for spec in (item.get("images") or []):
-            if isinstance(spec, dict) and spec.get("path"):
-                dest = Path(directory) / Path(spec["path"]).name
-                shutil.copy2(spec["path"], dest)
-                assets.append({"path": str(dest), "kind": "image",
-                               "content_type": "application/octet-stream",
-                               "position": len(assets)})
-        video = item.get("video")
-        if isinstance(video, dict) and video.get("path"):
-            dest = Path(directory) / Path(video["path"]).name
-            shutil.copy2(video["path"], dest)
-            assets.append({"path": str(dest), "kind": "video",
-                           "content_type": "video/mp4", "position": len(assets)})
-        out.append({"url": item["url"], "original_url": item["url"], "title": "",
-                    "desc": "", "text": "", "links": [], "assets": assets,
-                    "acquisition": "complete", "warnings": [], "metadata": {}})
-    return out
+def fake_acquire(url, directory):
+    """The fetch is the only network seam an import reaches: media specs and
+    page caches are handled by the real acquisition.import_export itself."""
+    source = acquisition.new_source(url)
+    source["acquisition"] = "complete"
+    return source
 
 
 class MigrationMixin:
@@ -111,8 +93,8 @@ class MigrationMixin:
         args = ["--user", "m1@example.com", "--input", str(self.library_path),
                 "--cache", str(self.cache_dir), *extra]
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch("clipshelf.acquisition.import_export",
-                           side_effect=fake_import_export):
+                mock.patch("clipshelf.acquisition.acquire",
+                           side_effect=fake_acquire):
             call_command("import_library", *args, stdout=out)
         return out.getvalue()
 
@@ -126,8 +108,8 @@ class MigrationMixin:
         kw.setdefault("seen", self.library["seen"])
         kw.setdefault("removed", self.library["removed"])
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch("clipshelf.acquisition.import_export",
-                           side_effect=fake_import_export):
+                mock.patch("clipshelf.acquisition.acquire",
+                           side_effect=fake_acquire):
             return imports.import_items(user=self.user, collection_id=None,
                                        items=items, prompts=prompts, **kw)
 
@@ -486,8 +468,8 @@ class ImportTests(MigrationMixin, TestCase):
                 manifest={"status": "pending", "format": "legacy",
                           "staging": staging_rel,
                           "collection_id": str(self.personal.id)})
-            with mock.patch("clipshelf.acquisition.import_export",
-                            side_effect=fake_import_export):
+            with mock.patch("clipshelf.acquisition.acquire",
+                            side_effect=fake_acquire):
                 result = imports.run_staged_import(record)
         record.refresh_from_db()
         self.assertEqual(record.manifest["status"], "done")
@@ -885,8 +867,8 @@ class ImportScreeningTests(MigrationMixin, TransactionTestCase):
 
     def screened_import(self, items, screens):
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch("clipshelf.acquisition.import_export",
-                           side_effect=fake_import_export), \
+                mock.patch("clipshelf.acquisition.acquire",
+                           side_effect=fake_acquire), \
                 mock.patch.object(judgment, "available", return_value=True), \
                 mock.patch.object(judgment, "screen_findings", side_effect=screens):
             return imports.import_items(user=self.user, collection_id=None,

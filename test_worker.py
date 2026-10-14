@@ -1,4 +1,5 @@
 """Worker coordinator regressions: claims, recovery, pauses, finite failures."""
+import base64
 from contextlib import redirect_stdout
 import io
 import shutil
@@ -16,6 +17,8 @@ from django.core.management.base import CommandError
 from django.db.utils import OperationalError
 from django.test import TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
+
+from PIL import Image
 
 from clipshelf import cli, imports, models, publication, services, worker
 
@@ -451,22 +454,14 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
 class ImportQueueTests(WorkerMixin, TransactionTestCase):
     def test_pending_import_record_processed_idempotently(self):
         staging_rel = f"staging/import-{uuid.uuid4().hex}.json"
-        items = [{"url": "https://example.com/imported", "title": "From browser"}]
+        png = io.BytesIO()
+        Image.new("RGB", (2, 2), "red").save(png, "PNG")
+        png_bytes = png.getvalue()
+        items = [{"url": "https://example.com/imported", "title": "From browser",
+                  "images": [{"b64": base64.b64encode(png_bytes).decode()}]}]
         with override_settings(DATA_DIR=str(self.tmp)):
             (Path(self.tmp) / "staging").mkdir(parents=True, exist_ok=True)
             (Path(self.tmp) / staging_rel).write_text(_json(items), encoding="utf-8")
-
-        def fake_import_export(batch, directory):
-            out = []
-            for item in batch:
-                p = Path(directory) / "i.html"
-                p.write_text("bytes", encoding="utf-8")
-                out.append({"url": item["url"], "original_url": item["url"], "title": "",
-                            "desc": "", "text": "", "links": [],
-                            "assets": [{"path": str(p), "kind": "page",
-                                        "content_type": "text/html", "position": 0}],
-                            "acquisition": "complete", "warnings": [], "metadata": {}})
-            return out
 
         record = models.ImportRecord.objects.create(
             user=self.user, input_digest=uuid.uuid4().hex,
@@ -482,21 +477,24 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
             upstream.append(url)
             return fake_acquire(url, directory, status="blocked")
 
-        with mock.patch("clipshelf.acquisition.import_export", side_effect=fake_import_export):
-            self.run_worker(acquire=blocked_acquire)
+        self.run_worker(acquire=blocked_acquire)
         record.refresh_from_db()
         self.assertEqual(record.manifest["status"], "done")
         self.assertEqual(record.manifest["result"]["counts"]["entries"], 1)
         self.assertTrue(models.Entry.objects.filter(
             collection=self.personal, kind="link",
             key="https://example.com/imported").exists())
-        # Imported material is the acquisition: the worker interprets it and
-        # never silently re-fetches the gated post from upstream.
+        # Imported material is the acquisition: the browser export carried its
+        # own media, so the worker interprets the image asset and never
+        # re-fetches the post from upstream.
         self.assertEqual(upstream, [])
         job = models.Job.objects.filter(url="https://example.com/imported").get()
         self.assertEqual(job.state, "done")
         self.assertEqual(job.acquisition, "complete")
         self.assertEqual(job.interpretation, "complete")
+        asset = models.Asset.objects.get(job=job)
+        self.assertEqual((asset.kind, asset.content_type), ("image", "image/png"))
+        self.assertEqual((Path(self.tmp) / asset.path).read_bytes(), png_bytes)
         entry = models.Entry.objects.get(collection=self.personal, kind="link",
                                          key="https://example.com/imported")
         contributions = models.Contribution.objects.filter(entry=entry)
