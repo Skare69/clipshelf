@@ -875,6 +875,27 @@ class DeferredFetchTests(MigrationMixin, TestCase):
         self.assertEqual((job.source["title"], job.source["desc"]),
                          ("Preview", f"my note {note}"))
 
+    def test_unresolved_legacy_media_fields_are_dropped(self):
+        # v0.10.0 dropped unresolved references entirely; a raw leftover sent
+        # the job loop into an inline fetch or a blocked state instead.
+        a, b, c = ("https://example.com/a", "https://example.com/b",
+                   "https://example.com/c")
+        fetched = []
+        items = [{"url": a, "cache": "cache/gone.html"},
+                 {"url": b, "images": ["cache/gone.jpg"]},
+                 {"url": c, "video": "cache/gone.mp4"}]
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.acquire",
+                           side_effect=lambda url, directory: fetched.append(url)):
+            imports.import_items(user=self.user, collection_id=None, items=items,
+                                 cache_dir=str(self.cache_dir))
+            self.assertEqual(fetched, [],
+                             "unresolved references must not trigger a fetch")
+            for url in (a, b, c):
+                job = models.Job.objects.get(url=url)
+                self.assertEqual((job.state, job.acquisition),
+                                 ("queued", "pending"))
+
 
 class LegacyBindingBackfillTests(TransactionTestCase):
     """The 0004 bind_legacy_ids backfill: every accepted legacy request id

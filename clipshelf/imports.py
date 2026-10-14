@@ -183,9 +183,13 @@ def _stage_items(items, cache_dir, staging):
                 resolved.setdefault(field, []).append(spec)
         for field, specs in resolved.items():
             item[field] = specs if field == "images" else specs[0]
-        for field in ("images", "video", "cache"):
-            if not item.get(field):
+        # v0.10.0 dropped unresolved references entirely; a raw leftover like
+        # "cache/gone.html" would send the job loop down the inline-fetch path.
+        for field in ("video", "cache"):
+            if field not in resolved:
                 item.pop(field, None)
+        if isinstance(item.get("images"), list) and "images" not in resolved:
+            item.pop("images")
         staged.append(item)
     return staged, files_record
 
