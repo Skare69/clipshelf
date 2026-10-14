@@ -512,12 +512,14 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
         plan["published"] = asset_files.publish(plan["source"], staging, move=False)
 
     # Screen legacy findings OUTSIDE the transaction below: the judgment call
-    # can run for 60s and must never hold the SQLite write lock. A flagged
-    # item becomes one blocked (guardrail) job; the rest of the import
-    # proceeds and the flagged findings are never stored.
+    # can run for 60s and must never hold the SQLite write lock. Every
+    # interpreted item is screened, with or without published media: a flagged
+    # item becomes one blocked (guardrail) job, the rest of the import
+    # proceeds, and neither the flagged findings nor the raw install, summary
+    # and interpreted flag behind them are ever stored member-visible.
     for plan in plans:
-        if not (plan["findings"] and plan["published"]):
-            continue  # no job will store these findings
+        if not plan["findings"]:
+            continue  # not an interpreted legacy item: nothing to screen
         plan["findings"], withheld = services.screening_gate(
             services.screening_material(plan["source"]), plan["findings"])
         if withheld:
@@ -525,6 +527,10 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
             plan["state"] = "blocked"
             plan["interpretation"] = "blocked"
             plan["error"] = withheld
+            # The findings carried this content to the screener; it must not
+            # reach members through the contribution data either. The raw
+            # fields stay on the import record's manifest for the importer.
+            plan["contribution_skip"] = ("install", "desc", "interpreted")
 
     crid = client_request_id or str(uuid.uuid5(
         uuid.NAMESPACE_URL, f"clipshelf-import:{user.id}:{digest}"))
@@ -587,6 +593,8 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
                         interpretation=models.Job.InterpretationStatus.BLOCKED)
                 counts["jobs"] += 1
             data = _legacy_contribution_data(plan["item"])
+            for field in plan.get("contribution_skip") or ():
+                data.pop(field, None)
             models.Contribution.objects.get_or_create(
                 entry=entry, user=user, origin=origin,
                 defaults={"capture": capture, "job": job, "data": data})

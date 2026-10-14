@@ -1435,6 +1435,44 @@ class ImportTests(ApiTestCase):
         self.assertEqual(response["Cache-Control"], "no-store")
         self.assertFalse(ImportRecord.objects.exists())
 
+    def test_screening_withhold_hides_the_raw_install_from_members(self):
+        # A withhold verdict must not leave the raw install, summary and the
+        # "read by the model" flag on the member-visible contribution: the
+        # flagged content stays on the import record only, the entry keeps
+        # one blocked guardrail job, and the API serves no copy-ready install.
+        alice = self._login(self.alice)
+        content = json.dumps({"links": {
+            "https://evil.example/pkg": {
+                "title": "Pkg", "desc": "one-step install",
+                "install": "pip install pkg==0.9.9", "interpreted": True,
+                "cat": "dev", "tags": [], "sources": [],
+            }}}).encode()
+        with mock.patch.object(services.judgment, "available", return_value=True), \
+                mock.patch.object(services.judgment, "screen_findings",
+                                  return_value={"danger": 2.5, "related": {}}):
+            first = self._post_import(alice, content)
+            self.assertEqual(first.status_code, 201)
+            record = ImportRecord.objects.get(pk=first.json()["import"]["id"])
+            worker._run_import(record)
+        record.refresh_from_db()
+        self.assertEqual(record.manifest.get("status"), "done")
+        # The import record keeps the raw fields; the contribution must not.
+        self.assertEqual(
+            record.manifest["result"]["manifest"]
+            ["links"]["https://evil.example/pkg"]["install"],
+            "pip install pkg==0.9.9")
+        contribution = Contribution.objects.get()
+        for field in ("install", "desc", "interpreted"):
+            self.assertNotIn(field, contribution.data)
+        job = Job.objects.get()
+        self.assertEqual(job.state, "blocked")
+        self.assertEqual(job.interpretation, "blocked")
+        self.assertIn("findings withheld", job.error)
+        payload = alice.get("/api/entries").json()
+        self.assertEqual(payload["count"], 1)
+        self.assertEqual(payload["entries"][0]["install"], "")
+        self.assertFalse(payload["entries"][0]["interpreted"])
+
 
 class ShellAndHealthTests(ApiTestCase):
     def test_healthz_reports_real_database(self):

@@ -227,7 +227,10 @@ Restore prints the secrets to set before you serve the restored data: put
 
 Captured pages are untrusted input. Optionally, clipshelf screens each capture
 for prompt injection with a TypeSafe System One battery before it reaches the
-model, and screens its findings before publishing. Paste the key into **Admin →
+model, and screens its findings before publishing — imported items included:
+when screening flags an import, its install command, summary and interpreted
+flag are withheld with the findings, and only a blocked job remains. Paste the
+key into **Admin →
 Screening** (or set `TYPESAFE_API_KEY` in the compose `.env`) and press Test.
 Screening degrades to a visible warning on failure, and without a key nothing
 changes. A job blocked by the guard rail is badged `guardrail` in the inbox;
