@@ -143,7 +143,11 @@ def _request(method, url, key, payload, timeout):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read(LLM_RESPONSE_MAX + 1)
     except urllib.error.HTTPError as exc:
-        detail = _redact(exc.read(4096).decode(errors="replace"), key)[:300]
+        try:  # a stalled or reset error body must not skip the OSError
+            body = exc.read(4096)  # mapping below: degrade to an empty body
+        except OSError:
+            body = b""
+        detail = _redact(body.decode(errors="replace"), key)[:300]
         if exc.code in (401, 403):
             raise _TransportError("creds", exc.code) from None
         raise _TransportError("http", exc.code, detail) from None

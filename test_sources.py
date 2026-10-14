@@ -1749,6 +1749,22 @@ def test_list_models():
         except interp.ConfigurationError as exc:
             assert str(exc) == "endpoint cannot list models (HTTP 500)", exc
 
+        # a non-2xx body whose read stalls (any OSError, e.g. a socket
+        # timeout) must not escape as a raw TimeoutError: the HTTP mapping
+        # still applies
+        class Stalled(io.BytesIO):
+            def read(self, n=-1): raise TimeoutError("body stalled")
+
+        def stalled(req, timeout=None):
+            raise interp.urllib.error.HTTPError(req.full_url, 404, "no", {}, Stalled())
+
+        interp.urllib.request.urlopen = stalled
+        try:
+            interp.list_models({"base_url": "http://h/v1"})
+            raise AssertionError("stalled error body accepted")
+        except interp.ConfigurationError as exc:
+            assert str(exc) == "endpoint cannot list models (HTTP 404)", exc
+
         # chat transport: both auth refusals read as credential errors
         for code in (401, 403):
             def refused(req, timeout=None, code=code):
