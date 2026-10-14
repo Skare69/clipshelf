@@ -45,7 +45,7 @@ public final class OutboxPolicy {
     }
 
     public static final Pattern URL_PATTERN =
-            Pattern.compile("https?://\\S+", Pattern.CASE_INSENSITIVE);
+            Pattern.compile("https?://[^\\s<>\"'`]+", Pattern.CASE_INSENSITIVE);
 
     private OutboxPolicy() {
     }

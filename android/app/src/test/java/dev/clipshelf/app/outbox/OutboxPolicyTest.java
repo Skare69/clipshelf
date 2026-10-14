@@ -32,6 +32,16 @@ public class OutboxPolicyTest {
     }
 
     @Test
+    public void angleBracketLinksCountLikeTheServer() {
+        // Mail/Markdown "<url1><url2>": the server rule stops at <>"'`,
+        // so a pair is two URLs; \S+ would swallow it into one and the
+        // phone would admit a share the server later rejects (HTTP 400).
+        assertEquals(2, OutboxPolicy.countUrls("<https://a/1><https://a/2>"));
+        String pairs = "<https://a/1><https://a/2>".repeat(26); // server: 52 URLs
+        assertEquals("share_too_many_urls", OutboxPolicy.validateShare(pairs));
+    }
+
+    @Test
     public void textLimitIsUtf8BytesNotChars() {
         // UTF-8 byte bound is measured in bytes, not chars: 'é' is 2 bytes.
         String url = "https://example.com/a "; // 22 bytes
