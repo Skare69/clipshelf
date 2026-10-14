@@ -66,16 +66,16 @@ class User(AbstractUser):
             self._session_auth_salt, self._session_hash_value(), algorithm="sha256"
         ).hexdigest()
 
-    def get_session_auth_fallback_hashes(self):
-        return [
-            salted_hmac(
+    # Django 5.2 calls this exact name (singular, a generator) when the
+    # primary key fails to verify a session hash.
+    def get_session_auth_fallback_hash(self):
+        for secret in settings.SECRET_KEY_FALLBACKS:
+            yield salted_hmac(
                 self._session_auth_salt,
                 self._session_hash_value(),
                 secret=secret,
                 algorithm="sha256",
             ).hexdigest()
-            for secret in settings.SECRET_KEY_FALLBACKS
-        ]
 
 
 class Collection(models.Model):

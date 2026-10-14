@@ -10,14 +10,11 @@ import os
 import shutil
 import tempfile
 import uuid
-from unittest import mock
 from datetime import timedelta
 from unittest import mock
 from urllib.parse import urlencode
 
-from unittest import mock
-
-from django.contrib.auth import get_user_model
+from django.contrib.auth import HASH_SESSION_KEY, get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import Http404
 from django.db import IntegrityError, transaction
@@ -190,6 +187,31 @@ class AuthenticationBoundaryTests(ApiTestCase):
             HTTP_X_SESSION_TOKEN="forged-token",
         )
         self.assertEqual(response.status_code, 401)
+
+    def test_secret_key_fallback_keeps_the_session(self):
+        # Key rotation with SECRET_KEY_FALLBACKS keeps browser sessions: the
+        # fallback hashes carry the clipshelf salt (session_version +
+        # password), so Django's own fallback check can match them and rotate.
+        old_key = "a" * 64
+        new_key = "b" * 64
+        client = Client()
+        with override_settings(SECRET_KEY=old_key, SECRET_KEY_FALLBACKS=[]):
+            client.force_login(self.alice)
+            session_key_before = client.session.session_key
+        with override_settings(SECRET_KEY=new_key, SECRET_KEY_FALLBACKS=[old_key]):
+            response = client.get("/api/me")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["user"]["email"], self.alice.email)
+            # Kept and rotated: fresh session key, hash re-signed under the
+            # new primary key.
+            self.assertNotEqual(client.session.session_key, session_key_before)
+            self.assertEqual(
+                client.session[HASH_SESSION_KEY], self.alice.get_session_auth_hash()
+            )
+            # An explicit session_version bump still revokes, fallback or not.
+            self.alice.session_version += 1
+            self.alice.save(update_fields=["session_version"])
+            self.assertEqual(client.get("/api/me").status_code, 401)
 
     def test_forged_headers_grant_nothing(self):
         client = Client()
