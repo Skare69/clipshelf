@@ -278,7 +278,8 @@ Tests: `python clipshelf.py test` plus `python test_clipshelf.py` and
 `python test_sources.py` (both use project dependencies and avoid external network).
 CI runs the same suite plus the JS regression checks (`node test_dom_events.mjs`,
 `node test_web_assets.mjs`, `node tiktok-extract.js`, `node whatsapp-extract.js`,
-`node test_inbox_status.mjs`) and the mutation harness self-check
+`node test_inbox_status.mjs`, `node test_release_gates.mjs`) and the mutation
+harness self-check
 (`python mutate.py self-check`), all with Node 24.
 
 ### Mutation testing

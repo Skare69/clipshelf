@@ -52,6 +52,9 @@ jobs:
           echo "::error::no green ci.yml run for $GITHUB_SHA within 90 minutes"; exit 1
 
   signed-apk:
+    # Same gate as attach-apk: never build with the production key on a tag
+    # whose ci.yml run failed or is still running.
+    needs: [wait-ci]
     runs-on: ubuntu-latest
     env:
       CLIPSHELF_RELEASE_KEYSTORE_BASE64: ${{ secrets.CLIPSHELF_RELEASE_KEYSTORE_BASE64 }}

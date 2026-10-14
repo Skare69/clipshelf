@@ -58,6 +58,8 @@ jobs:
       - run: python mutate.py self-check
       # Inbox tracking line: each job state maps to its route and status text.
       - run: node test_inbox_status.mjs
+      # Release-workflow gate pins: signed-apk (and attach-apk) need wait-ci.
+      - run: node test_release_gates.mjs
 
   android:
     # Debug-build gate for the Android client. Versions are stamped from the
