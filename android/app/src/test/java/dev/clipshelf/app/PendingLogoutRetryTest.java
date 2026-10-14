@@ -163,8 +163,10 @@ public class PendingLogoutRetryTest {
 
         Thread second = new Thread(() -> PendingLogout.revokeAll(ctx), "second-revoke");
         second.start();
-        second.join(1_000);
-        assertFalse("second revokeAll must return in under 1 s while the first run is in flight",
+        // A broken skip parks this thread until release(), so the bound only
+        // has to outlast scheduler noise on a loaded runner, not measure speed.
+        second.join(10_000);
+        assertFalse("second revokeAll must return while the first run is parked at the held origin",
                 second.isAlive());
         assertTrue("first run must still be parked at the held origin", first.isAlive());
 
