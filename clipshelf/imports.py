@@ -7,6 +7,7 @@ skill findings into the Personal collection for add_extracted.
 """
 import hashlib
 import json
+import logging
 import shutil
 import uuid
 from pathlib import Path, PureWindowsPath
@@ -19,12 +20,15 @@ from django.utils import timezone
 from clipshelf import (
     acquisition,
     asset_files,
+    interpretation,
     judgment,
     lib,
     models,
     publication,
     services,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _data(*parts):
@@ -191,6 +195,17 @@ def _append_page_asset(source, item):
                        "content_type": "text/html", "position": len(assets)})
 
 
+def _bound_category(value):
+    """Bound one stored category label: labels are replayed verbatim into
+    later prompts, so an imported label must pass the same short-visible-
+    label rule as model-named names (interpretation.is_category_label)."""
+    if interpretation.is_category_label(value):
+        return value
+    if value:
+        log.warning("import: dropped category label %r", str(value)[:50])
+    return ""
+
+
 def _legacy_findings(item, url):
     """Reconstruct interpretation-shaped findings from legacy merged entry
     fields. The interpretation contract stores categories/installs as string
@@ -198,11 +213,16 @@ def _legacy_findings(item, url):
     they are objects keyed by repo); the legacy per-repo mapping collapses to
     this entry's own values.
     """
+    cat = item.get("cat")
+    warnings = ["migrated from legacy library; findings merged into entry fields"]
+    if cat and not interpretation.is_category_label(cat):
+        warnings.append(
+            f"category {str(cat)[:50]!r} is not a short visible label; dropped")
     return {"source": url, "summary": item.get("desc") or "", "repos": [],
             "prompts": [], "links": [],
-            "categories": [item["cat"]] if item.get("cat") else [],
+            "categories": [cat] if interpretation.is_category_label(cat) else [],
             "installs": [item["install"]] if item.get("install") else [],
-            "warnings": ["migrated from legacy library; findings merged into entry fields"]}
+            "warnings": warnings}
 
 
 LEGACY_FIELDS = ("title", "desc", "sources", "tags", "found", "interpreted",
@@ -475,7 +495,8 @@ def _prompt_plans(prompts):
             continue
         plans.append({"key": publication.prompt_key(text), "data": {
             "title": p.get("title", ""), "text": text,
-            "sources": list(p.get("sources") or []), "cat": p.get("cat", ""),
+            "sources": list(p.get("sources") or []),
+            "cat": _bound_category(p.get("cat", "")),
             "found": p.get("found", ""), "interpreted": p.get("interpreted", ""),
         }})
     return plans
@@ -599,6 +620,7 @@ def _legacy_contribution_data(item):
     published assets, so drop the transient path specs."""
     skip = {"images", "video", "cache", "b64", "url"}
     data = {k: v for k, v in item.items() if k not in skip}
+    data["cat"] = _bound_category(data.get("cat"))
     data.setdefault("title", "")
     data.setdefault("desc", "")
     data.setdefault("sources", [])

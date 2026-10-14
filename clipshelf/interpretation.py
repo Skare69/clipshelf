@@ -26,7 +26,7 @@ from clipshelf import network
 from clipshelf import judgment
 
 __all__ = ["InterpretationError", "ConfigurationError", "GuardrailBlocked",
-           "interpret", "check_connection", "list_models"]
+           "interpret", "check_connection", "list_models", "is_category_label"]
 
 class InterpretationError(Exception):
     """Failed or malformed interpretation; message is safe to surface."""
@@ -330,6 +330,15 @@ def _material_state(source, categories):
 
 # --------------------------------------------------------- validation
 
+def is_category_label(text):
+    """A category label is a short visible label: stored labels are replayed
+    verbatim into later captures' prompts and UI, so an imported or model-
+    named label must never be a carrier for hidden or lengthy text."""
+    return (isinstance(text, str) and 0 < len(text) <= 40 and text.isprintable()
+            and not any(ch in _INVISIBLE_CHARS for ch in text)
+            and any(ch.isalnum() for ch in text))
+
+
 def _clean_list(value, cap_items, cap_chars, label):
     if not isinstance(value, list):
         raise ValueError(f"{label} must be a list")
@@ -419,9 +428,7 @@ def _validated(raw, source_url, categories, warnings):
             cats.append(known[text.casefold()])
         elif not text:
             continue
-        elif not (0 < len(text) <= 40 and text.isprintable()
-                  and not any(ch in _INVISIBLE_CHARS for ch in text)
-                  and any(ch.isalnum() for ch in text)):
+        elif not is_category_label(text):
             warnings.append(f"category {text[:50]!r} is not a short visible label; dropped")
         elif text in cats:
             continue

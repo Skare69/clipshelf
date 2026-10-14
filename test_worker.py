@@ -289,6 +289,38 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.assertEqual(self.refresh(job).interpretation, "complete")
         self.assertEqual(seen, [["Video generation", "ml"]])  # most used first, own collection
 
+    def test_imported_labels_are_bounded_before_prompts(self):
+        """An imported legacy `cat` reaches every later capture's prompt as an
+        allowed_category, so it must pass the short-visible-label rule."""
+        owner = models.User.objects.create_user(username="owner",
+                                                email="owner@example.com")
+        shared = models.Collection.objects.create(name="Shared", kind="shared",
+                                                  owner=owner)
+        member = models.User.objects.create_user(username="member",
+                                                 email="member@example.com")
+        models.Membership.objects.create(user=self.user, collection=shared)
+        models.Membership.objects.create(user=member, collection=shared)
+        good = "Video generation"
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire):
+            result = imports.import_items(
+                user=member, collection_id=shared.id,
+                items=[{"url": "https://example.com/long", "title": "t",
+                        "cat": "x" * 5000, "interpreted": True},
+                       {"url": "https://example.com/short", "title": "t",
+                        "cat": good, "interpreted": True}])
+        self.assertTrue(result["created"])
+        seen = []
+
+        def interpret(source, config, cats, **kw):
+            seen.append(cats)
+            return {**FINDINGS, "source": source["url"]}
+
+        job = self.make_job(collection=shared)
+        self.run_worker(interpret=interpret)
+        self.assertEqual(self.refresh(job).interpretation, "complete")
+        self.assertEqual(seen, [[good]])
+
     def test_interpretation_failure_preserves_last_good_findings(self):
         job = self.make_job()
         self.run_worker()

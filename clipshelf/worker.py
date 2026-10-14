@@ -269,7 +269,7 @@ def _categories(collection):
     for cat, cats in (models.Contribution.objects.filter(entry__collection=collection)
                       .values_list("data__cat", "data__categories").iterator()):
         counts.update(c for c in [cat, *(cats if isinstance(cats, list) else [])]
-                      if isinstance(c, str) and c)
+                      if interpretation.is_category_label(c))
     return [c for c, _ in counts.most_common()]
 
 

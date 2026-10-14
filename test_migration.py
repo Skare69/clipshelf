@@ -577,6 +577,28 @@ class ImportTests(MigrationMixin, TestCase):
         self.assertEqual(calls, [501], "import_export must be called once")
         self.assertEqual(result["manifest"]["counts"]["links"], 501)
 
+    def test_imported_category_labels_are_bounded(self):
+        """Stored `cat` labels are replayed into later prompts, so an imported
+        label must pass the same short-visible-label rule as model-named ones."""
+        good = "Video generation"
+        result = self.direct_import(
+            items=[{"url": "https://example.com/a", "cat": "x" * 5000},
+                   {"url": "https://example.com/b", "cat": good}],
+            prompts=[{"text": "first prompt", "cat": "y" * 5000},
+                     {"text": "second prompt", "cat": good}])
+        self.assertTrue(result["created"])
+        cats = {c for c in models.Contribution.objects.values_list(
+                    "data__cat", flat=True)
+                if isinstance(c, str) and c}
+        self.assertEqual(cats, {good})
+        long_findings = imports._legacy_findings(
+            {"cat": "z" * 41, "desc": "d"}, "https://example.com/c")
+        self.assertEqual(long_findings["categories"], [])
+        self.assertTrue(any("not a short visible label" in w
+                            for w in long_findings["warnings"]))
+        self.assertEqual(imports._legacy_findings(
+            {"cat": good}, "u")["categories"], [good])
+
 
 class BackupRestoreTests(MigrationMixin, TransactionTestCase):
     def test_backup_rejects_assets_destinations_before_creating_files(self):
