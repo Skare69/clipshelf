@@ -17,13 +17,13 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.BiConsumer;
 
 import dev.clipshelf.app.Creds;
 import dev.clipshelf.app.PendingLogout;
 import dev.clipshelf.app.R;
 import dev.clipshelf.app.net.Api;
 import dev.clipshelf.app.net.Async;
-import dev.clipshelf.app.net.Async.Done;
 import dev.clipshelf.app.outbox.OutboxPolicy;
 
 /**
@@ -95,7 +95,7 @@ public class SettingsActivity extends AppCompatActivity {
                         Toast.makeText(this, R.string.collection_default_set, Toast.LENGTH_SHORT).show();
                     });
         });
-        Async.goUi(this, () -> Api.me(session.profile.endpoint, session.token), (Done<Api.Me>) (me, error) -> {
+        Async.goUi(this, () -> Api.me(session.profile.endpoint, session.token), (BiConsumer<Api.Me, Exception>) (me, error) -> {
             if (error != null) {
                 Toast.makeText(this, Ui.message(this, error), Toast.LENGTH_LONG).show();
                 return;
