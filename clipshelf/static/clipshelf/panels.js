@@ -781,7 +781,8 @@ addEventListener("keydown", e => {
     e.preventDefault(); qInput.focus();
   }
   if (e.key === "Escape" && document.activeElement === qInput && qInput.value) qClear.click();
-  else if (e.key === "Escape" && detailDlg.open && !detailDlg.matches(":modal")) detailDlg.close();
+  else if (e.key === "Escape" && detailDlg.open && !detailDlg.matches(":modal") &&
+      !document.querySelector("dialog:modal")) detailDlg.close();
 });
 function setVT(v) {
   S.vt = v; localStorage.setItem("clipshelf.view", v);
