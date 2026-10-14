@@ -45,7 +45,7 @@ class ApiTestCase(TestCase):
         user = User.objects.create_user(
             username=email, email=email, password=PASSWORD
         )
-        # api_user requires a verified mailbox; unverified accounts stay locked out.
+        # api_auth requires a verified mailbox; unverified accounts stay locked out.
         EmailAddress.objects.create(
             user=user, email=email, verified=True, primary=True
         )

@@ -2,7 +2,7 @@
 
 Every /api response is Cache-Control: no-store and authorization goes through
 clipshelf.services (collection membership) — no direct global serialization.
-Identity comes only from clipshelf.accounts.api_user (framework session or
+Identity comes only from clipshelf.accounts.api_auth (framework session or
 maintained allauth session token); proxy/forwarded headers are never read.
 """
 
@@ -69,7 +69,7 @@ _INERT_TYPES = {"text/html", "application/xhtml+xml", "application/xml", "text/x
 def api(view):
     # accounts.api_csrf is the central conditional-CSRF entry: browser
     # mutations re-run the real CSRF check; requests presenting a session
-    # token are exempt only because api_user still has to validate that token
+    # token are exempt only because api_auth still has to validate that token
     # (an invalid header never falls back to the cookie session).
     protected = accounts.api_csrf(view)
 

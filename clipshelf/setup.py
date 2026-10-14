@@ -80,7 +80,7 @@ def setup_view(request):
 
                 # Verified: whoever reaches an unconfigured server on first boot
                 # is the machine's operator; also mandatory —
-                # ACCOUNT_EMAIL_VERIFICATION is "mandatory" and accounts.api_user
+                # ACCOUNT_EMAIL_VERIFICATION is "mandatory" and accounts.api_auth
                 # rejects unverified accounts, so an unverified admin is locked
                 # out of the API.
                 user, _ = create_admin(email, password1, verified=True)

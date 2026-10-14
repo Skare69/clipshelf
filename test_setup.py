@@ -51,7 +51,7 @@ class SetupWizardTests(TestCase):
         user = User.objects.get()
         self.assertTrue(user.is_app_admin)
         self.assertTrue(user.check_password(PASSWORD))
-        # api_user rejects unverified mailboxes: an unverified admin would be
+        # api_auth rejects unverified mailboxes: an unverified admin would be
         # locked out of the API it just bootstrapped.
         address = EmailAddress.objects.get(user=user, primary=True)
         self.assertTrue(address.verified)

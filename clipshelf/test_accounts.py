@@ -26,7 +26,7 @@ from allauth.account.utils import user_pk_to_url_str
 from clipshelf import accounts, admin_views
 from clipshelf.accounts import (
     SESSION_INVITATION_KEY,
-    api_user,
+    api_auth,
     invitation_token_hash,
 )
 from clipshelf.api import json_error
@@ -55,7 +55,7 @@ TEMPLATES = [
 
 def _probe(request):
     try:
-        user = api_user(request)
+        user, _ = api_auth(request)
     except PermissionDenied:
         return json_error(401, detail="unauthenticated")
     return JsonResponse({"id": str(user.pk)})

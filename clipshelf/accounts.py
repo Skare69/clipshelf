@@ -239,12 +239,6 @@ def api_auth(request):
     return user, session
 
 
-def api_user(request):
-    """Return the active, email-verified User for this request."""
-    user, _ = api_auth(request)
-    return user
-
-
 def create_admin(email, password=None, *, verified=False):
     """Create or promote the application administrator for `email`.
 
@@ -291,7 +285,7 @@ def api_csrf(view_func):
     by default. When enabled, the csrf_exempt view's unsafe requests
     WITHOUT an X-Session-Token header are run through Django's maintained
     CSRF verification. Token requests rely on the header being a valid
-    session token, enforced by api_user.
+    session token, enforced by api_auth.
     """
 
     @wraps(view_func)
