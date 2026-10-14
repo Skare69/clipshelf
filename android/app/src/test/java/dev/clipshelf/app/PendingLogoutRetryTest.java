@@ -145,6 +145,34 @@ public class PendingLogoutRetryTest {
         assertEquals(Collections.singletonList(EMAIL), PendingLogout.pendingLabels(ctx));
     }
 
+    @Test
+    public void secondRevokeAllSkippedWhileARevokeRunIsActive() throws Exception {
+        Context ctx = RuntimeEnvironment.getApplication();
+        origin.hold(); // accepted, never answered: the first run parks in its read
+        PendingLogout.signOut(ctx, endpoint, EMAIL, "tok-a");
+
+        Thread first = new Thread(() -> PendingLogout.revokeAll(ctx), "first-revoke");
+        first.start();
+        long deadline = System.currentTimeMillis() + 10_000;
+        while (origin.hits.isEmpty() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20); // wait until the first run is parked inside Api.logout
+        }
+        assertFalse("first revokeAll never reached the held endpoint", origin.hits.isEmpty());
+
+        Thread second = new Thread(() -> PendingLogout.revokeAll(ctx), "second-revoke");
+        second.start();
+        second.join(1_000);
+        assertFalse("second revokeAll must return in under 1 s while the first run is in flight",
+                second.isAlive());
+        assertTrue("first run must still be parked at the held origin", first.isAlive());
+
+        origin.release(); // unblock the first run; the unconfirmed record stays for retry
+        first.join(60_000);
+        assertFalse("first revokeAll must finish once the endpoint unblocks", first.isAlive());
+        assertEquals("the record stays for the next run",
+                Collections.singletonList(EMAIL), PendingLogout.pendingLabels(ctx));
+    }
+
     /** Session DELETE origin: 200 for accepted tokens, 503 otherwise; records every token. */
     private static final class LogoutOrigin {
         final List<String> hits = Collections.synchronizedList(new ArrayList<>());

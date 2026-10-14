@@ -9,6 +9,7 @@ import org.json.JSONObject;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import dev.clipshelf.app.R;
 import dev.clipshelf.app.net.Api;
@@ -37,6 +38,9 @@ public final class PendingLogout {
     /** Records a call may attempt; see MAX_REVOKES_PER_CALL. */
     private static final int MAX_REVOKES_PER_CALL = 3;
     private static final Object LOCK = new Object();
+    /** True while a revokeAll run is in flight; concurrent callers skip instead
+     *  of parking a shared Async pool thread behind the in-flight run. */
+    private static final AtomicBoolean RUNNING = new AtomicBoolean();
 
     private PendingLogout() {
     }
@@ -65,12 +69,22 @@ public final class PendingLogout {
      * records per call. Confirmed records and records whose token can no
      * longer be decrypted (Keystore key lost; the session then expires
      * server-side on its own) are removed; the rest stay for the next call.
-     * Best-effort and silent: callers show state via {@link #pendingLabels}.
+     * Returns at once when another run is already active (app open racing the
+     * periodic drain): the active run leaves unconfirmed records for a later
+     * call, so no logout work is lost. Best-effort and silent: callers show
+     * state via {@link #pendingLabels}.
      */
     public static void revokeAll(Context ctx) {
-        synchronized (LOCK) {
-            attemptBounded(records(ctx), PendingLogout::tryRevoke,
-                    r -> remove(ctx, r), MAX_REVOKES_PER_CALL);
+        if (!RUNNING.compareAndSet(false, true)) {
+            return; // a run is already active; it finishes the retries it can
+        }
+        try {
+            synchronized (LOCK) {
+                attemptBounded(records(ctx), PendingLogout::tryRevoke,
+                        r -> remove(ctx, r), MAX_REVOKES_PER_CALL);
+            }
+        } finally {
+            RUNNING.set(false);
         }
     }
 
