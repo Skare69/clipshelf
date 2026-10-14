@@ -286,10 +286,10 @@ function statusOf(j) {
   }
   if (j.state === "done") return j.acquisition === "partial"
     ? ["warn", "Shelved, with notes", ""] : ["ok", "Shelved", ""];
-  if (j.state === "retry" || (j.active && why))
+  if (j.state === "retry")
     return ["warn", `Retrying soon after ${plural(j.attempts || 1, "failed attempt", "failed attempts")}`, why];
   if (j.state === "running") return ["", p.done >= 1 ? "Reading with the model" : "Fetching the page", ""];
-  return ["", p.done >= 1 ? "Waiting to read" : "Waiting to fetch", ""];
+  return ["", p.done >= 1 ? "Waiting to read" : "Waiting to fetch", j.state === "queued" ? why : ""];
 }
 function track(j) {
   const p = progress(j), reach = Math.max(p.done, p.now, p.stop);
