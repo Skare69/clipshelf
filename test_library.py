@@ -506,6 +506,39 @@ class MalformedRequestTests(ApiTestCase):
         staging = os.path.join(os.path.realpath(self._data_dir()), "staging")
         self.assertEqual(os.listdir(staging), [])
 
+    def test_lone_surrogate_capture_text_is_json_400(self):
+        # "\ud800" escapes survive json.loads but cannot be encoded to UTF-8;
+        # the body parse rejects them so services never sees one and the
+        # request answers a JSON 400, never a 500 traceback.
+        alice = self._login(self.alice)
+        response = alice.post(
+            "/api/captures",
+            data=json.dumps(
+                {
+                    "client_request_id": str(uuid.uuid4()),
+                    "instance_id": self.instance_id,
+                    "text": "https://example.com/x \ud800",
+                }
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response["Content-Type"].startswith("application/json"))
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertEqual(Capture.objects.filter(user=self.alice).count(), 0)
+
+    def test_lone_surrogate_collection_name_is_json_400(self):
+        alice = self._login(self.alice)
+        response = alice.post(
+            "/api/collections",
+            data=json.dumps({"name": "\ud800shop"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(response["Content-Type"].startswith("application/json"))
+        self.assertEqual(response["Cache-Control"], "no-store")
+        self.assertFalse(Collection.objects.exclude(kind="personal").exists())
+
     def test_bad_request_off_api_is_plain_text(self):
         from django.test import RequestFactory
 

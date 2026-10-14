@@ -37,6 +37,10 @@ def json_body(request) -> dict:
         raise ApiError(413, detail="request body too large")
     try:
         data = json.loads(body) if body else {}
+        # "\ud800" escapes survive loads but no later layer can store or send
+        # them; the round-trip encode raises UnicodeEncodeError (a ValueError),
+        # so lone surrogates answer 400 here like any other malformed body.
+        json.dumps(data, ensure_ascii=False).encode("utf-8")
     except (ValueError, RecursionError):
         raise ApiError(400, detail="malformed JSON body")
     if not isinstance(data, dict):
