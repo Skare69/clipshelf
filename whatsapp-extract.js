@@ -70,6 +70,19 @@ function entriesFor({ id, t, text = "", title = "", imageB64 = null }) {
   return rows;
 }
 
+// the export loop's per-message row choice, shared with the self-test so
+// the test runs the same code instead of a copy of it
+function rowsFor(m, imageB64) {
+  if (m.type !== "chat" && m.type !== "image") {
+    // a video/document caption can still carry links: export those rows
+    return m.caption
+      ? entriesFor({ id: m.id.id, t: m.t, text: m.caption }).filter(([s]) => s === "links")
+      : [];
+  }
+  return entriesFor({ id: m.id.id, t: m.t, title: m.title || "", imageB64,
+    text: (m.type === "image" ? m.caption : m.body) || "" });
+}
+
 // add one message's rows to `out` under both budgets; null = a budget would
 // be crossed (the caller stops, the message stays for the next run). The
 // first message always fits (bytes === 0): one message never holds thousands
@@ -163,10 +176,7 @@ async function whatsappExtract() {
     let rows;
     if (m.type !== "chat" && m.type !== "image") {
       skipped.push(`${m.type} ${iso(m.t)}`); // reported once, then marked done
-      // a video/document caption can still carry links: export those rows
-      rows = m.caption
-        ? entriesFor({ id: m.id.id, t: m.t, text: m.caption }).filter(([s]) => s === "links")
-        : [];
+      rows = rowsFor(m, null);
     } else {
       let imageB64 = null;
       if (m.type === "image") {
@@ -178,8 +188,7 @@ async function whatsappExtract() {
           continue;
         }
       }
-      rows = entriesFor({ id: m.id.id, t: m.t, title: m.title || "", imageB64,
-        text: (m.type === "image" ? m.caption : m.body) || "" });
+      rows = rowsFor(m, imageB64);
     }
     const applied = applyRows(rows, out, bytes, nLinks);
     if (!applied) { full = true; break; }
@@ -259,11 +268,20 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
     // the byte budget stops too
     assert.strictEqual(applyRows(linkRows(1, "c"), { links: {}, prompts: {} }, FILE_BUDGET, 0), null);
   }
+  // the export loop's own row choice through rowsFor: a video caption
+  // exports its link row only (never a prompt row), a caption-less video
+  // exports nothing, a chat message keeps its prompt row
+  const loop = (msg) => JSON.parse(JSON.stringify(rowsFor({ id: { id: "V1" }, t: 0, ...msg })));
+  assert.deepStrictEqual(loop({ type: "video", caption: "watch https://d.example" }),
+    [["links", "https://d.example", { desc: "watch https://d.example", found }]]);
+  assert.deepStrictEqual(loop({ type: "video" }), []);
+  assert.deepStrictEqual(loop({ type: "chat", body: "ASD-STE100" }),
+    [["prompts", "V1", { text: "ASD-STE100", found }]]);
   // a video/document caption exports its link rows only (never a prompt
   // row), through the same budgets; a caption with no URL adds nothing
   {
     const out = { links: {}, prompts: {} };
-    const cap = (text) => entriesFor({ id: "V1", t: 0, text }).filter(([s]) => s === "links");
+    const cap = (text) => rowsFor({ id: { id: "V1" }, t: 0, type: "video", caption: text });
     assert.strictEqual(applyRows(cap("watch https://d.example now"), out, 0, 0)[0], 1);
     assert.deepStrictEqual(Object.keys(out.links), ["https://d.example"]);
     assert.deepStrictEqual(out.prompts, {});
