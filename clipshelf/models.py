@@ -211,10 +211,12 @@ class Job(models.Model):
 
     @property
     def needs_attention(self) -> bool:
-        """Blocked as a whole, or any stage the operator must look at.
+        """Blocked as a whole, or a failed stage on a job the scheduler has
+        stopped working on; active jobs answer for themselves via retry.
         Terminal-host jobs are shelved, not attention-seeking."""
         return (
-            not self.terminal
+            not self.active
+            and not self.terminal
             and (
                 self.state == self.State.BLOCKED
                 or self.acquisition

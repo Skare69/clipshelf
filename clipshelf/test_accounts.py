@@ -890,6 +890,14 @@ class JobPolicyTests(SimpleTestCase):
             self.assertTrue(job.active)
             self.assertFalse(job.can_retry)
             self.assertFalse(job.needs_attention)
+            # A failed stage under scheduler retry (models.Job.fail) is not
+            # the operator's problem yet: can_retry is false and the job line
+            # already says "Retrying soon".
+            self.assertFalse(
+                self._job(
+                    state=state, acquisition=Job.AcquisitionStatus.ERROR
+                ).needs_attention
+            )
 
     def test_finished_jobs_stay_reprocessable(self):
         for state in (Job.State.BLOCKED, Job.State.DONE):
@@ -905,7 +913,13 @@ class JobPolicyTests(SimpleTestCase):
             ("interpretation", Job.InterpretationStatus.BLOCKED),
             ("interpretation", Job.InterpretationStatus.ERROR),
         ):
-            self.assertTrue(self._job(**{field: status}).needs_attention)
+            # error set: a bare done+interpretation-blocked row is a shelved
+            # terminal link (see the terminal test), not a failure.
+            self.assertTrue(
+                self._job(
+                    state=Job.State.DONE, error="stage failed", **{field: status}
+                ).needs_attention
+            )
         self.assertFalse(
             self._job(
                 state=Job.State.DONE,
