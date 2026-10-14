@@ -180,7 +180,7 @@ Source: `ofl/archivo/Archivo[wdth,wght].ttf` in google/fonts at commit
 Latin Extended-A and B, general punctuation, arrows) made with fontTools 4.66.1.
 The Android files are static instances of that source (wght/wdth: 400/100,
 600/100, 700/100, 800/88, 800/70). The font declares no Reserved Font Name. The
-files keep the copyright and license fields in their name tables, and the
+files keep the copyright field (name ID 0) in their name tables, and the
 license text is under "Full license texts".
 
 ## Server image contents beyond pip
