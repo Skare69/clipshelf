@@ -434,7 +434,15 @@ def api_entries(request):
     if limit <= 0:
         raise ApiError(400, detail="limit must be positive")
     limit = min(limit, MAX_PAGE)
-    return JsonResponse({"entries": filtered[offset : offset + limit], "count": len(filtered)})
+    # Category counts cover the whole filtered library, not just the returned
+    # page: the client rail shows every category with its full count.
+    cats = {}
+    for item in filtered:
+        name = next(iter(item.get("cat") or ()), "") or "Other"
+        cats[name] = cats.get(name, 0) + 1
+    return JsonResponse(
+        {"entries": filtered[offset : offset + limit], "count": len(filtered), "cats": cats}
+    )
 
 
 @api

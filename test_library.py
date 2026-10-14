@@ -841,6 +841,26 @@ class EntryApiTests(ApiTestCase):
         self.assertEqual(response.json()["count"], 1)
         self.assertEqual(response.json()["entries"][0]["id"], str(entry.id))
 
+    def test_category_counts_cover_the_whole_library(self):
+        # 150 entries; "Zebra" sorts after the first page of titles, so the
+        # counts must not be taken from the returned page alone.
+        for i in range(150):
+            entry, _ = self._contribute(
+                self.alice, self.alice_personal,
+                f"https://example.com/item-{i:03d}", asset_ct="")
+            if i >= 100:
+                Contribution.objects.filter(entry=entry, user=self.alice).update(
+                    data={"categories": ["Zebra"]}
+                )
+        # The web client's first load requests sort=az, limit=100.
+        payload = self._login(self.alice).get(
+            "/api/entries", {"sort": "az", "limit": "100"}
+        ).json()
+        self.assertEqual(payload["count"], 150)
+        self.assertEqual(len(payload["entries"]), 100)
+        self.assertFalse(any("Zebra" in item["cat"] for item in payload["entries"]))
+        self.assertEqual(payload["cats"], {"Other": 100, "Zebra": 50})
+
     def test_other_filter_matches_uncategorized_and_real_category(self):
         uncategorized, _ = self._contribute(
             self.alice, self.alice_personal, "https://example.com/uncategorized"

@@ -102,12 +102,10 @@ async function loadEntries(reset) {
     if (seq !== S.seq || S.view !== "library") return;
     S.entries = S.entries.concat(j.entries || []);
     S.count = j.count || 0;
-    if (unfiltered) S.total = S.count;
+    // The server counts categories over the whole filtered library; the rail
+    // must show categories whose items sit beyond this page.
+    if (unfiltered) { S.total = S.count; S.cats = new Map(Object.entries(j.cats || {})); }
     for (const e of j.entries || []) {
-      if (unfiltered) {
-        const c = note(e) || "Other";
-        S.cats.set(c, (S.cats.get(c) || 0) + 1);
-      }
       for (const t of e.tags || []) S.tags.add(t);
     }
     $("#nLib").textContent = S.total || "";
@@ -799,4 +797,4 @@ onEnter("library", () => { libHead(); loadEntries(true); });
 onEnter("inbox", () => { inboxHead(); S.capsLoaded = false; loadCaptures(); pollCaptures(); });
 onEnter("collections", renderCollections);
 onEnter("settings", renderSettings);
-export { progress, refreshInboxCount, renderToc, setInboxCount, statusOf };
+export { loadEntries, progress, refreshInboxCount, renderToc, setInboxCount, statusOf };
