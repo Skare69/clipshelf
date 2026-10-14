@@ -9,6 +9,7 @@ import hashlib
 import re
 import time
 from datetime import timedelta
+from django.views.decorators.csrf import csrf_protect
 from functools import wraps
 
 from django.contrib import messages
@@ -35,6 +36,7 @@ from allauth.account import app_settings as account_settings
 from allauth.account.adapter import DefaultAccountAdapter, get_adapter
 from allauth.account.forms import SignupForm
 from allauth.account.internal.flows.login import AUTHENTICATION_METHODS_SESSION_KEY
+from allauth.account.urls import urlpatterns as allauth_account_urlpatterns
 from allauth.account.models import EmailAddress
 from allauth.headless import app_settings as headless_settings
 from allauth.headless.constants import Client
@@ -351,8 +353,20 @@ def has_recent_reauthentication(request) -> bool:
     )
 
 
+def _csrf_protect_allauth(patterns):
+    # Applies the token check to every allauth browser view even with
+    # CLIPSHELF_CSRF off, like @csrf_protect on setup_view: SameSite=Lax
+    # cannot stop a cross-site login POST, because the request needs no
+    # existing cookie. Headless views (allauth.headless.urls) keep their
+    # session-token authentication and stay out of this.
+    for pattern in patterns:
+        if getattr(pattern, "callback", None) is not None:
+            pattern.callback = csrf_protect(pattern.callback)
+    return patterns
+
+
 account_urlpatterns = [
-    path("accounts/", include("allauth.account.urls")),
+    path("accounts/", include(_csrf_protect_allauth(allauth_account_urlpatterns))),
     path("_allauth/", include("allauth.headless.urls")),
     path("invite/<str:token>", invite_view, name="clipshelf_invite"),
 ]

@@ -113,6 +113,51 @@ class AccountTestCase(TestCase):
         )
 
 
+@override_settings(ROOT_URLCONF="clipshelf.test_accounts", TEMPLATES=TEMPLATES)
+class BrowserLoginCsrfTests(TestCase):
+    """The allauth browser login checks the CSRF token even with
+    CLIPSHELF_CSRF off: SameSite=Lax cannot stop a cross-site login POST,
+    because the request needs no existing cookie."""
+
+    def test_login_without_token_is_rejected_and_with_token_logs_in(self):
+        make_user("victim@clipshelf.test")
+        client = Client(enforce_csrf_checks=True)
+        evil = client.post(
+            "/accounts/login/",
+            data={"login": "victim@clipshelf.test", "password": PASSWORD},
+            HTTP_ORIGIN="https://evil.example",
+        )
+        self.assertEqual(evil.status_code, 403)
+        self.assertNotIn("_auth_user_id", client.session)
+
+        client.get("/accounts/login/")
+        good = client.post(
+            "/accounts/login/",
+            data={
+                "login": "victim@clipshelf.test",
+                "password": PASSWORD,
+                "csrfmiddlewaretoken": client.cookies[settings.CSRF_COOKIE_NAME].value,
+            },
+            HTTP_ORIGIN="http://testserver",
+        )
+        self.assertEqual(good.status_code, 302)
+        self.assertIn("_auth_user_id", client.session)
+
+    def test_headless_login_stays_exempt_from_browser_csrf(self):
+        # The Android client authenticates through /_allauth/ with the
+        # session-token strategy and must keep working without a CSRF token.
+        make_user("mobile@clipshelf.test")
+        client = Client(enforce_csrf_checks=True)
+        response = client.post(
+            "/_allauth/app/v1/auth/login",
+            data=json.dumps(
+                {"email": "mobile@clipshelf.test", "password": PASSWORD}
+            ),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 200)
+
+
 class InvitationFlowTests(AccountTestCase):
     def test_invite_then_signup_consumes_invitation_and_requires_verification(self):
         token, invitation = make_invitation("invitee@clipshelf.test", self.admin)

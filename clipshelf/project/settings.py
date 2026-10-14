@@ -2,8 +2,9 @@
 
 Zero required environment variables: the data directory (CLIPSHELF_DATA_DIR or
 ./data) holds the SQLite database and a generated secret key; hosts default to
-"*" for LAN use. CSRF protection and HTTPS hardening are opt-in via
-CLIPSHELF_CSRF=1 and CLIPSHELF_ORIGIN. One web process + one worker
+"*" for LAN use. API CSRF protection and HTTPS hardening are opt-in via
+CLIPSHELF_CSRF=1 and CLIPSHELF_ORIGIN; browser forms always check the CSRF
+token (accounts.py, setup.py). One web process + one worker
 coordinator; caches are process-local on purpose (see CACHES).
 """
 import os
