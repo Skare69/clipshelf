@@ -526,5 +526,27 @@ class CheckNoticesApkTests(unittest.TestCase):
         self.assertIn("cannot read", errors[0])
 
 
+class MainTests(unittest.TestCase):
+    def run_main(self, *argv):
+        calls = []
+        recorders = {name: (lambda *a, name=name: calls.append(name))
+                     for name in ("check_python", "check_image", "check_android",
+                                  "check_apk", "check_notices")}
+        with patch("sys.argv", ["check_licenses.py", *argv]), \
+                patch.multiple(check_licenses, **recorders):
+            code = check_licenses.main()
+        return code, calls
+
+    def test_default_mode_checks_python_image_and_notices(self):
+        code, calls = self.run_main()
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["check_python", "check_image", "check_notices"])
+
+    def test_android_mode_checks_android_apk_and_notices(self):
+        code, calls = self.run_main("android", "--deps", "d", "--apk", "a")
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, ["check_android", "check_apk", "check_notices"])
+
+
 if __name__ == "__main__":
     unittest.main()
