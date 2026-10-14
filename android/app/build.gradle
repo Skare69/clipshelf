@@ -33,9 +33,7 @@ def releaseVersion = {
     [name: "$major.$minor.$patch", code: major * 1_000_000 + minor * 1_000 + patch]
 }()
 
-// THIRD_PARTY_NOTICES.md ships inside the APK assets, copied at build time
-// from the repo root — the single committed copy (notices policy item 4).
-// check_licenses.py android mode asserts the built APK carries the file.
+// THIRD_PARTY_NOTICES.md ships in the APK assets (notices policy item 4).
 def noticesAssetDir = layout.buildDirectory.dir("generated/thirdPartyNotices")
 tasks.register("copyThirdPartyNotices", Copy) {
     from(rootProject.file("../THIRD_PARTY_NOTICES.md"))

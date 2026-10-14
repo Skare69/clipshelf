@@ -20,10 +20,11 @@ is the machine-readable twin of this file; `check_licenses.py` enforces both.
    application. Any new copyleft dependency requires operator review.
 3. **Gate, both directions.** A dependency that appears in reality but not in
    `license_inventory.toml` fails CI, and so does an inventory entry that is
-   no longer real. Adding any dependency (pip line, gradle line, apt line, or
-   a new transitive) means: review its license, add it to the inventory, add
-   it to this file. `check_licenses.py` runs in ci.yml (python job and
-   android job).
+   no longer real. Adding any dependency (pip line, gradle line, apt line,
+   external image via `COPY --from` or `RUN --mount=from=`, or a new
+   transitive) means: review its license, add it to the inventory, add it to
+   this file. Package-manager use the gate cannot parse also fails.
+   `check_licenses.py` runs in ci.yml (python job and android job).
 4. **Notices ship.** This file is `COPY`-ed into the server image and packed
    byte-identically into the Android APK assets at build time: the repo keeps
    only this root copy, and `copyThirdPartyNotices` in
