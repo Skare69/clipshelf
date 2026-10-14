@@ -7,7 +7,9 @@
         same-origin /api/assets/<uuid> URL (fails on the original bug where
         relative /api/assets URLs were dropped by safeUrl), and
      2. dangerous URLs (external hosts, other paths, schemes, queries,
-        fragments, traversal) render no media and no link.
+        fragments, traversal) render no media and no link, and
+     3. an entry with no url, tags, sources or install renders no "null"
+        text (the stub stringifies non-node children like the real DOM).
    Uses node: builtins only; never talks to the network. */
 import assert from "node:assert/strict";
 
@@ -26,16 +28,17 @@ function fakeEl(tag) {
     setAttribute(k, v) { this.attributes[k] = String(v); },
     getAttribute(k) { return this.attributes[k] ?? null; },
     append(...kids) {
+      // The real DOM stringifies non-node kids into text nodes (null -> "null").
       for (const k of kids.flat(9)) {
-        if (k == null) continue;
-        if (typeof k === "object") { k.parentElement = this; this.children.push(k); }
-        this.childNodes.push(k);
+        const node = k != null && typeof k === "object" ? k : String(k);
+        if (typeof node === "object") { node.parentElement = this; this.children.push(node); }
+        this.childNodes.push(node);
       }
     },
     replaceChildren(...kids) {
-      this.children = kids.filter((k) => k != null);
+      this.children = kids.filter((k) => k != null && typeof k === "object");
       this.children.forEach((k) => (k.parentElement = this));
-      this.childNodes = [...this.children];
+      this.childNodes = kids.map((k) => k != null && typeof k === "object" ? k : String(k));
     },
     addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); },
     closest(sel) {
@@ -102,6 +105,8 @@ await renderEntry([
   { kind: "audio", content_type: "audio/ogg", url: AUD, name: "take.ogg" },
   { kind: "page", content_type: "text/plain", url: TXT, name: "notes.txt" },
 ]);
+assert.ok(!detBody.textContent.includes("null"),
+  `an entry with no url/tags/sources/install must render no "null" text, got: ${JSON.stringify(detBody.textContent)}`);
 {
   const srcs = mediaSrcs().map((n) => n.attributes.src).sort();
   assert.deepEqual(srcs,
