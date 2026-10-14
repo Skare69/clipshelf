@@ -259,9 +259,11 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     """
     if not isinstance(items, list):
         raise ValidationError("import payload must be a list of items")
-    if len(items) > services.MAX_IMPORT_ITEMS:
+    prompts = list(prompts or [])
+    if len(items) + len(prompts) > services.MAX_IMPORT_ITEMS:
         raise ValidationError(
-            f"too many items ({len(items)} > {services.MAX_IMPORT_ITEMS})")
+            f"too many items ({len(items) + len(prompts)} > "
+            f"{services.MAX_IMPORT_ITEMS})")
     collection, notice = services.destination_for(user, collection_id)
 
     seen = {} if seen is None else seen
@@ -277,7 +279,6 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     removed_urls = list(removed)
     removed_keys = {lib.norm(url) or url for url in removed_urls}
     items = _dedupe(items, removed_keys)
-    prompts = list(prompts or [])
 
     digest = _input_digest(items, prompts, seen, removed, cache_dir)
     existing = (None if dry_run else

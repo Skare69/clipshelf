@@ -689,7 +689,10 @@ def api_import(request):
         _scan_import_keys(data)
         # Admission rejects an over-cap payload before the ImportRecord
         # exists; the worker's own check is a backstop for other paths.
-        count = len(data) if fmt == "tiktok" else len(data["links"])
+        prompts = (data.get("prompts") or {}) if fmt == "legacy" else {}
+        if not isinstance(prompts, dict):
+            raise ApiError(400, detail="legacy 'prompts' must be a JSON object")
+        count = len(data) if fmt == "tiktok" else len(data["links"]) + len(prompts)
         if count > services.MAX_IMPORT_ITEMS:
             raise ApiError(
                 400,

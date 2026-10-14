@@ -1144,6 +1144,15 @@ class ImportTests(ApiTestCase):
             {"links": {f"https://e.example/{i}": {} for i in range(5001)}}
         ).encode()
         self.assertEqual(self._post_import(alice, legacy).status_code, 400)
+        # Prompts count toward the cap too: 0 links + 5001 prompts is over.
+        prompts = json.dumps(
+            {"links": {}, "prompts": {f"m{i}": {"text": "hi"} for i in range(5001)}}
+        ).encode()
+        over_prompts = self._post_import(alice, prompts)
+        self.assertEqual(over_prompts.status_code, 400)
+        self.assertEqual(
+            over_prompts.json()["detail"], "too many items (5001 > 5000)"
+        )
         self.assertEqual(
             ImportRecord.objects.filter(user=self.alice).count(), 1
         )

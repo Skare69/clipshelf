@@ -34,7 +34,7 @@ const SEEN_KEY = "clipshelf-wa-seen";
 // if your server's ceiling is smaller.
 const FILE_BUDGET = 30e6;
 // mirrors clipshelf services.MAX_IMPORT_ITEMS: the server rejects an upload
-// with more link entries than this
+// with more link and prompt entries than this
 const ITEM_BUDGET = 5000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -87,10 +87,10 @@ function rowsFor(m, imageB64) {
 // be crossed (the caller stops, the message stays for the next run). The
 // first message always fits (bytes === 0): one message never holds thousands
 // of links.
-function applyRows(rows, out, bytes, nLinks) {
+function applyRows(rows, out, bytes, nItems) {
   const size = new Blob([JSON.stringify(rows)]).size;
-  const add = rows.filter(([s, k]) => s === "links" && !(k in out.links)).length;
-  if (bytes && (bytes + size > FILE_BUDGET || nLinks + add > ITEM_BUDGET)) return null;
+  const add = rows.filter(([s, k]) => (s === "links" || s === "prompts") && !(k in out[s])).length;
+  if (bytes && (bytes + size > FILE_BUDGET || nItems + add > ITEM_BUDGET)) return null;
   for (const [section, key, entry] of rows) out[section][key] ??= entry;
   return [add, size];
 }
@@ -171,7 +171,7 @@ async function whatsappExtract() {
 
   const out = { links: {}, prompts: {} };
   const done = [], skipped = [], failed = [];
-  let bytes = 0, nLinks = 0, full = false;
+  let bytes = 0, nItems = 0, full = false;
   for (const m of fresh) {
     let rows;
     if (m.type !== "chat" && m.type !== "image") {
@@ -190,9 +190,9 @@ async function whatsappExtract() {
       }
       rows = rowsFor(m, imageB64);
     }
-    const applied = applyRows(rows, out, bytes, nLinks);
+    const applied = applyRows(rows, out, bytes, nItems);
     if (!applied) { full = true; break; }
-    nLinks += applied[0];
+    nItems += applied[0];
     bytes += applied[1];
     done.push(m.id.id);
   }
@@ -277,6 +277,15 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
   assert.deepStrictEqual(loop({ type: "video" }), []);
   assert.deepStrictEqual(loop({ type: "chat", body: "ASD-STE100" }),
     [["prompts", "V1", { text: "ASD-STE100", found }]]);
+  // prompt rows count against the same item budget
+  {
+    const promptRows = (n, tag) => Array.from({ length: n }, (_, i) =>
+      ["prompts", `${tag}${i}`, { text: "hi", found }]);
+    const out = { links: {}, prompts: {} };
+    assert.strictEqual(applyRows(promptRows(ITEM_BUDGET, "a"), out, 0, 0)[0], ITEM_BUDGET);
+    assert.strictEqual(applyRows(promptRows(1, "b"), out, 1, ITEM_BUDGET), null);
+    assert.strictEqual(Object.keys(out.prompts).length, ITEM_BUDGET);
+  }
   // a video/document caption exports its link rows only (never a prompt
   // row), through the same budgets; a caption with no URL adds nothing
   {
