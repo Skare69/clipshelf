@@ -757,6 +757,20 @@ def test_interpretation_bounds():
         "Video generation", "Claude Code ecosystem", legacy, "x" * 40]
     assert sum("not a short visible label" in w for w in warnings) == 2, warnings
 
+    # regression 68df78b9: isprintable() alone keeps invisible characters that
+    # render blank or smuggle hidden bytes into later prompts (hangul fillers,
+    # braille blank, combining grapheme joiner, khmer inherent vowels,
+    # variation selectors); a label also needs a letter or digit
+    warnings = []
+    invisible = interp._validated(
+        {"summary": "s", "repos": [], "prompts": [], "links": [], "installs": [],
+         "warnings": [], "categories": [
+             "\u3164", "\u2800", "A" + "\U000E0100" * 5, "\u034f", "\u17b4",
+             "\u115f\u1160", "\uffa0", "A" + "\ufe00" * 21, "—", "..."]},
+        source["url"], [], warnings)
+    assert invisible["categories"] == [], invisible["categories"]
+    assert len(warnings) == 10, warnings
+
     # an over-long copied URL drops with a warning instead of failing the
     # whole interpretation (a retry cannot shorten a URL the model copies)
     warnings = []

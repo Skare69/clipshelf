@@ -61,6 +61,14 @@ LLM_RESPONSE_MAX = 16 << 20
 OUTPUT_TOKENS_MAX = 2000
 REPOS_MAX, LINKS_MAX, PROMPTS_MAX, INSTALLS_MAX, WARNINGS_MAX, CATEGORIES_MAX = \
     10, 20, 20, 20, 10, 10
+# Invisible characters that str.isprintable() lets through: hangul fillers,
+# braille blank, combining grapheme joiner, khmer inherent vowels, variation
+# selectors (all Default_Ignorable members in categories Cf/Cn are already
+# rejected by isprintable()).
+_INVISIBLE_CHARS = frozenset(
+    "\u034f\u115f\u1160\u17b4\u17b5\u2800\u3164\uffa0"
+    + "".join(map(chr, range(0xFE00, 0xFE10)))
+    + "".join(map(chr, range(0xE0100, 0xE01F0))))
 VERIFY_URLS_MAX, VERIFY_URL_BYTES_MAX = 20, 64 << 10
 
 _SYSTEM_PROMPT = (
@@ -400,7 +408,9 @@ def _validated(raw, source_url, categories, warnings):
     for text in _clean_list(raw["categories"], CATEGORIES_MAX, 100, "categories"):
         if text.casefold() in known:
             cats.append(known[text.casefold()])
-        elif 0 < len(text) <= 40 and text.isprintable():
+        elif (0 < len(text) <= 40 and text.isprintable()
+              and not any(ch in _INVISIBLE_CHARS for ch in text)
+              and any(ch.isalnum() for ch in text)):
             cats.append(text)
         elif text:
             warnings.append(f"category {text[:50]!r} is not a short visible label; dropped")
