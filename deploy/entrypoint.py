@@ -13,7 +13,8 @@ Ops (first argument, default `serve`):
   bootstrap          create an administrator via CLI (requires
                      CLIPSHELF_ADMIN_EMAIL; recovery path beside the wizard)
   check              run Django system checks (diagnostics; app settings
-                     still enforce the SQLite floor unless CLIPSHELF_DEBUG=1)
+                     still enforce the SQLite floor unless CLIPSHELF_DEBUG=1
+                     or CLIPSHELF_SQLITE_VERIFIED=1)
 
 The SQLite >= 3.51.3 floor is enforced once, at django.setup() in app
 settings, which every op runs through clipshelf.py; the in-image build is
