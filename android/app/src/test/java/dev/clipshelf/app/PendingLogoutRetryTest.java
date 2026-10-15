@@ -151,8 +151,10 @@ public class PendingLogoutRetryTest {
     @Test
     public void secondRevokeAllSkippedWhileARevokeRunIsActive() throws Exception {
         Context ctx = RuntimeEnvironment.getApplication();
-        origin.hold(); // accepted, never answered: the first run parks in its read
+        origin.accept(); // 503 at once: the record is kept for retry and the origin stays free
         PendingLogout.signOut(ctx, endpoint, EMAIL, "tok-a");
+        origin.hold(); // accepted, never answered: the first run parks in its read
+        origin.hits.clear(); // gate on the first run's own hit; the sign-out already recorded one
 
         Thread first = new Thread(() -> PendingLogout.revokeAll(ctx), "first-revoke");
         first.start();
