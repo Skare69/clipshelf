@@ -552,12 +552,14 @@ class ImportTests(MigrationMixin, TestCase):
         call whose only purpose was to pass that deleted check."""
         items = [{"url": f"https://www.tiktok.com/@u/video/{i}"} for i in range(501)]
         calls = []
+        real_import_export = acquisition.import_export
 
-        def spy(batch, directory):
-            calls.append(len(batch))
-            return fake_import_export(batch, directory)
+        def spy(items, directory):
+            calls.append(len(items))
+            return real_import_export(items, directory)
 
         with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire), \
                 mock.patch("clipshelf.acquisition.import_export", side_effect=spy):
             result = imports.import_items(user=self.user, collection_id=None,
                                           items=items, prompts=[],
