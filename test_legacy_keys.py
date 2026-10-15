@@ -182,11 +182,11 @@ class MergeVariantTests(KeysFixtureMixin, TestCase):
 
     def test_merge_source_summary_lands_in_contribution_desc(self):
         imports.merge_findings(
-            self.alice, [{"source": "https://example.com/s",
-                          "summary": "the longest summary",
-                          "repos": [], "links": [], "prompts": []}])
+            self.user, [{"source": "https://example.com/s",
+                         "summary": "the longest summary",
+                         "repos": [], "links": [], "prompts": []}])
         entry = models.Entry.objects.get(collection=self.personal, kind="link")
-        contribution = entry.contributions.get(user=self.alice)
+        contribution = entry.contributions.get(user=self.user)
         self.assertEqual(contribution.data["desc"], "the longest summary")
 
 
@@ -221,12 +221,14 @@ class LegacyPayloadTests(TestCase):
             {"links": {"https://example.com/a": {"title": "Legacy Title"}}})
         self.assertEqual(result["items"][0]["title"], "Legacy Title")
 
-    def test_prompt_plans_keep_found_and_interpreted(self):
+    def test_prompt_plans_keep_interpreted_and_drop_found(self):
+        # The entry data keeps interpreted as a bool; found lives only in
+        # the import manifest.
         plans = imports._prompt_plans(
             [{"text": "P", "title": "T", "cat": "c",
               "found": "somewhere", "interpreted": "yes"}])
-        self.assertEqual(plans[0]["data"]["found"], "somewhere")
-        self.assertEqual(plans[0]["data"]["interpreted"], "yes")
+        self.assertIs(plans[0]["data"]["interpreted"], True)
+        self.assertNotIn("found", plans[0]["data"])
 
     def test_manifest_prompts_keep_found_and_interpreted(self):
         manifest = imports._manifest(
