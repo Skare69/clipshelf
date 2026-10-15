@@ -334,7 +334,7 @@ suite still passes is a survived mutant — a behavior no test guards.
   full CI test suite for each of exactly 116 evenly spaced sites across
   `DEFAULT_TARGETS`, in listed file/AST order. For site count `S`, the chosen
   indices are `floor(i*S/116)` for `i = 0..115`; use the same commit and target
-  list to repeat a score. The `DEFAULT_FAIL_UNDER` floor is 87%; never lower it.
+  list to repeat a score. The `DEFAULT_FAIL_UNDER` floor is 94%; never lower it.
 - The old stride sampler did **not** select the requested count: 950 sites with
   `--max-mutants 116` gave stride 9 and just 106 mutants (73/106 = 68.9% in
   the release review). The earlier 94/116 = 81.0% record cannot come from

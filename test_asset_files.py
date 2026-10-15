@@ -7,6 +7,7 @@ import shutil
 import tempfile
 import uuid
 from pathlib import Path
+from unittest import mock
 
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, TestCase, override_settings
@@ -152,12 +153,28 @@ class PublishTests(CustodyMixin, SimpleTestCase):
             asset_files.publish(escape, staging, move=True)
         self.assertEqual(outside.read_bytes(), b"outside")
         missing = {"assets": [{"path": str(staging / "gone.bin"), "kind": "page"}]}
-        with self.assertRaises(ValidationError):
+        with self.assertRaises(ValidationError) as cm:
             asset_files.publish(missing, staging, move=False)
+        self.assertIn("staged asset is missing: gone.bin", str(cm.exception))
+        self.assertEqual(cm.exception.code, "invalid")
 
     def test_empty_assets_publish_nothing(self):
         self.assertEqual(asset_files.publish({"assets": []}, self.tmp, move=True), [])
         self.assertEqual(asset_files.publish({}, self.tmp, move=False), [])
+
+    def test_publish_reuses_a_repeated_root_and_indexes_dest_names(self):
+        staging = self.stage("0-page.html", b"hi")
+        staged = str(staging / "0-page.html")
+        fixed = mock.patch.object(asset_files.uuid, "uuid4",
+                                  lambda: mock.Mock(hex="f" * 32))
+        with fixed:
+            first = asset_files.publish(
+                {"assets": [{"path": staged, "kind": "page"}]}, staging, move=False)
+            second = asset_files.publish(
+                {"assets": [{"path": staged, "kind": "page"}]}, staging, move=False)
+        self.assertEqual(Path(first[0]["path"]).parent, Path(second[0]["path"]).parent)
+        self.assertTrue(Path(first[0]["path"]).is_file())
+        self.assertEqual(Path(first[0]["path"]).name, "0-0-page.html")
 
 
 class PrepareTests(CustodyMixin, SimpleTestCase):
@@ -238,6 +255,18 @@ class PrepareTests(CustodyMixin, SimpleTestCase):
         )
         self.assertEqual(prepared[0]["content_type"], "t" * 255)
 
+    def test_prepare_rejection_messages_name_the_problem(self):
+        missing = self.tmp / "assets" / "nope" / "0-page.html"
+        with self.assertRaises(ValidationError) as cm:
+            asset_files.prepare([{"path": str(missing), "kind": "page"}])
+        self.assertTrue(cm.exception.message_dict["assets"][0].endswith(
+            "must be published before storing."))
+        with self.assertRaises(ValidationError) as cm:
+            asset_files.prepare([{"path": str(self.store(b"x")), "kind": "page",
+                                  "position": "soon"}])
+        self.assertEqual(cm.exception.message_dict["assets"][0],
+                         "Invalid asset position.")
+
 
 class LinkKeyTests(SimpleTestCase):
     """The urlsplit fallback only runs for URLs lib.norm rejects (credentials,
@@ -264,6 +293,14 @@ class PromptKeyTests(SimpleTestCase):
         )
         self.assertEqual(publication.prompt_key("  a   b "), publication.prompt_key("A B"))
         self.assertEqual(len(publication.prompt_key("x")), 16)
+
+
+class PromptDigestTests(SimpleTestCase):
+    def test_prompt_digest_hashes_whitespace_normalized_utf8(self):
+        self.assertEqual(publication.prompt_digest("hello\tworld"),
+                         hashlib.sha256(b"hello world").hexdigest())
+        self.assertEqual(publication.prompt_digest(" hello \n world "),
+                         publication.prompt_digest("hello world"))
 
 
 class PublishPromptTests(TestCase):

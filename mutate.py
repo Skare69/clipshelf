@@ -64,17 +64,20 @@ DEFAULT_TIMEOUT = 120
 # Ratchet: 116 evenly spaced sites of the default scope. The old stride
 # sampler changed both count and membership when the scope grew: 921 sites /
 # stride 8 gave 116; 950 sites / stride 9 gave only 106.
-# Floor = the clean score this harness measures: 101/116 = 87.1% on the
-# 971-site scope, after the v0.11.0 review's default-scope survivors were
-# pinned by tests (0 timeouts; a non-zero suite exit always kills, so noise
-# only raises scores). The sampled "" hostname fallback at clipshelf/lib.py:74
-# is behaviorally equivalent and stays survived. Re-measure whenever the scope
-# changes: membership drift is large (956 -> 971 sites moved the score from
-# 66.4% to 79.3%), and defect-inflated earlier readings (stale bytecode,
-# 76.7%) are not baselines.
+# Floor = the clean score this harness measures: 110/116 = 94.8% on the
+# 1030-site scope after the v0.11.0 review's survivors and the 2026-10-15
+# rebase drift were pinned by tests (0 timeouts; a non-zero suite exit always
+# kills, so noise only raises scores). The six remaining survivors are
+# behaviorally equivalent: the "" hostname fallback at clipshelf/lib.py:89,
+# the screened-init flag (its value only matters past positive steer
+# thresholds), the PIL draft hint mode, the invisible-range end, the severity
+# fallback (1.0 stays under the 1.5 withhold bound), and a warning cap no
+# message can exceed. Re-measure whenever the scope changes: membership drift
+# is large (956 -> 971 sites moved the score from 66.4% to 79.3%), and
+# defect-inflated earlier readings (stale bytecode, 76.7%) are not baselines.
 # ponytail: margin is rounding only; pin the remaining survivors to raise
 # the floor further.
-DEFAULT_FAIL_UNDER = 87
+DEFAULT_FAIL_UNDER = 94
 
 CMP = {ast.Eq: ast.NotEq, ast.NotEq: ast.Eq, ast.Lt: ast.GtE, ast.GtE: ast.Lt,
        ast.Gt: ast.LtE, ast.LtE: ast.Gt, ast.In: ast.NotIn, ast.NotIn: ast.In,

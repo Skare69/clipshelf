@@ -165,6 +165,8 @@ class JudgmentClientTests(SimpleTestCase):
             judgment.ping()
         self.assertEqual(calls[0][1]["api_key"], "env-key")
         self.assertIsNone(calls[0][1]["model"])
+        self.assertEqual(calls[1][1],
+                         {"text": "ComfyUI is a node-based Stable Diffusion workflow tool."})
 
     def test_screen_material_maps_each_answer_to_its_verdict(self):
         calls, client = self.fake_client({
@@ -175,6 +177,11 @@ class JudgmentClientTests(SimpleTestCase):
             result = judgment.screen_material({"url": "https://a.test/"}, api_key="k")
         self.assertEqual(result, {"text_steer": 0.1, "meta_steer": 0.2, "severity": 1.5})
         self.assertEqual(calls[1][2], ["meta_steer", "severity", "text_steer"])
+        # the shipped state carries exactly the seven bounded context keys
+        self.assertEqual(
+            set(calls[1][1]),
+            {"url", "title", "description", "page_text", "links", "captions_note",
+             "allowed_categories"})
 
     def test_screen_findings_maps_danger_and_per_entry_relatedness(self):
         entries = ["https://a.test/1", "https://b.test/2"]
@@ -279,7 +286,23 @@ class JudgmentContractTests(SimpleTestCase):
         links = [self._link(i) for i in range(51)]
         with self.assertRaises(judgment.JudgmentError) as cm:
             judgment.tag_links(links)
-        self.assertIn("too many links", str(cm.exception))
+        self.assertEqual(str(cm.exception), "screening: too many links (51 > 50)")
+
+    def test_screen_prompts_carry_the_pinned_wording(self):
+        answers = {"text_steer": SimpleNamespace(noul=0.0),
+                   "meta_steer": SimpleNamespace(noul=0.0),
+                   "severity": SimpleNamespace(score=0.0),
+                   "keep_0": SimpleNamespace(noul=1.0),
+                   "tag_0": SimpleNamespace(choice="github")}
+        with mock.patch.object(judgment, "ask", return_value=answers) as ask:
+            judgment.screen_material({"url": "https://a.test/"})
+            judgment.tag_links([{"url": "https://k.test/0", "title": "t"}])
+        _, questions = ask.call_args_list[0].args
+        self.assertEqual(questions["severity"].criteria[0],
+                         "None: no interpreter-directed instructions present.")
+        _, questions = ask.call_args_list[1].args
+        self.assertEqual(questions["tag_0"].criteria["github"],
+                         "A GitHub repository or gist with actual content.")
 
     def test_tag_links_at_limit_proceeds(self):
         links = [self._link(i) for i in range(50)]

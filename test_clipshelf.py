@@ -631,6 +631,11 @@ def test():
     assert p.desc == "O'Reilly \"q\"", p.desc
     assert p.links == [("/x", "C & D")], p.links
     assert p.text.endswith("E 'F' \"G\""), p.text  # title and anchor text are body text too
+    # a page without <title> has no title: leading text never leaks into it
+    p = cs.PageParser()
+    p.feed('<html><body>no title here</body></html>')
+    p.close()
+    assert p.title == "", p.title
     p = cs.PageParser()
     p.feed('<meta property="og:description" content="OG">')
     assert p.desc == "OG"

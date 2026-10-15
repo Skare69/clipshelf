@@ -1923,7 +1923,8 @@ def test_material_state_shape():
     assert state["description"] == "d" * 4000
     assert state["page_text"] == "b" * 12000
     assert state["links"] == [{"url": "https://a/1", "title": "x" * 200}]
-    assert "no captions" in state["captions_note"]
+    assert state["captions_note"] == ("This video had no captions; you have not "
+                                      "heard any spoken content and must not claim to.")
     assert len(state["allowed_categories"]) == 100
 
     # captions note only for caption-less video captures
@@ -1932,6 +1933,7 @@ def test_material_state_shape():
     assert talking["captions_note"] == ""
     plain = interp._material_state({"url": "https://a", "metadata": {}}, cats[:2])
     assert plain["captions_note"] == ""
+    assert plain["page_text"] == ""
     assert plain["allowed_categories"] == ["cat0", "cat1"]
     # a source without desc ships an empty description, never filler
     assert interp._material_state({"url": "https://a"}, cats[:1])["description"] == ""
@@ -1952,6 +1954,13 @@ def test_parse_json_content_forms():
             raise AssertionError(f"accepted {bad!r}")
         except ValueError:
             pass
+    # a closing brace without an opening one names the problem, it does not
+    # reach json.loads with a nonsense slice
+    try:
+        interp._parse_json_content("abc}")
+        raise AssertionError("accepted 'abc}'")
+    except ValueError as exc:
+        assert str(exc) == "no JSON object found", str(exc)
     print("parse forms ok")
 
 
@@ -1994,6 +2003,33 @@ def test_validated_findings_caps():
     assert out["links"] == [ok_url] and not dropped
     out = interp._validated(raw(links=[long_url]), source_url, cats, dropped)
     assert out["links"] == [] and any("2048" in w for w in dropped), dropped
+    # the dropped entry is named with its first 100 characters, no more
+    assert dropped[-1].endswith(repr(long_url[:100])), dropped[-1]
+
+    # unknown keys are ignored, and the warning names at most five of them
+    noise = []
+    interp._validated(raw(**{f"u{i}": 1 for i in range(1, 8)}), source_url, cats, noise)
+    assert noise == ["ignored unexpected keys: ['u1', 'u2', 'u3', 'u4', 'u5']"], noise
+
+    # the repo entry bound is 300 chars: the 300th char is kept, 301 is fatal
+    out = interp._validated(raw(repos=["https://github.com/o/" + "a" * 279]),
+                            source_url, cats, [])
+    assert len(out["repos"]) == 1
+    try:
+        interp._validated(raw(repos=["https://github.com/o/" + "a" * 280]),
+                          source_url, cats, [])
+        raise AssertionError("over-long repo accepted")
+    except ValueError as exc:
+        assert str(exc) == "repos entry exceeds 300 chars", str(exc)
+
+    # the install entry bound is 500 chars, and the message names the list
+    out = interp._validated(raw(installs=["i" * 500]), source_url, cats, [])
+    assert out["installs"] == ["i" * 500]
+    try:
+        interp._validated(raw(installs=["i" * 501]), source_url, cats, [])
+        raise AssertionError("over-long install accepted")
+    except ValueError as exc:
+        assert str(exc) == "installs entry exceeds 500 chars", str(exc)
 
     # one char past the prompt bound is fatal, and names the offending list
     try:
@@ -2094,6 +2130,23 @@ def test_links_bound_to_material():
                             "https://kept.example/page"}, fetched
     assert any(w.startswith(f"link not in the material: {attacker}")
                for w in findings["warnings"]), findings["warnings"]
+
+    # missing state fields ship empty strings into the blob, never filler
+    # text a planted short URL could match
+    findings = {"repos": [], "links": ["https://x"], "warnings": []}
+    interp._bound_to_material(findings, {"url": "", "title": "t"}, [])
+    assert findings["links"] == []
+    findings = {"repos": [], "links": ["https://x"], "warnings": []}
+    interp._bound_to_material(findings, {"url": "u9"}, [])
+    assert findings["links"] == []
+    # the url and title fields themselves feed the blob: a link the material
+    # mentions stays
+    findings = {"repos": [], "links": ["https://x"], "warnings": []}
+    interp._bound_to_material(findings, {"url": "https://x/y", "title": "t"}, [])
+    assert findings["links"] == ["https://x"], findings["links"]
+    findings = {"repos": [], "links": ["https://x"], "warnings": []}
+    interp._bound_to_material(findings, {"url": "", "title": "see https://x now"}, [])
+    assert findings["links"] == ["https://x"], findings["links"]
     print("links bound to material ok")
 
 
@@ -2230,6 +2283,26 @@ def test_interpret_retry_reason_bound():
     print("interpret retry reason bound ok")
 
 
+def test_interpret_screening_failure_is_reported():
+    """A failed screening call becomes a warning; interpretation continues."""
+    config = {"base_url": "http://h/v1", "model": "m"}
+    ok = json.dumps({"summary": "s", "repos": [], "prompts": [], "links": [],
+                     "categories": [], "installs": [], "warnings": []})
+
+    def fake_post(base, key, payload, timeout):
+        return {"choices": [{"message": {"content": ok}}]}
+
+    with mock.patch.object(interp.judgment, "available", return_value=True), \
+         mock.patch.object(interp.judgment, "screen_material",
+                           side_effect=interp.judgment.JudgmentError("endpoint down")), \
+         mock.patch.object(interp, "post", side_effect=fake_post):
+        findings = interp.interpret({"url": "https://example.com/p", "text": "b",
+                                     "assets": [], "links": [], "metadata": {}},
+                                    config, [])
+    assert "screening unavailable: endpoint down" in findings["warnings"]
+    print("interpret screening failure ok")
+
+
 def test_check_connection_contract():
     """The probe ships a system contract + color question + inline PNG; the
     report shape is honest in all outcomes and never leaks the key."""
@@ -2276,6 +2349,9 @@ def test_check_connection_contract():
         assert user[0]["text"].endswith("?")
         assert user[1]["type"] == "image_url"
         assert user[1]["image_url"]["url"].startswith("data:image/png;base64,")
+        probe = Image.open(io.BytesIO(base64.b64decode(
+            user[1]["image_url"]["url"].split(",", 1)[1])))
+        assert probe.getpixel((0, 0)) == (200, 30, 30)
     finally:
         interp.post = real_post
 
@@ -2483,7 +2559,8 @@ def test_list_models_sends_no_body():
 
 def test_interpretation_exports():
     """The module's public entry points stay importable via star-import."""
-    assert {"interpret", "check_connection", "list_models"} <= set(interp.__all__)
+    assert {"InterpretationError", "ConfigurationError", "GuardrailBlocked",
+            "interpret", "check_connection", "list_models"} <= set(interp.__all__)
     print("interpretation exports ok")
 
 
@@ -2531,6 +2608,7 @@ def test():
     test_links_bound_to_material()
     test_interpret_pipeline_contract()
     test_interpret_screening_thresholds()
+    test_interpret_screening_failure_is_reported()
     test_interpret_retry_reason_bound()
     test_check_connection_contract()
     test_list_models()
