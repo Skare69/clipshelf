@@ -210,7 +210,9 @@ def score_run(target_files, ws, temp_root, timeout, max_mutants, log):
             if out:
                 log(f"  mutant diagnostics:\n{out}")
             killed += 1
-        log(f"[{n}/{len(mutants)}] {rel}:{lineno} {label} {status} {dt:.1f}s")
+        # The Ottr board parses this line from a stdout tail: keep its format.
+        log(f"[{n}/{len(mutants)}] {rel}:{lineno} {label} {status} {dt:.1f}s"
+            f" ({len(survived)} survived)")
     return total, killed, survived
 
 
@@ -348,6 +350,33 @@ def self_check():
     # flipped comparison is caught by the one test
     assert sorted(results) == sorted([("100->101", "SURVIVED"), ("100->101", "SURVIVED"),
                                       ("Gt->LtE", "KILLED")]), results
+
+    # Progress line: the Ottr board parses it from a stdout tail, so pin the
+    # exact shape and the running survivor count (KILLED and TIMEOUT do not
+    # count; the count includes the current mutant).
+    progress = []
+    calls = []
+
+    def fake_run_suite(_ws, _env, _cmd, _timeout):
+        calls.append(_cmd)
+        return (1, "") if len(calls) == 1 else (0, "")  # first mutant killed
+
+    try:
+        run_suite = fake_run_suite
+        score_run(["module.py"], ws, ws, 60, 0, progress.append)
+    finally:
+        run_suite = real_run_suite
+    progress = [line for line in progress if line.startswith("[")]
+    assert len(progress) == 3, progress
+    for count, line in zip((0, 1, 2), progress):
+        head, sep, tail = line.rpartition(" (")
+        assert sep and tail == f"{count} survived)", (count, line)
+        fields = head.split()
+        assert len(fields) == 5, line
+        assert fields[0].startswith("[") and fields[0].endswith("/3]"), line
+        assert fields[1].startswith("module.py:"), line
+        assert fields[3] in ("KILLED", "SURVIVED", "TIMEOUT"), line
+        assert fields[4].endswith("s"), line
     code, out = run_suite(
         ws, dict(os.environ),
         [sys.executable, "-c",
@@ -425,6 +454,7 @@ def self_check():
 
 
 def main():
+    sys.stdout.reconfigure(line_buffering=True)  # each line reaches a redirected log at once
     if sys.argv[1:2] == ["self-check"]:
         self_check()
         return
