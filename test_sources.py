@@ -751,23 +751,20 @@ def test_network_status_classification():
         def socket(self, family, type):
             return RefusedSock(self)
 
-    tmp = tempfile.mkdtemp(prefix="cs-status-")
-    real_socket = net.socket
-    net.socket = RefusedNet({"public.example": [PUBLIC]}, [])
-    try:
-        src = acq.acquire("http://public.example/x", tmp)
-        assert src["acquisition"] == "error", (src["acquisition"], src["warnings"])
-        assert any("Connection refused" in w for w in src["warnings"]), src["warnings"]
-    finally:
-        net.socket = real_socket
+    with tempfile.TemporaryDirectory(prefix="cs-status-") as tmp:
+        real_socket = net.socket
+        net.socket = RefusedNet({"public.example": [PUBLIC]}, [])
+        try:
+            src = acq.acquire("http://public.example/x", tmp)
+            assert src["acquisition"] == "error", (src["acquisition"], src["warnings"])
+            assert any("Connection refused" in w for w in src["warnings"]), src["warnings"]
+        finally:
+            net.socket = real_socket
 
-    # a non-public destination is a deterministic policy refusal: blocked
-    try:
+        # a non-public destination is a deterministic policy refusal: blocked
         src = acq.acquire("http://10.0.0.1/x", tmp)
         assert src["acquisition"] == "blocked", (src["acquisition"], src["warnings"])
         assert any("non-public" in w for w in src["warnings"]), src["warnings"]
-    finally:
-        shutil.rmtree(tmp, ignore_errors=True)
     print("status classification ok")
 
 
