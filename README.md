@@ -1,6 +1,6 @@
 # clipshelf
 
-[![tests](https://github.com/Skare69/clipshelf/actions/workflows/ci.yml/badge.svg)](https://github.com/Skare69/clipshelf/actions/workflows/ci.yml)
+[![tests](https://github.com/Skare69/clipshelf/actions/workflows/ci.yml/badge.svg)](https://github.com/Skare69/clipshelf/actions/workflows/ci.yml) <a href="https://github.com/ottr-ai/ottr"><img src="https://raw.githubusercontent.com/ottr-ai/ottr/main/.github/assets/built-with-ottr.png" alt="Built with Ottr" height="40"></a>
 
 Share a link from your phone and your own server fetches what is actually in the
 post: TikTok photo carousels slide by slide with their audio, video with its ASR
