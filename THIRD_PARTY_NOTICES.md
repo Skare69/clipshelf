@@ -52,35 +52,36 @@ are the source of record; every wheel ships its license text inside
 | Package | Observed | License | Notes |
 |---|---|---|---|
 | django | 5.2.18 | BSD-3-Clause | |
-| django-allauth | 65.19.7 | MIT | |
+| django-allauth | 65.20.1 | MIT | |
 | waitress | 3.0.2 | ZPL-2.1 | |
 | pillow | 12.3.0 | MIT-CMU | |
-| gallery-dl | 1.32.15 | **GPL-2.0-only** | subprocess only; obligations below |
-| yt-dlp | 2026.8.19 | Unlicense | `[curl-cffi]` extra only; subprocess only |
+| gallery-dl | 1.32.17 | **GPL-2.0-only** | subprocess only; obligations below |
+| yt-dlp | 2026.10.21 | Unlicense | `[curl-cffi]` extra only; subprocess only |
 | argon2-cffi | 25.1.0 | MIT | |
-| typesafe-sdk | 0.7.2 | MIT | |
-| truststore | 0.10.4 | MIT | required by httpx2 on all non-emscripten platforms |
-| asgiref | 3.12.1 | BSD-3-Clause | |
+| typesafe-sdk | 0.7.5 | MIT | |
+| truststore | 0.10.5 | MIT | required by httpx2 on all non-emscripten platforms |
+| asgiref | 3.13.0 | BSD-3-Clause | |
 | sqlparse | 0.6.0 | BSD-3-Clause | |
 | requests | 2.34.2 | Apache-2.0 | |
 | charset-normalizer | 3.5.2 | MIT | |
 | idna | 3.20 | BSD-3-Clause | |
 | urllib3 | 2.8.0 | MIT | |
-| certifi | 2026.7.22 | MPL-2.0 | |
+| certifi | 2026.10.23 | MPL-2.0 | |
 | curl-cffi | 0.16.3 | MIT | |
 | cffi | 2.1.1 | MIT-0 | |
-| pycparser | 3.0 | BSD-3-Clause | |
+| pycparser | 3.12 | BSD-3-Clause | |
 | argon2-cffi-bindings | 26.1.0 | MIT | |
-| httpx2 | 2.13.1 | BSD-3-Clause | |
-| pydantic | 2.13.5 | MIT | |
-| pydantic-core | 2.46.5 | MIT | |
+| httpx2 | 2.16.0 | BSD-3-Clause | |
+| pydantic | 2.14.1 | MIT | |
+| pydantic-core | 2.50.1 | MIT | |
 | tenacity | 9.2.1 | Apache-2.0 | |
 | typing-extensions | 4.16.0 | PSF-2.0 | |
-| httpcore2 | 2.13.1 | BSD-3-Clause | |
+| httpcore2 | 2.16.0 | BSD-3-Clause | |
 | h11 | 0.16.0 | MIT | |
 | anyio | 4.15.1 | MIT | |
 | annotated-types | 0.8.0 | MIT | |
 | typing-inspection | 0.4.4 | MIT | |
+| packaging | 26.3 | Apache-2.0 | dual-licensed `Apache-2.0 OR BSD-2-Clause`, used under Apache-2.0; required by typesafe-sdk |
 | tzdata | 2026.5 | Apache-2.0 | django declares it only on win32, but `requirements.lock` ships it on every platform, including the linux image |
 
 Not installed on purpose: yt-dlp's `[default]` extras (mutagen — **GPL-2.0+**,
