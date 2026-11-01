@@ -41,7 +41,7 @@ django            = { observed = "5.2.18",  license = "BSD-3-Clause", meta = "BS
 django-allauth    = { observed = "65.20.1", license = "MIT",          meta = "MIT" }
 waitress          = { observed = "3.0.2",   license = "ZPL-2.1",      meta = "ZPL 2.1" }
 pillow            = { observed = "13.0.0",  license = "MIT-CMU",      meta = "MIT-CMU" }
-gallery-dl        = { observed = "1.32.17", license = "GPL-2.0-only", meta = "GPL-2.0-only" }
+gallery-dl        = { observed = "1.32.18", license = "GPL-2.0-only", meta = "GPL-2.0-only" }
 yt-dlp            = { observed = "2026.10.21", license = "Unlicense", meta = "Unlicense" }
 argon2-cffi       = { observed = "25.1.0",  license = "MIT",          meta = "MIT" }
 typesafe-sdk      = { observed = "0.7.5",   license = "MIT",          meta = "MIT" }

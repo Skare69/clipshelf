@@ -55,7 +55,7 @@ are the source of record; every wheel ships its license text inside
 | django-allauth | 65.20.1 | MIT | |
 | waitress | 3.0.2 | ZPL-2.1 | |
 | pillow | 13.0.0 | MIT-CMU | |
-| gallery-dl | 1.32.17 | **GPL-2.0-only** | subprocess only; obligations below |
+| gallery-dl | 1.32.18 | **GPL-2.0-only** | subprocess only; obligations below |
 | yt-dlp | 2026.10.21 | Unlicense | `[curl-cffi]` extra only; subprocess only |
 | argon2-cffi | 25.1.0 | MIT | |
 | typesafe-sdk | 0.7.5 | MIT | |
