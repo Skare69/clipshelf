@@ -359,10 +359,11 @@ def _claim_imports(limit=None):
 
 
 def _run_import(record, say=None):
-    # Lifecycle: the commit checkpoint in imports._commit_import writes the
-    # one "done" update, atomic with the rows it describes. This function
-    # only labels a failed import; a failed bookkeeping write is logged and
-    # never relabels an already committed import.
+    # Lifecycle: the commit checkpoint (services.commit_import_rows, called
+    # from imports._commit_import) writes the one "done" update, atomic with
+    # the rows it describes. This function only labels a failed import; a
+    # failed bookkeeping write is logged and never relabels an already
+    # committed import.
     try:
         result = imports.run_staged_import(record)
     except Exception as exc:

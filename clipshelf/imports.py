@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path, PureWindowsPath
 
 from django.conf import settings
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from django.utils import timezone
 
@@ -191,17 +191,6 @@ def _append_page_asset(source, item):
         assets = source.setdefault("assets", [])
         assets.append({"path": spec["path"], "kind": "page",
                        "content_type": "text/html", "position": len(assets)})
-
-
-def _bound_category(value):
-    """Bound one stored category label: labels are replayed verbatim into
-    later prompts, so an imported label must pass the same short-visible-
-    label rule as model-named names (interpretation.is_category_label)."""
-    if interpretation.is_category_label(value):
-        return value
-    if value:
-        log.warning("import: dropped category label %r", str(value)[:50])
-    return ""
 
 
 def _legacy_findings(item, url):
@@ -494,28 +483,28 @@ def _prompt_plans(prompts):
             continue
         plans.append({"key": publication.prompt_key(text), "data": {
             "title": lib._str(p.get("title"))[:services.TITLE_MAX], "text": text,
-            "sources": _sources(p.get("sources")), "cat": _bound_category(p.get("cat", "")),
+            "sources": services._sources(p.get("sources")),
+            "cat": services._bound_category(p.get("cat", "")),
             "interpreted": bool(p.get("interpreted")),
         }})
     return plans
 
 
-def _commit_import(user, collection, plans, prompt_plans, digest, origin,
-                   client_request_id, record, notice, staging, files_record,
-                   seen_map=None, removed_keys=(), removed_urls=()):
-    """Publish all files, then create every row in one transaction. The
-    account and destination are rechecked after staging: a lost destination
-    falls back to Personal with a notice, a disabled account raises."""
-    # Publish job files first: complete bytes at final paths before any reference.
+def _publish_plans(plans, staging):
+    """Publish every job's files: complete bytes at final paths before any
+    reference."""
     for plan in plans:
         plan["published"] = asset_files.publish(plan["source"], staging, move=False)
 
-    # Screen legacy findings OUTSIDE the transaction below: the judgment call
-    # can run for 60s and must never hold the SQLite write lock. Every
-    # interpreted item is screened, with or without published media: a flagged
-    # item becomes one blocked (guardrail) job, the rest of the import
-    # proceeds, and neither the flagged findings nor the raw install, summary
-    # and interpreted flag behind them are ever stored member-visible.
+
+def _screen_plans(plans):
+    """Screen legacy findings OUTSIDE the commit transaction in
+    services.commit_import_rows: the judgment call can run for 60s and must
+    never hold the SQLite write lock. Every interpreted item is screened,
+    with or without published media: a flagged item becomes one blocked
+    (guardrail) job, the rest of the import proceeds, and neither the
+    flagged findings nor the raw install, summary and interpreted flag
+    behind them are ever stored member-visible."""
     for plan in plans:
         if not plan["findings"]:
             continue  # not an interpreted legacy item: nothing to screen
@@ -531,161 +520,25 @@ def _commit_import(user, collection, plans, prompt_plans, digest, origin,
             # fields stay on the import record's manifest for the importer.
             plan["contribution_skip"] = ("install", "desc", "interpreted")
 
+
+def _commit_import(user, collection, plans, prompt_plans, digest, origin,
+                   client_request_id, record, notice, staging, files_record,
+                   seen_map=None, removed_keys=(), removed_urls=()):
+    """Publish the staged files, screen the legacy findings, then let
+    services.commit_import_rows create every row in one transaction. The
+    account and destination are rechecked after staging: a lost destination
+    falls back to Personal with a notice, a disabled account raises."""
+    _publish_plans(plans, staging)
+    _screen_plans(plans)
+
     crid = client_request_id or str(uuid.uuid5(
         uuid.NAMESPACE_URL, f"clipshelf-import:{user.id}:{digest}"))
     manifest = _manifest([p["item"] for p in plans],
                          [p["data"] for p in prompt_plans],
                          seen_map or {}, removed_keys, files_record, origin)
-    counts = {"entries": 0, "jobs": 0, "assets": 0, "prompts": 0}
-    with transaction.atomic():
-        # Recheck account and destination after staging: membership or account
-        # state may have changed during the long fetch. One resolution for
-        # every row written below (the same rule store_source applies per job).
-        user = models.User.objects.get(pk=user.pk)
-        collection = models.Collection.objects.filter(pk=collection.pk).first()
-        if not services.can_write(user, collection):
-            if not user.is_active:
-                raise PermissionDenied("Account is disabled.")
-            collection, notice = services.destination_for(user, str(collection.id))
-        capture, created = models.Capture.objects.get_or_create(
-            user=user, client_request_id=crid,
-            defaults={
-                "raw_text": f"import {len(plans)} item(s) digest:{digest[:16]}",
-                "requested_collection_id": str(collection.id),
-                "collection": collection, "request_hash": digest,
-                "received_at": timezone.now(), "notice": notice,
-            })
-        if capture.request_hash != digest:
-            raise ValidationError(
-                "client_request_id was already used for a different import payload")
-        publication.record_import_history(
-            collection=collection, user=user,
-            seen=seen_map or {}, removed=removed_urls)
-        for plan in plans:
-            key = publication.link_key(plan["url"])
-            # ponytail: a removed entry never comes back through an import; the
-            # already-published bytes stay as unreferenced files.
-            if publication.tombstoned(collection.id, user.id,
-                                      *publication.link_keys(key)):
-                continue
-            entry, _ = publication.link_entry(collection, key)
-            counts["entries"] += 1
-            job = None
-            if plan["published"] or plan["state"] != "done":
-                job = models.Job.objects.create(
-                    capture=capture, collection=collection, url=key,
-                    final_url=plan["source"].get("url") or plan["url"],
-                    state=plan["state"], acquisition=plan["status"],
-                    interpretation=plan["interpretation"],
-                    source=plan["source"], warnings=plan["warnings"])
-                if plan["published"]:
-                    services.store_source(job, plan["source"])
-                    counts["assets"] += len(plan["published"])
-                if plan["findings"]:
-                    # Screening already ran outside this transaction.
-                    services.store_findings(job, plan["findings"], screen=False)
-                if plan.get("error"):
-                    # store_source clears errors on persist; the screening
-                    # withhold is the job's terminal message.
-                    job.mark_blocked(
-                        error=plan["error"],
-                        interpretation=models.Job.InterpretationStatus.BLOCKED)
-                counts["jobs"] += 1
-            data = _legacy_contribution_data(plan["item"])
-            for field in plan.get("contribution_skip") or ():
-                data.pop(field, None)
-            models.Contribution.objects.get_or_create(
-                entry=entry, user=user, origin=origin,
-                defaults={"capture": capture, "job": job, "data": data})
-        for plan in prompt_plans:
-            entry = publication.prompt_entry(collection, user, plan["data"]["text"])
-            if entry is None:
-                continue  # removed in this collection: an import never resurrects it
-            models.Contribution.objects.get_or_create(
-                entry=entry, user=user, origin=origin,
-                defaults={"capture": capture, "data": plan["data"]})
-            counts["prompts"] += 1
-            counts["entries"] += 1
-        result = {"created": True, "digest": digest, "counts": counts, "manifest": manifest,
-                  "notice": notice, "collection_id": str(collection.id)}
-        if record is None:
-            models.ImportRecord.objects.create(
-                user=user, input_digest=digest, manifest=manifest)
-        else:
-            # Commit the checkpoint with its rows: a restart must not import
-            # twice. This is the import's one "done" write, atomic with the
-            # rows it describes — the worker adds none after the commit.
-            record.update_manifest({"status": models.ImportRecord.Status.DONE,
-                                    "completed_at": timezone.now().isoformat(),
-                                    "result": result})
-    return result
-
-
-def _string_items(value, cap, max_len):
-    """Bounded string list; non-strings and blanks drop. Import data is
-    untrusted, so nothing here raises mid-commit."""
-    if not isinstance(value, list):
-        return []
-    out = []
-    for v in value:
-        if len(out) >= cap:
-            break
-        if isinstance(v, str) and (text := lib._str(v)):
-            out.append(text[:max_len])
-    return out
-
-
-def _labels(value):
-    """Category labels under interpretation's visible-label rule: a category
-    name is replayed into later captures' model input, so it stays short
-    visible text, never a carrier for hidden or lengthy content."""
-    return [t for t in _string_items(value, services.TAGS_MAX, services.TAG_MAX)
-            if interpretation.is_category_label(t)]
-
-
-def _sources(value):
-    """Source list in the capture-path shapes (services._link_list), capped at
-    SOURCES_MAX; invalid entries drop because serialize_entry skips them at
-    read time anyway."""
-    out = []
-    for s in value if isinstance(value, list) else []:
-        if len(out) >= services.SOURCES_MAX:
-            break
-        if isinstance(s, dict):
-            url, source = lib._str(s.get("url")), {
-                "url": "", "title": lib._str(s.get("title"))[:services.TITLE_MAX]}
-        elif isinstance(s, str):
-            url, source = lib._str(s), None
-        else:
-            continue
-        try:
-            services._require_url(url)
-        except ValidationError:
-            continue
-        out.append(url if source is None else source | {"url": url})
-    return out
-
-
-def _legacy_contribution_data(item):
-    """Keep the known legacy fields, bounded like the capture path
-    (services.store_source): serialize_entry merges and serves contribution
-    data to every collection member, so an import must not store wider
-    fields than a capture would. Unknown or reader-less keys (found, pending,
-    archived, stars, browser extras) drop; media lives in published assets."""
-    data = {
-        "title": lib._str(item.get("title"))[:services.TITLE_MAX],
-        "desc": lib._str(item.get("desc"))[:services.DESC_MAX],
-        "sources": _sources(item.get("sources")),
-        "tags": _string_items(item.get("tags"), services.TAGS_MAX, services.TAG_MAX),
-    }
-    for key, value in {
-        "text": lib._str(item.get("text"))[:services.TEXT_MAX],
-        "install": lib._str(item.get("install"))[:services.INSTALL_MAX],
-        "cat": _bound_category(item.get("cat")),
-        "categories": _labels(item.get("categories")),
-        "interpreted": bool(item.get("interpreted")),
-    }.items():
-        if value not in ("", [], False):
-            data[key] = value
-    return data
+    return services.commit_import_rows(
+        user, collection, plans, prompt_plans, crid=crid, digest=digest,
+        origin=origin, manifest=manifest, notice=notice, record=record,
+        seen_map=seen_map or {}, removed_keys=removed_keys,
+        removed_urls=removed_urls)
 

@@ -1,13 +1,14 @@
 """Core domain services (rev. 3).
 
 Every permission check and durable write for captures, jobs, findings,
-entries, and browser imports lives here. Bad/conflicting input raises ValidationError (request-ID
+entries, and imports lives here. Bad/conflicting input raises ValidationError (request-ID
 reuse conflicts use code="conflict" so the API maps them to 409);
 unauthorized actions raise PermissionDenied. Store functions run short
 transactions, recheck the current account/destination, never move committed
 contributions, and keep the last good findings when reprocessing fails.
 """
 import hashlib
+import logging
 import os
 import re
 import uuid
@@ -17,7 +18,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
-from clipshelf import asset_files, judgment, lib, publication
+from clipshelf import asset_files, interpretation, judgment, lib, publication
 from clipshelf.interpretation import GuardrailBlocked
 from clipshelf.lib import _str
 
@@ -33,6 +34,7 @@ from clipshelf.models import (
     Job,
     Membership,
     ServerSettings,
+    User,
 )
 
 MAX_TEXT_BYTES = 32768
@@ -40,12 +42,15 @@ MAX_URLS = 50
 URL_PATTERN = re.compile(r"https?://[^\s<>\"'`]+", re.IGNORECASE)
 
 # store_source field bounds: the widest contribution data any write path may
-# store. imports.py applies the same bounds to imported data, which
-# serialize_entry merges and serves to every collection member.
+# store. The legacy import commit applies the same bounds here
+# (_legacy_contribution_data); serialize_entry merges and serves the result
+# to every collection member.
 TITLE_MAX, DESC_MAX, TEXT_MAX = 500, 2000, 50000
 TAGS_MAX, TAG_MAX = 50, 100
 SOURCES_MAX = 200
 INSTALL_MAX, PROMPT_MAX = 2000, 20000  # findings caps in _validate_findings
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +289,185 @@ def admit_import(user, request_id, input_digest, collection, staging_rel, fmt):
             raise
         return record, False
     return record, True
+
+
+# ---------------------------------------------------------------------------
+# Legacy import commit
+# ---------------------------------------------------------------------------
+
+def _string_items(value, cap, max_len):
+    """Bounded string list; non-strings and blanks drop. Import data is
+    untrusted, so nothing here raises mid-commit."""
+    if not isinstance(value, list):
+        return []
+    out = []
+    for v in value:
+        if len(out) >= cap:
+            break
+        if isinstance(v, str) and (text := _str(v)):
+            out.append(text[:max_len])
+    return out
+
+
+def _labels(value):
+    """Category labels under interpretation's visible-label rule: a category
+    name is replayed into later captures' model input, so it stays short
+    visible text, never a carrier for hidden or lengthy content."""
+    return [t for t in _string_items(value, TAGS_MAX, TAG_MAX)
+            if interpretation.is_category_label(t)]
+
+
+def _sources(value):
+    """Source list in the capture-path shapes (_link_list), capped at
+    SOURCES_MAX; invalid entries drop because serialize_entry skips them at
+    read time anyway."""
+    out = []
+    for s in value if isinstance(value, list) else []:
+        if len(out) >= SOURCES_MAX:
+            break
+        if isinstance(s, dict):
+            url, source = _str(s.get("url")), {
+                "url": "", "title": _str(s.get("title"))[:TITLE_MAX]}
+        elif isinstance(s, str):
+            url, source = _str(s), None
+        else:
+            continue
+        try:
+            _require_url(url)
+        except ValidationError:
+            continue
+        out.append(url if source is None else source | {"url": url})
+    return out
+
+
+def _bound_category(value):
+    """Bound one stored category label: labels are replayed verbatim into
+    later prompts, so an imported label must pass the same short-visible-
+    label rule as model-named names (interpretation.is_category_label)."""
+    if interpretation.is_category_label(value):
+        return value
+    if value:
+        log.warning("import: dropped category label %r", str(value)[:50])
+    return ""
+
+
+def _legacy_contribution_data(item):
+    """Keep the known legacy fields, bounded like the capture path
+    (store_source): serialize_entry merges and serves contribution
+    data to every collection member, so an import must not store wider
+    fields than a capture would. Unknown or reader-less keys (found, pending,
+    archived, stars, browser extras) drop; media lives in published assets."""
+    data = {
+        "title": _str(item.get("title"))[:TITLE_MAX],
+        "desc": _str(item.get("desc"))[:DESC_MAX],
+        "sources": _sources(item.get("sources")),
+        "tags": _string_items(item.get("tags"), TAGS_MAX, TAG_MAX),
+    }
+    for key, value in {
+        "text": _str(item.get("text"))[:TEXT_MAX],
+        "install": _str(item.get("install"))[:INSTALL_MAX],
+        "cat": _bound_category(item.get("cat")),
+        "categories": _labels(item.get("categories")),
+        "interpreted": bool(item.get("interpreted")),
+    }.items():
+        if value not in ("", [], False):
+            data[key] = value
+    return data
+
+
+def commit_import_rows(user, collection, plans, prompt_plans, *, crid, digest,
+                       origin, manifest, notice, record,
+                       seen_map, removed_keys=(), removed_urls=()):
+    """Write one legacy import's rows in a single transaction: the Capture,
+    the import history, one Job and Contribution per plan, the prompt
+    contributions, and the import record's one "done" write. Rechecks the
+    account and destination after staging: a lost destination falls back to
+    Personal with a notice, a disabled account raises. Screening must have
+    run before this call: the judgment call never holds the SQLite write
+    lock. Returns the import result dict."""
+    counts = {"entries": 0, "jobs": 0, "assets": 0, "prompts": 0}
+    with transaction.atomic():
+        # Recheck account and destination after staging: membership or account
+        # state may have changed during the long fetch. One resolution for
+        # every row written below (the same rule store_source applies per job).
+        user = User.objects.get(pk=user.pk)
+        collection = Collection.objects.filter(pk=collection.pk).first()
+        if not can_write(user, collection):
+            if not user.is_active:
+                raise PermissionDenied("Account is disabled.")
+            collection, notice = destination_for(user, str(collection.id))
+        capture, created = Capture.objects.get_or_create(
+            user=user, client_request_id=crid,
+            defaults={
+                "raw_text": f"import {len(plans)} item(s) digest:{digest[:16]}",
+                "requested_collection_id": str(collection.id),
+                "collection": collection, "request_hash": digest,
+                "received_at": timezone.now(), "notice": notice,
+            })
+        if capture.request_hash != digest:
+            raise ValidationError(
+                "client_request_id was already used for a different import payload")
+        publication.record_import_history(
+            collection=collection, user=user,
+            seen=seen_map, removed=removed_urls)
+        for plan in plans:
+            key = publication.link_key(plan["url"])
+            # ponytail: a removed entry never comes back through an import; the
+            # already-published bytes stay as unreferenced files.
+            if publication.tombstoned(collection.id, user.id,
+                                      *publication.link_keys(key)):
+                continue
+            entry, _ = publication.link_entry(collection, key)
+            counts["entries"] += 1
+            job = None
+            if plan["published"] or plan["state"] != "done":
+                job = Job.objects.create(
+                    capture=capture, collection=collection, url=key,
+                    final_url=plan["source"].get("url") or plan["url"],
+                    state=plan["state"], acquisition=plan["status"],
+                    interpretation=plan["interpretation"],
+                    source=plan["source"], warnings=plan["warnings"])
+                if plan["published"]:
+                    store_source(job, plan["source"])
+                    counts["assets"] += len(plan["published"])
+                if plan["findings"]:
+                    # Screening already ran outside this transaction.
+                    store_findings(job, plan["findings"], screen=False)
+                if plan.get("error"):
+                    # store_source clears errors on persist; the screening
+                    # withhold is the job's terminal message.
+                    job.mark_blocked(
+                        error=plan["error"],
+                        interpretation=Job.InterpretationStatus.BLOCKED)
+                counts["jobs"] += 1
+            data = _legacy_contribution_data(plan["item"])
+            for field in plan.get("contribution_skip") or ():
+                data.pop(field, None)
+            Contribution.objects.get_or_create(
+                entry=entry, user=user, origin=origin,
+                defaults={"capture": capture, "job": job, "data": data})
+        for plan in prompt_plans:
+            entry = publication.prompt_entry(collection, user, plan["data"]["text"])
+            if entry is None:
+                continue  # removed in this collection: an import never resurrects it
+            Contribution.objects.get_or_create(
+                entry=entry, user=user, origin=origin,
+                defaults={"capture": capture, "data": plan["data"]})
+            counts["prompts"] += 1
+            counts["entries"] += 1
+        result = {"created": True, "digest": digest, "counts": counts, "manifest": manifest,
+                  "notice": notice, "collection_id": str(collection.id)}
+        if record is None:
+            ImportRecord.objects.create(
+                user=user, input_digest=digest, manifest=manifest)
+        else:
+            # Commit the checkpoint with its rows: a restart must not import
+            # twice. This is the import's one "done" write, atomic with the
+            # rows it describes — the worker adds none after the commit.
+            record.update_manifest({"status": ImportRecord.Status.DONE,
+                                    "completed_at": timezone.now().isoformat(),
+                                    "result": result})
+    return result
 
 
 # ---------------------------------------------------------------------------
