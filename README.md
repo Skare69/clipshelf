@@ -297,15 +297,18 @@ only; the original files are never modified and a repeated import is a no-op.
 | `research/` | the plan and the research behind it |
 
 Tests: `sh scripts/test.sh` is the one test list, and CI runs the same file.
-Run it with a throwaway data dir, never `./data` (the app writes its secret
-key there): `CLIPSHELF_DATA_DIR=/tmp/clipshelf-test sh scripts/test.sh`. It
-covers the offline Python suites (`clipshelf.py test`, `test_clipshelf.py`,
-`test_sources.py`, `test_properties.py` — the seeded fuzz of the
-trust-boundary parsers, 150 runs per property, no new dependencies), the JS
-regression checks, and the mutation harness self-check (`python mutate.py
-self-check`), all with Node 24. The android job builds the debug APK, runs
-`check_licenses.py android` on it, then `./gradlew :app:testDebugUnitTest`
-and `./gradlew :app:lintDebug`. A lint warning fails the build.
+It runs after the install, license, lint and audit gates, with `PY` set to an
+interpreter that has `requirements.lock` installed (the setup above uses
+`.venv/bin/python`). Run it with a throwaway data dir, never `./data` (the
+app writes its secret key there):
+`CLIPSHELF_DATA_DIR=/tmp/clipshelf-test PY=.venv/bin/python sh scripts/test.sh`.
+It covers the offline Python suites, including the seeded fuzz of the
+trust-boundary parsers in `test_properties.py` (150 runs per property, no new
+dependencies), the JS regression checks, and the mutation harness self-check
+(`mutate.py self-check`); CI uses Node 24. The android job builds the debug
+APK, runs `check_licenses.py android` on it, then
+`./gradlew :app:testDebugUnitTest` and `./gradlew :app:lintDebug`. A lint
+warning fails the build.
 
 ### Mutation testing
 
