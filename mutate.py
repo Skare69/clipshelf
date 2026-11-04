@@ -84,7 +84,11 @@ CHEAP_FIRST = (0, 1, 3, 2)
 # Floor = the clean score this harness measures: 110/116 = 94.8% on the
 # 1030-site scope after the v0.11.0 review's survivors and the 2026-10-15
 # rebase drift were pinned by tests (0 timeouts; a non-zero suite exit always
-# kills, so noise only raises scores). The six remaining survivors are
+# kills, so noise only raises scores). Re-measured unchanged (110/116 =
+# 94.8%, the same six behavioral equivalents) with per-line test selection on
+# 2026-11-04: import-time-line mutants run whole suite commands, so on a
+# loaded machine one command can cross DEFAULT_TIMEOUT and read as a kill.
+# The six remaining survivors are
 # behaviorally equivalent: the "" hostname fallback at clipshelf/lib.py:89,
 # the screened-init flag (its value only matters past positive steer
 # thresholds), the PIL draft hint mode, the invisible-range end, the severity
@@ -501,16 +505,7 @@ def run(args, log=print):
     env["CLIPSHELF_DEBUG"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"  # see score_run: stale pyc skews scores
     log(f"baseline: {SUITE_CMDS}")
-    code, out = 1, ""
-    for attempt in (1, 2, 3):
-        # Timing-sensitive worker/DB tests flake under load (a job thread
-        # can outlive its test's DB teardown); retry with fresh data dirs.
-        env["CLIPSHELF_DATA_DIR"] = str(temp_root / ("data-baseline" if attempt == 1
-                                                     else f"data-baseline-retry-{attempt}"))
-        code, out = run_suites(ws, env, args.timeout)
-        if code == 0:
-            break
-        log(f"baseline suite failed (exit {code}), attempt {attempt}/3")
+    code, out = run_suites(ws, env, args.timeout)
     if code != 0:
         log(f"baseline suite fails (exit {code}); mutation scores are meaningless:\n{out}")
         return 2
