@@ -296,18 +296,16 @@ only; the original files are never modified and a repeated import is a no-op.
 | `android/` | native client |
 | `research/` | the plan and the research behind it |
 
-Tests: `python clipshelf.py test` plus `python test_clipshelf.py` and
-`python test_sources.py` (both use project dependencies and avoid external network).
-`python test_properties.py` fuzzes the trust-boundary parsers with a seeded
-stdlib loop (fixed seed, 150 runs per property) — no new dependencies.
-CI runs the same suite plus the JS regression checks (`node test_dom_events.mjs`,
-`node test_web_assets.mjs`, `node tiktok-extract.js`, `node whatsapp-extract.js`,
-`node test_inbox_status.mjs`, `node test_release_gates.mjs`) and the mutation
-harness self-check
-(`python mutate.py self-check`), all with Node 24. The android job builds the
-debug APK, runs `check_licenses.py android` on it, then
-`./gradlew :app:testDebugUnitTest` and `./gradlew :app:lintDebug`. A lint
-warning fails the build.
+Tests: `sh scripts/test.sh` is the one test list, and CI runs the same file.
+Run it with a throwaway data dir, never `./data` (the app writes its secret
+key there): `CLIPSHELF_DATA_DIR=/tmp/clipshelf-test sh scripts/test.sh`. It
+covers the offline Python suites (`clipshelf.py test`, `test_clipshelf.py`,
+`test_sources.py`, `test_properties.py` — the seeded fuzz of the
+trust-boundary parsers, 150 runs per property, no new dependencies), the JS
+regression checks, and the mutation harness self-check (`python mutate.py
+self-check`), all with Node 24. The android job builds the debug APK, runs
+`check_licenses.py android` on it, then `./gradlew :app:testDebugUnitTest`
+and `./gradlew :app:lintDebug`. A lint warning fails the build.
 
 ### Mutation testing
 
