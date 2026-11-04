@@ -14,7 +14,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from clipshelf import imports, lib, models, publication, services
+from clipshelf import extracted_merge, imports, lib, models, publication, services
 
 User = get_user_model()
 
@@ -165,7 +165,7 @@ class MergeVariantTests(KeysFixtureMixin, TestCase):
         models.History.objects.create(
             collection=self.personal, user=self.user,
             kind=models.History.Kind.REMOVED, url=LEGACY)
-        stats = imports.merge_findings(
+        stats = extracted_merge.merge_findings(
             self.user, [{"source": CASED, "links": [{"url": CASED, "title": "t"}]}])
         self.assertEqual(stats["links"], 0, "extracted merge resurrected a removed link")
         self.assertFalse(
@@ -174,14 +174,14 @@ class MergeVariantTests(KeysFixtureMixin, TestCase):
     def test_merge_reuses_legacy_entry(self):
         legacy_entry = models.Entry.objects.create(
             collection=self.personal, kind="link", key=LEGACY)
-        imports.merge_findings(
+        extracted_merge.merge_findings(
             self.user, [{"source": CASED, "links": [{"url": CASED, "title": "t"}]}])
         self.assertEqual(
             models.Entry.objects.filter(collection=self.personal, kind="link").count(), 1)
         self.assertTrue(legacy_entry.contributions.exists())
 
     def test_merge_source_summary_lands_in_contribution_desc(self):
-        imports.merge_findings(
+        extracted_merge.merge_findings(
             self.user, [{"source": "https://example.com/s",
                          "summary": "the longest summary",
                          "repos": [], "links": [], "prompts": []}])

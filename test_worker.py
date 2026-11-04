@@ -28,7 +28,7 @@ django.setup()
 
 from PIL import Image
 
-from clipshelf import cli, imports, lib, models, network, publication, services, worker
+from clipshelf import cli, extracted_merge, imports, lib, models, network, publication, services, worker
 
 FINDINGS = {"source": "", "summary": "good findings", "repos": [], "prompts": [],
             "links": [], "categories": [], "installs": [], "warnings": []}
@@ -819,7 +819,7 @@ class AddExtractedCommandTests(WorkerMixin, TestCase):
             with self.subTest(field=field, value=value):
                 path.write_text(f'{{"{field}": {value}}}', encoding="utf-8")
                 with mock.patch(
-                        "clipshelf.management.commands.add_extracted.imports.merge_findings"
+                        "clipshelf.management.commands.add_extracted.extracted_merge.merge_findings"
                 ) as merge_findings:
                     with self.assertRaisesMessage(CommandError, f"finding {field}"):
                         call_command("add_extracted", "--user", self.user.email, str(path))
@@ -841,7 +841,7 @@ class AddExtractedCommandTests(WorkerMixin, TestCase):
             with self.subTest(field=field, value=value):
                 path.write_text(f'{{"{field}": {value}}}', encoding="utf-8")
                 with mock.patch(
-                        "clipshelf.management.commands.add_extracted.imports.merge_findings"
+                        "clipshelf.management.commands.add_extracted.extracted_merge.merge_findings"
                 ) as merge_findings:
                     with self.assertRaisesMessage(CommandError, f"finding {field}"):
                         call_command("add_extracted", "--user", self.user.email, str(path))
@@ -855,7 +855,7 @@ class AddExtractedCommandTests(WorkerMixin, TestCase):
             '"categories": {"owner/tool": "Video generation"}, '
             '"installs": {"owner/tool": "pip install tool"}}', encoding="utf-8")
         with mock.patch(
-                "clipshelf.management.commands.add_extracted.imports.merge_findings"
+                "clipshelf.management.commands.add_extracted.extracted_merge.merge_findings"
         ) as merge_findings:
             call_command("add_extracted", "--user", self.user.email, str(path))
         merge_findings.assert_called_once()
@@ -957,7 +957,7 @@ class PublicationIdentityTests(WorkerMixin, TransactionTestCase):
         models.History.objects.create(
             collection=self.personal, user=self.user,
             kind=models.History.Kind.REMOVED, url=publication.prompt_key(text))
-        imports.merge_findings(
+        extracted_merge.merge_findings(
             self.user, [{"source": "https://example.com/a", "prompts": [{"text": text}]}])
         self.assertFalse(models.Entry.objects.filter(kind="prompt").exists())
 
@@ -1079,7 +1079,7 @@ class MergeTaggingTests(WorkerMixin, TransactionTestCase):
     """merge_findings tags: screened links, deterministic fallbacks."""
 
     def merge(self, links):
-        imports.merge_findings(self.user, [{"links": links}])
+        extracted_merge.merge_findings(self.user, [{"links": links}])
 
     def tags(self, url):
         entry = models.Entry.objects.get(collection=self.personal, key=url)
