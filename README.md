@@ -335,9 +335,12 @@ suite still passes is a survived mutant — a behavior no test guards.
   samples 116 evenly spaced sites from every in-scope module the release
   touched, gate scripts included.
 - Gate: use the project Python 3.13 virtual environment and run
-  `python mutate.py --max-mutants 116` from the repository root. It runs the
-  full CI test suite for each of exactly 116 evenly spaced sites across
-  `DEFAULT_TARGETS`, in listed file/AST order. For site count `S`, the chosen
+  `python mutate.py --max-mutants 116` from the repository root. For each of
+  exactly 116 evenly spaced sites across `DEFAULT_TARGETS` (listed file/AST
+  order), it runs only the tests that a baseline coverage pass caught on the
+  mutated line; import-time lines run the whole suite commands that import
+  the target. A line no test reaches reports NO_COVERAGE and counts like a
+  survived mutant. For site count `S`, the chosen
   indices are `floor(i*S/116)` for `i = 0..115`; use the same commit and target
   list to repeat a score. The `DEFAULT_FAIL_UNDER` floor is 94%; never lower it.
 - The old stride sampler did **not** select the requested count: 950 sites with
