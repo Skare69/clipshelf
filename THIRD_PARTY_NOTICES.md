@@ -52,11 +52,11 @@ are the source of record; every wheel ships its license text inside
 | Package | Observed | License | Notes |
 |---|---|---|---|
 | django | 5.2.18 | BSD-3-Clause | |
-| django-allauth | 65.20.1 | MIT | |
+| django-allauth | 65.21.0 | MIT | |
 | waitress | 3.0.2 | ZPL-2.1 | |
 | pillow | 13.0.0 | MIT-CMU | |
 | gallery-dl | 1.32.18 | **GPL-2.0-only** | subprocess only; obligations below |
-| yt-dlp | 2026.10.21 | Unlicense | `[curl-cffi]` extra only; subprocess only |
+| yt-dlp | 2026.10.26 | Unlicense | `[curl-cffi]` extra only; subprocess only |
 | argon2-cffi | 25.1.0 | MIT | |
 | typesafe-sdk | 0.7.5 | MIT | |
 | truststore | 0.10.5 | MIT | required by httpx2 on all non-emscripten platforms |
@@ -67,7 +67,7 @@ are the source of record; every wheel ships its license text inside
 | idna | 3.20 | BSD-3-Clause | |
 | urllib3 | 2.8.0 | MIT | |
 | certifi | 2026.10.23 | MPL-2.0 | |
-| curl-cffi | 0.16.3 | MIT | |
+| curl-cffi | 0.17.0 | MIT | |
 | cffi | 2.1.1 | MIT-0 | |
 | pycparser | 3.12 | BSD-3-Clause | |
 | argon2-cffi-bindings | 26.1.0 | MIT | |
