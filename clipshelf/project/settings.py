@@ -112,6 +112,15 @@ DATABASES = {
             "transaction_mode": "IMMEDIATE",
             "timeout": 30,
         },
+        # Test runs use a file-backed WAL database instead of Django's default
+        # shared-cache in-memory one (CLIP-33): a shared-cache table lock is
+        # not retried by busy_timeout, so a coordinator claim read racing a
+        # pool thread's write fails instantly with "database table is locked"
+        # under load. A WAL file database gives the tests the production
+        # semantics — readers snapshot, writers retry through busy_timeout —
+        # instead of a locking mode production never exercises. It lives in
+        # DATA_DIR (a throwaway under tests) and Django removes it at run end.
+        "TEST": {"NAME": DATA_DIR / "test-db.sqlite3"},
     }
 }
 

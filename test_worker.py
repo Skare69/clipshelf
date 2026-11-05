@@ -46,6 +46,7 @@ def fake_acquire(url, directory, status="complete"):
 class WorkerMixin:
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="clipshelf-test-"))
+        self.worker_threads = []
         self.user = models.User.objects.create_user(username="w1", email="w1@example.com")
         self.personal = services.personal_collection(self.user)
         cfg = services.get_settings()
@@ -53,7 +54,25 @@ class WorkerMixin:
         cfg.llm_model = "test-model"
         cfg.save()
 
+    def start_worker(self):
+        """Run worker.main(once=True) in a daemon thread the teardown owns.
+
+        Every coordinator thread must be joined before its test ends: the
+        test database is flushed/destroyed after tearDown, and a thread that
+        crosses that line races the recreated or gone tables (CLIP-33).
+        """
+        thread = threading.Thread(target=worker.main, kwargs={"once": True},
+                                  daemon=True)
+        self.worker_threads.append(thread)
+        thread.start()
+        return thread
+
     def tearDown(self):
+        # join() terminates: each target drains claimable work and shuts its
+        # pool down before returning, and gated fakes always release on a
+        # bounded wait, so no coordinator can reach the DB teardown.
+        for thread in self.worker_threads:
+            thread.join()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def make_job(self, url="https://example.com/a", collection=None, **fields):
@@ -769,7 +788,7 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
         def slow_import(record, say=None):
             imports_run.append(record.id)
             gate.set()
-            release.wait(10)
+            release.wait(60)
             # Mirror the real commit checkpoint: the engine's commit is the
             # one "done" writer; a fake engine must stamp it to complete.
             record.update_manifest({"status": models.ImportRecord.Status.DONE,
@@ -784,12 +803,11 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
                 mock.patch("clipshelf.interpretation.interpret",
                            side_effect=lambda source, config, cats, **kw:
                                {**FINDINGS, "source": source.get("url")}):
-            thread = threading.Thread(target=worker.main, kwargs={"once": True},
-                                      daemon=True)
-            thread.start()
-            self.assertTrue(gate.wait(5))
+            thread = self.start_worker()
+            self.assertTrue(gate.wait(60))
             done = False
-            for _ in range(100):
+            deadline = time.monotonic() + 60
+            while not done and time.monotonic() < deadline:
                 job.refresh_from_db()
                 if job.state == "done":
                     done = True
@@ -800,7 +818,7 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
             # first releases its slot instead of squeezing out captures.
             self.assertEqual(len(imports_run), 1)
             release.set()
-            thread.join(10)
+            thread.join(60)
             self.assertFalse(thread.is_alive())
         for record in records:
             record.refresh_from_db()
@@ -1242,10 +1260,17 @@ def _json(obj):
     return json.dumps(obj)
 
 
-class StagingCleanupTests(WorkerMixin, TestCase):
+class StagingCleanupTests(WorkerMixin, TransactionTestCase):
     """Review follow-up: rejected/unpublished staging bytes stay owned and
     retained, and only terminal owners past the window are ever cleanup
-    candidates — never live work or paths no row names."""
+    candidates — never live work or paths no row names.
+
+    TransactionTestCase, not TestCase: cli.main ends with
+    connections.close_all(), and closing inside a TestCase's class-level
+    atomic block leaves a poisoned connection (a closed raw handle the next
+    query trips over). Without an atomic block the close is clean and the
+    next statement simply reconnects.
+    """
 
     def job_dir(self, job):
         path = Path(self.tmp) / "staging" / f"job-{job.id}"
@@ -1537,7 +1562,7 @@ class CoordinatorRefillTests(WorkerMixin, TransactionTestCase):
         def fake_process(job):
             events[job.tag].set()
             if job.tag == "long":
-                release.wait(10)
+                release.wait(60)
             with lock:
                 started.append(job.tag)
 
@@ -1550,14 +1575,12 @@ class CoordinatorRefillTests(WorkerMixin, TransactionTestCase):
                                   side_effect=AssertionError("no imports")), \
                 mock.patch.object(worker, "_claim_batch", side_effect=fake_claims), \
                 mock.patch.object(worker, "_process", side_effect=fake_process):
-            t = threading.Thread(target=worker.main, kwargs={"once": True},
-                                 daemon=True)
-            t.start()
+            t = self.start_worker()
             # refill must start while long still holds its slot.
-            self.assertTrue(events["refill"].wait(5))
+            self.assertTrue(events["refill"].wait(60))
             self.assertFalse(release.is_set())
             release.set()
-            t.join(10)
+            t.join(60)
             self.assertFalse(t.is_alive())
         self.assertEqual(started, ["short", "refill", "long"])
         # Top-up rounds re-claim imports too: startup plus every refill
@@ -1586,10 +1609,8 @@ class CoordinatorRefillTests(WorkerMixin, TransactionTestCase):
                                   side_effect=AssertionError("no imports")), \
                 mock.patch.object(worker, "_claim_batch", side_effect=fake_claims), \
                 mock.patch.object(worker, "_process", side_effect=fake_process):
-            t = threading.Thread(target=worker.main, kwargs={"once": True},
-                                 daemon=True)
-            t.start()
-            t.join(10)
+            t = self.start_worker()
+            t.join(60)
             self.assertFalse(t.is_alive())
         self.assertEqual(sorted(processed), ["a", "b"])
         # The third, empty claim round proves it kept claiming after work
