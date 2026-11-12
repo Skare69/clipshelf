@@ -145,12 +145,20 @@ def deliver_async(fn):
     threading.Thread(target=_run, daemon=True).start()
 
 
-def send_collection_invitation_mail(request, email, token, collection_name, owner_email):
-    """Mail the redemption link for a shared-collection invitation.
+# One invitation email per mailbox per cooldown, across all owners and
+# collections: repeated invites refresh the pending token without hammering
+# the inbox. The cooldown lives entirely in the delivery job.
+COLLECTION_INVITE_MAIL_COOLDOWN = timedelta(minutes=10)
 
-    Only this mailbox learns that it was invited (that a matching active
-    account exists); the caller keeps seeing the uniform 202. SMTP failures
-    stay observable in the logs — the owner can always resend.
+
+def queue_collection_invitation_mail(request, email, token, collection_id, collection_name, owner):
+    """Queue the delivery job for a freshly stored collection invitation.
+
+    The request has already returned its uniform 202; everything here — the
+    account lookup, the eligibility decision, the per-mailbox cooldown and
+    SMTP itself — runs off the response path, so neither the body nor the
+    timing of a probe can reveal that a matching active account exists.
+    SMTP failures stay observable in the logs; the owner can always resend.
     """
     url = mail_url(
         canonical_url(
@@ -166,19 +174,37 @@ def send_collection_invitation_mail(request, email, token, collection_name, owne
         "The link works only for the account with this exact email address "
         "and expires after %(days)s days."
     ) % {
-        "owner": owner_email,
+        "owner": owner.email,
         "name": collection_name,
         "url": url,
         "days": INVITATION_TTL.days,
     }
 
-    def _send():
+    def _job():
+        now = timezone.now()
+        if CollectionInvitation.objects.filter(
+            email__iexact=email,
+            mailed_at__gt=now - COLLECTION_INVITE_MAIL_COOLDOWN,
+        ).exists():
+            return  # a mail to this mailbox just went out: stay quiet
+        target = get_user_model().objects.filter(
+            email__iexact=email, is_active=True
+        ).first()
+        if target is None or target.pk == owner.pk:
+            return  # no invitable account: nothing to reveal, the row expires
+        if Membership.objects.filter(collection_id=collection_id, user=target).exists():
+            return  # already a member: nothing to invite
+        marked = CollectionInvitation.objects.filter(
+            token_hash=invitation_token_hash(token), mailed_at__isnull=True
+        ).update(mailed_at=timezone.now())
+        if not marked:  # another delivery won the race for this token
+            return
         try:
             django_send_mail(subject, body, None, [email])
         except Exception:
             logger.exception("collection invitation mail to %s failed", email)
 
-    deliver_async(_send)
+    deliver_async(_job)
 
 
 class AccountAdapter(DefaultAccountAdapter):

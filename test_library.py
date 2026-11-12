@@ -16,6 +16,7 @@ from urllib.parse import urlencode, urlsplit
 
 from django.contrib.auth import HASH_SESSION_KEY, get_user_model
 from django.core import mail
+from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import Http404
 from django.db import IntegrityError, transaction
@@ -285,6 +286,8 @@ class CollectionMembershipTests(ApiTestCase):
         inline = mock.patch.object(accounts, "deliver_async", lambda fn: fn())
         inline.start()
         self.addCleanup(inline.stop)
+        # The owner-keyed invite throttle counts in the process-local cache.
+        cache.clear()
         self.alice_client = self._login(self.alice)
         self.bob_client = self._login(self.bob)
 
@@ -316,7 +319,10 @@ class CollectionMembershipTests(ApiTestCase):
 
     def test_member_invite_outcomes_are_uniform(self):
         """No account-existence oracle: unknown mailbox, the owner themself,
-        a current member and a fresh invitee answer the same 202 envelope."""
+        a current member and a fresh invitee get the same 202 envelope and
+        the same request-path work — every valid address is written an
+        invitation row; whether mail goes out is decided only in the
+        delivery job, off the response path."""
         shared = self._shared()
         Membership.objects.create(collection=shared, user=self.bob)
         carol = self._user("carol@example.com")
@@ -335,16 +341,26 @@ class CollectionMembershipTests(ApiTestCase):
                 response.json(),
                 {"invitation": {"email": email, "collection_id": str(shared.id)}},
             )
-        # Only the invitee with an active account got state and mail.
+        # The write is uniform: every probed address got a row, so the fsync
+        # commit cannot separate an invitable account from the rest.
         self.assertEqual(
             set(CollectionInvitation.objects.values_list("email", flat=True)),
-            {carol.email},
+            set(probes),
         )
+        # Membership never materializes from a probe.
         self.assertEqual(
             Membership.objects.filter(collection=shared).count(), 1
         )
+        # Only the delivery job mails, and only an invitable account: one
+        # mail, to carol alone.
         self.assertEqual([message.to for message in mail.outbox], [[carol.email]])
-        # Re-inviting the pending mailbox answers identically and resends.
+        self.assertTrue(
+            CollectionInvitation.objects.filter(
+                email=carol.email, mailed_at__isnull=False
+            ).exists()
+        )
+        # Re-inviting inside the cooldown answers identically, supersedes the
+        # pending token, and stays quiet — one mail per mailbox per cooldown.
         response = self._invite(self.alice_client, shared, carol.email)
         self.assertEqual(response.status_code, 202)
         self.assertEqual(
@@ -352,16 +368,60 @@ class CollectionMembershipTests(ApiTestCase):
             {"invitation": {"email": carol.email, "collection_id": str(shared.id)}},
         )
         self.assertEqual(
-            [message.to for message in mail.outbox], [[carol.email], [carol.email]]
+            [message.to for message in mail.outbox], [[carol.email]]
         )
-        # Exactly one live invitation survives the supersede.
+        # Exactly one live invitation survives the supersede (per mailbox;
+        # the other probes own their own dead-letter rows).
         self.assertEqual(
             CollectionInvitation.objects.filter(
                 collection=shared,
+                email=carol.email,
                 accepted_by__isnull=True,
                 expires_at__gt=timezone.now(),
             ).count(),
             1,
+        )
+
+    def test_member_invite_rate_limit_is_per_owner(self):
+        """Over budget the answer stays 202 with the same envelope, but no
+        row is written and no mail is queued: the budget belongs to the
+        caller, never to the probed address, and each owner has their own."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        with override_settings(CLIPSHELF_COLLECTION_INVITE_RATE="3/h/user"):
+            for email in ("u1@example.com", "u2@example.com", carol.email):
+                response = self._invite(self.alice_client, shared, email)
+                self.assertEqual(response.status_code, 202)
+                self.assertEqual(
+                    response.json(),
+                    {"invitation": {"email": email, "collection_id": str(shared.id)}},
+                )
+            # Budget spent: same answer, no state.
+            response = self._invite(self.alice_client, shared, "u4@example.com")
+            self.assertEqual(response.status_code, 202)
+            self.assertEqual(
+                response.json(),
+                {"invitation": {"email": "u4@example.com", "collection_id": str(shared.id)}},
+            )
+        self.assertEqual(
+            set(CollectionInvitation.objects.values_list("email", flat=True)),
+            {"u1@example.com", "u2@example.com", carol.email},
+        )
+        self.assertEqual([message.to for message in mail.outbox], [[carol.email]])
+        # Another owner still has their own budget.
+        response = self.bob_client.post(
+            "/api/collections",
+            data=json.dumps({"name": "Bob finds"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        bob_shared = Collection.objects.get(id=response.json()["collection"]["id"])
+        response = self._invite(self.bob_client, bob_shared, "u5@example.com")
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(
+            CollectionInvitation.objects.filter(
+                collection=bob_shared, email="u5@example.com"
+            ).exists()
         )
 
     def test_member_invite_rejects_malformed_email(self):

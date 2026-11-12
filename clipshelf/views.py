@@ -32,6 +32,10 @@ from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.static import serve as _static_serve
 
+# The public allauth ratelimit wrapper cannot take an explicit limit config;
+# the internal consume (same machinery as admin reauthentication) can.
+from allauth.core.internal import ratelimit
+
 from clipshelf.api import ApiError, json_body, json_error, vmessage
 from clipshelf import accounts, asset_files, imports, services
 from clipshelf.models import (
@@ -44,7 +48,6 @@ from clipshelf.models import (
     ImportRecord,
     Job,
     Membership,
-    User,
 )
 
 DEFAULT_PAGE = 50
@@ -307,12 +310,14 @@ def api_collection_detail(request, collection_id):
 def api_collection_members(request, collection_id):
     """Owner invites a member by email; membership materializes on redemption.
 
-    Every address gets the same answer: unknown mailboxes, the owner themself,
-    current members and fresh invitations are indistinguishable (the
-    ACCOUNT_PREVENT_ENUMERATION posture extends to collection membership).
-    The invitation email — delivered off the response path so probes cannot
-    be timed against SMTP — is the only channel that reveals that a matching
-    active account exists, and the invitee joins by redeeming its link.
+    The request path is identical for every well-formed address: one
+    owner-keyed throttle check, one supersede-and-insert write, then the same
+    uniform 202 (the ACCOUNT_PREVENT_ENUMERATION posture extends to
+    collection membership). Whether an invitable account exists, and whether
+    mail goes out, is decided later in the delivery job — off the response
+    path — so neither the body nor the timing of a probe separates any
+    outcome. The throttle budget belongs to the caller, never to the
+    probed address, so a probe cannot move address-specific state.
     """
     user = request.user
     collection = _accessible_collection(user, collection_id)
@@ -326,21 +331,32 @@ def api_collection_members(request, collection_id):
         validate_email(email)
     except ValidationError:
         raise ApiError(400, detail="a valid email address is required")
-    # One constant answer for every probe outcome; what varies below is only
-    # server-side state (an invitation row and one outbound email).
     answer = JsonResponse(
         {"invitation": {"email": email, "collection_id": str(collection.id)}},
         status=202,
     )
-    target = User.objects.filter(email__iexact=email, is_active=True).first()
-    if target is None or target.id == collection.owner_id:
+    # The public allauth wrapper reads limits only from allauth's own setting
+    # for known actions; the internal consume takes the limit explicitly and
+    # is the same machinery admin reauthentication already runs on.
+    allowed = ratelimit.consume(
+        request,
+        app="clipshelf",
+        action="collection_invite",
+        config={
+            "collection_invite": getattr(
+                settings, "CLIPSHELF_COLLECTION_INVITE_RATE", "20/h/user"
+            )
+        },
+        user=user,
+    )
+    if allowed is None:  # over budget: same 202, no write, no mail
         return answer
-    if Membership.objects.filter(collection=collection, user=target).exists():
-        return answer  # already a member: nothing to invite, same answer
     now = timezone.now()
     with transaction.atomic():
-        # Supersede pending invitations for this mailbox: each invite carries
-        # exactly one live single-use token.
+        # Supersede the pending invitation for this mailbox, then store the
+        # fresh single-use token. The write happens for every valid address
+        # — accepted or not — so the fsync commit stays out of the timing
+        # signal; dead rows (unknown mailbox, owner, member) just expire.
         CollectionInvitation.objects.filter(
             collection=collection,
             email=email,
@@ -355,8 +371,8 @@ def api_collection_members(request, collection_id):
             created_by=user,
             expires_at=now + accounts.INVITATION_TTL,
         )
-    accounts.send_collection_invitation_mail(
-        request, email, token, collection.name, user.email
+    accounts.queue_collection_invitation_mail(
+        request, email, token, collection.id, collection.name, user
     )
     return answer
 

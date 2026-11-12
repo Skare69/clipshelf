@@ -573,6 +573,9 @@ class CollectionInvitation(models.Model):
         related_name="member_invitations_accepted",
     )
     accepted_at = models.DateTimeField(null=True, blank=True)
+    # Set by the delivery job right before SMTP: the per-mailbox resend
+    # cooldown reads this, never the response path.
+    mailed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
