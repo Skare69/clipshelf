@@ -278,6 +278,29 @@ def parse_upload(data):
     return fmt, args
 
 
+def _cli_record_destination(user, digest):
+    """Stored destination of a CLI-created import record, or None.
+
+    import_library commits with record=None, so the engine manifest carries
+    no collection_id. The commit mints a deterministic request id for it
+    (_commit_import) and the Capture row it wrote records the destination
+    the rows went to. Resolve through that id only; Capture.request_hash is
+    not a key, because browser and CLI imports of one content share it. A
+    browser ImportRequest binding on the deterministic id means a client
+    claimed the id first, so the Capture would not be the CLI record's own;
+    None fails the destination guard closed.
+    """
+    crid = str(uuid.uuid5(uuid.NAMESPACE_URL,
+                          f"clipshelf-import:{user.id}:{digest}"))
+    if models.ImportRequest.objects.filter(user=user, request_id=crid).exists():
+        return None
+    capture = models.Capture.objects.filter(
+        user=user, client_request_id=crid).first()
+    if capture is None or capture.requested_collection_id is None:
+        return None
+    return str(capture.requested_collection_id)
+
+
 def import_items(*, user, collection_id, items, prompts=None, client_request_id=None,
                  record=None, cache_dir=None, origin="legacy-import",
                  seen=None, removed=None, dry_run=False):
@@ -286,7 +309,10 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     All-or-nothing: validation (including media staging and public fetch of
     missing bytes) completes before any database write; the DB commit is one
     transaction, so a crash or failure leaves no partial contributions and an
-    exact repeat is a no-op keyed by (user, input digest). Raises
+    exact repeat is a no-op keyed by (user, input digest). A repeat naming a
+    destination the stored record did not serve raises ValidationError
+    (code="conflict") instead of answering success for the wrong collection.
+    Raises
     ValidationError for rejected payloads; returns a result dict.
     Links without media are not fetched here: their jobs start pending and
     the job loop fetches them, as for a capture.
@@ -318,6 +344,18 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     existing = (None if dry_run else
                 models.ImportRecord.objects.filter(user=user, input_digest=digest).first())
     if existing is not None:
+        # Destination guard for a digest replay (admission checks the raw
+        # upload bytes; this digest is the canonical one): the replay may
+        # only repeat the stored record's own destination, otherwise the
+        # requested collection would silently receive nothing. Records with
+        # no stored destination fail closed.
+        stored = (existing.manifest or {}).get("collection_id")
+        if not isinstance(stored, str) or not stored:
+            stored = _cli_record_destination(user, digest)
+        if stored != str(collection.id):
+            raise ValidationError(
+                "file was already imported to a different collection",
+                code="conflict")
         return {"created": False, "digest": digest, "manifest": existing.manifest,
                 "notice": notice, "collection_id": str(collection.id)}
 

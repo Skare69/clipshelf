@@ -733,6 +733,127 @@ class ImportQueueTests(WorkerMixin, TransactionTestCase):
         self.assertTrue(models.Entry.objects.filter(
             collection=self.personal, kind="link",
             key="https://example.com/committed").exists())
+
+    # --- digest replays against prior records (audit CLIP-37 follow-up) ---
+
+    def _cli_import(self, items):
+        """Commit a record=None import: the shape import_library creates —
+        engine manifest without status or collection_id, one Capture under
+        the deterministic request id _commit_import mints."""
+        with override_settings(DATA_DIR=str(self.tmp)):
+            return imports.import_items(
+                user=self.user, collection_id=self.personal.id,
+                items=items, origin="legacy-import")
+
+    def _staged_replay_record(self, items, collection):
+        """A pending upload record whose spool carries the same content in
+        the canonical digest domain: admission passed it (different raw
+        bytes), the worker claims it, import_items finds the prior record."""
+        staging_rel = f"staging/import-{uuid.uuid4().hex}.json"
+        with override_settings(DATA_DIR=str(self.tmp)):
+            (Path(self.tmp) / "staging").mkdir(parents=True, exist_ok=True)
+            (Path(self.tmp) / staging_rel).write_text(_json(items), encoding="utf-8")
+        return models.ImportRecord.objects.create(
+            user=self.user, input_digest=uuid.uuid4().hex,
+            manifest={"status": "pending", "staging": staging_rel,
+                      "collection_id": str(collection.id),
+                      "format": "tiktok",
+                      "client_request_id": str(uuid.uuid4())})
+
+    def test_digest_replay_finalizes_the_claimed_record(self):
+        items = [{"url": "https://example.com/replayed", "title": "Legacy clip"}]
+        cli = self._cli_import(items)
+        record = self._staged_replay_record(items, self.personal)
+        # One coordinator pass: claim the record, hit the digest replay in
+        # import_items, and still reach the terminal state.
+        self.run_worker()
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "done")
+        self.assertTrue(record.manifest["completed_at"])
+        self.assertFalse(record.manifest["result"]["created"])
+        # The note carries the canonical digest the replay matched, not the
+        # record's raw upload digest.
+        self.assertEqual(record.manifest["result"]["digest"], cli["digest"])
+        # The replay wrote nothing: the CLI import's entry stands alone.
+        self.assertEqual(models.Entry.objects.filter(
+            collection=self.personal, kind="link",
+            key="https://example.com/replayed").count(), 1)
+        # The spool is owned by a finished record only, so the normal
+        # retention window sweeps it.
+        spool = (Path(self.tmp) / record.manifest["staging"]).resolve()
+        with override_settings(DATA_DIR=str(self.tmp)):
+            eligible = worker.staging_cleanup_candidates(
+                now=timezone.now() + timedelta(
+                    days=worker.STAGING_RETENTION_DAYS + 1))
+        self.assertIn(spool, eligible)
+
+    def test_digest_replay_to_another_collection_conflicts(self):
+        items = [{"url": "https://example.com/elsewhere", "title": "Legacy clip"}]
+        self._cli_import(items)
+        other = models.Collection.objects.create(
+            name="Other", kind="shared", owner=self.user)
+        # Engine level: the replay raises the admission-shaped conflict.
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                self.assertRaises(ValidationError) as raised:
+            imports.import_items(
+                user=self.user, collection_id=other.id, items=items,
+                origin="browser-import")
+        self.assertEqual(raised.exception.code, "conflict")
+        # Worker level: the claimed record ends terminal error, not running.
+        record = self._staged_replay_record(items, other)
+        self.run_worker()
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "error")
+        self.assertTrue(record.manifest["completed_at"])
+        self.assertIn(
+            "file was already imported to a different collection",
+            record.manifest["error"])
+        self.assertFalse(models.Entry.objects.filter(collection=other).exists())
+
+    def test_cli_record_without_destination_fails_closed(self):
+        # A CLI-shaped record with no stored destination and no Capture to
+        # resolve one from must not silently apply to a new destination.
+        items = [{"url": "https://example.com/cli-only", "title": "CLI clip"}]
+        digest = imports._input_digest(
+            imports._dedupe(items, set()), [], {}, {}, None)
+        models.ImportRecord.objects.create(
+            user=self.user, input_digest=digest,
+            manifest={"generated_at": timezone.now().isoformat(),
+                      "origin": "legacy-import"})
+        other = models.Collection.objects.create(
+            name="Other", kind="shared", owner=self.user)
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                self.assertRaises(ValidationError) as raised:
+            imports.import_items(
+                user=self.user, collection_id=other.id, items=items,
+                origin="browser-import")
+        self.assertEqual(raised.exception.code, "conflict")
+        record = self._staged_replay_record(items, other)
+        self.run_worker()
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "error")
+        self.assertIn(
+            "file was already imported to a different collection",
+            record.manifest["error"])
+
+    def test_browser_bound_request_id_fails_the_destination_lookup(self):
+        # A client that claimed the CLI import's deterministic request id
+        # through the browser surface breaks the Capture resolution, so the
+        # guard fails closed even for a repeat into the same collection.
+        items = [{"url": "https://example.com/bound", "title": "Legacy clip"}]
+        result = self._cli_import(items)
+        crid = uuid.uuid5(uuid.NAMESPACE_URL,
+                          f"clipshelf-import:{self.user.id}:{result['digest']}")
+        models.ImportRequest.objects.create(
+            user=self.user, request_id=crid,
+            record=models.ImportRecord.objects.get(input_digest=result["digest"]))
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                self.assertRaises(ValidationError) as raised:
+            imports.import_items(
+                user=self.user, collection_id=self.personal.id, items=items,
+                origin="browser-import")
+        self.assertEqual(raised.exception.code, "conflict")
+
     def _tar_pit_items(self, posts=3):
         """3 items x 106 media URLs (100 slides + 1 video + 5 mirrors), the
         shape the release review flagged as able to hold a slot for days."""

@@ -364,9 +364,12 @@ def _claim_imports(limit=None):
 def _run_import(record, say=None):
     # Lifecycle: the commit checkpoint (services.commit_import_rows, called
     # from imports._commit_import) writes the one "done" update, atomic with
-    # the rows it describes. This function only labels a failed import; a
-    # failed bookkeeping write is logged and never relabels an already
-    # committed import.
+    # the rows it describes. This function writes the terminal states a
+    # commit cannot reach: a failed import (error), and a digest replay
+    # (done) — for created=False import_items returned before staging and
+    # commit, so nothing else would finalize this claimed record and its
+    # spool would stay pinned forever. A failed bookkeeping write is logged
+    # and never relabels an already committed import.
     try:
         result = imports.run_staged_import(record)
     except Exception as exc:
@@ -381,6 +384,16 @@ def _run_import(record, say=None):
         if say:
             say(f"import {record.id}: failed ({exc})")
         return
+    if not result.get("created"):
+        try:
+            record.update_manifest({
+                "status": models.ImportRecord.Status.DONE,
+                "completed_at": timezone.now().isoformat(),
+                "result": {"created": False, "digest": result.get("digest"),
+                           "note": "already imported under a prior record"}})
+        except Exception:
+            log.exception("import %s: status write failed; status unchanged",
+                          record.id)
     if say:
         say(f"import {record.id}: done ({result.get('counts', {})})")
 
