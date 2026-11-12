@@ -546,6 +546,39 @@ class Invitation(models.Model):
         return f"Invite {self.email}"
 
 
+class CollectionInvitation(models.Model):
+    """Owner-issued shared-collection invitation.
+
+    Only the token hash is stored; membership materializes when the invitee
+    redeems the mailed link as the account owning that exact mailbox. The
+    member endpoint answers every probe with the same uniform 202, so this
+    table — not any API response — is the only trace of who was invited.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    collection = models.ForeignKey(
+        Collection, on_delete=models.CASCADE, related_name="member_invitations"
+    )
+    email = models.EmailField()
+    token_hash = models.CharField(max_length=64, unique=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="member_invitations_created"
+    )
+    expires_at = models.DateTimeField()
+    accepted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="member_invitations_accepted",
+    )
+    accepted_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Member invite {self.email} -> {self.collection_id}"
+
+
 class ImportRecord(models.Model):
     """Idempotency ledger for browser tiktok.json imports: one digest per user."""
 

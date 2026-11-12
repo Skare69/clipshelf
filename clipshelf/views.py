@@ -10,13 +10,15 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import uuid as uuid_mod
 from functools import wraps
 from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import IntegrityError, connection, transaction
+from django.core.validators import validate_email
+from django.db import connection, transaction
 from django.http import (
     FileResponse,
     Http404,
@@ -25,6 +27,7 @@ from django.http import (
 )
 from django.shortcuts import redirect, render
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.static import serve as _static_serve
@@ -35,6 +38,7 @@ from clipshelf.models import (
     Asset,
     Capture,
     Collection,
+    CollectionInvitation,
     Contribution,
     Entry,
     ImportRecord,
@@ -301,6 +305,15 @@ def api_collection_detail(request, collection_id):
 @api
 @require_http_methods(["POST"])
 def api_collection_members(request, collection_id):
+    """Owner invites a member by email; membership materializes on redemption.
+
+    Every address gets the same answer: unknown mailboxes, the owner themself,
+    current members and fresh invitations are indistinguishable (the
+    ACCOUNT_PREVENT_ENUMERATION posture extends to collection membership).
+    The invitation email — delivered off the response path so probes cannot
+    be timed against SMTP — is the only channel that reveals that a matching
+    active account exists, and the invitee joins by redeeming its link.
+    """
     user = request.user
     collection = _accessible_collection(user, collection_id)
     if collection.kind != "shared":
@@ -308,27 +321,44 @@ def api_collection_members(request, collection_id):
     if collection.owner_id != user.id:
         raise ApiError(403, detail="only the owner manages members")
     body = json_body(request)
-    email = str(body.get("email") or "").strip()
-    target = User.objects.filter(email__iexact=email, is_active=True).first()
-    if target is None:
-        raise ApiError(400, detail="no active user with that email")
-    if target.id == collection.owner_id:
-        raise ApiError(409, detail="owner is already a member")
+    email = str(body.get("email") or "").strip().lower()
     try:
-        with transaction.atomic():  # keep the outer transaction usable on conflict
-            Membership.objects.create(collection=collection, user=target)
-    except IntegrityError:
-        raise ApiError(409, detail="already a member")
-    return JsonResponse(
-        {
-            "member": {
-                "id": str(target.id),
-                "email": target.email,
-                "is_owner": False,
-            }
-        },
-        status=201,
+        validate_email(email)
+    except ValidationError:
+        raise ApiError(400, detail="a valid email address is required")
+    # One constant answer for every probe outcome; what varies below is only
+    # server-side state (an invitation row and one outbound email).
+    answer = JsonResponse(
+        {"invitation": {"email": email, "collection_id": str(collection.id)}},
+        status=202,
     )
+    target = User.objects.filter(email__iexact=email, is_active=True).first()
+    if target is None or target.id == collection.owner_id:
+        return answer
+    if Membership.objects.filter(collection=collection, user=target).exists():
+        return answer  # already a member: nothing to invite, same answer
+    now = timezone.now()
+    with transaction.atomic():
+        # Supersede pending invitations for this mailbox: each invite carries
+        # exactly one live single-use token.
+        CollectionInvitation.objects.filter(
+            collection=collection,
+            email=email,
+            accepted_by__isnull=True,
+            expires_at__gt=now,
+        ).update(expires_at=now)
+        token = secrets.token_urlsafe(32)
+        CollectionInvitation.objects.create(
+            collection=collection,
+            email=email,
+            token_hash=accounts.invitation_token_hash(token),
+            created_by=user,
+            expires_at=now + accounts.INVITATION_TTL,
+        )
+    accounts.send_collection_invitation_mail(
+        request, email, token, collection.name, user.email
+    )
+    return answer
 
 
 @api

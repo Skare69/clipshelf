@@ -132,8 +132,9 @@
     <string name="collection_new">New shared collection</string>
     <string name="collection_new_hint">Name</string>
     <string name="collection_create">Create</string>
-    <string name="member_add_hint">Add member by email</string>
-    <string name="member_add">Add</string>
+    <string name="member_add_hint">Invite a member by email</string>
+    <string name="member_add">Invite</string>
+    <string name="member_invited">Invitation sent — membership starts when the invitee accepts the email link</string>
     <string name="member_remove">Remove</string>
     <string name="member_owner">%1$s (owner)</string>
     <string name="collection_default_set">Default destination updated.</string>

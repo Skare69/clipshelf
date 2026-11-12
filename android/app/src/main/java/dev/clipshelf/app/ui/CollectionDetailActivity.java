@@ -66,6 +66,9 @@ public class CollectionDetailActivity extends AppCompatActivity {
                     Toast.makeText(this, Ui.message(this, e), Toast.LENGTH_LONG).show();
                 } else {
                     add.setText("");
+                    // The uniform 202 answers an invitation, not a membership;
+                    // the roster changes only after the invitee accepts the link.
+                    Toast.makeText(this, getString(R.string.member_invited), Toast.LENGTH_LONG).show();
                     reload();
                 }
             });

@@ -654,7 +654,7 @@ async function renderCollections() {
   const form = el("form", { class: "panel" }, el("h2", { text: "New shared collection" }),
     el("div", { class: "field" }, el("label", { for: "newCol", text: "Name" }),
       el("div", { class: "row" }, name, el("button", { class: "btn primary", type: "submit", text: "Create" }))),
-    el("p", { class: "hint", text: "You become the owner and choose the members. Members add and remove their own contributions." }));
+    el("p", { class: "hint", text: "You become the owner and invite the members. Members add and remove their own contributions." }));
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     const n = name.value.trim();
@@ -709,11 +709,16 @@ function membersPanel(c) {
     });
     const email = el("input", { type: "email", id: "addMem-" + c.id, required: true, class: "grow", autocomplete: "off" });
     const addForm = el("form", { class: "field" },
-      el("label", { for: "addMem-" + c.id, text: "Add a member by email" }),
-      el("div", { class: "row" }, email, el("button", { class: "btn", type: "submit", text: "Add member" })));
+      el("label", { for: "addMem-" + c.id, text: "Invite a member by email" }),
+      el("div", { class: "row" }, email, el("button", { class: "btn", type: "submit", text: "Send invite" })));
     addForm.addEventListener("submit", async ev => {
       ev.preventDefault();
-      try { await api(`/api/collections/${c.id}/members`, { method: "POST", body: { email: email.value.trim() } }); load(); }
+      try {
+        await api(`/api/collections/${c.id}/members`, { method: "POST", body: { email: email.value.trim() } });
+        email.value = "";
+        banner("ok", "Invitation sent — membership starts when the invitee accepts the email link.");
+        load();
+      }
       catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
     });
     body.replaceChildren(
@@ -722,7 +727,7 @@ function membersPanel(c) {
           el("th", { text: "Email" }), el("th", { text: "Role" }), el("th", { text: "" }))),
         el("tbody", {}, ...rows))),
       addForm,
-      el("p", { class: "hint", text: "Only existing, active accounts can join. The owner cannot be removed." }));
+      el("p", { class: "hint", text: "Invitations reach existing, active accounts only; the invitee joins through the emailed link. The owner cannot be removed." }));
   };
   p.addEventListener("toggle", () => { if (p.open && !body.childNodes.length) load(); });
   return p;

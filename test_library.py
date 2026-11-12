@@ -12,9 +12,10 @@ import tempfile
 import uuid
 from datetime import timedelta
 from unittest import mock
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 
 from django.contrib.auth import HASH_SESSION_KEY, get_user_model
+from django.core import mail
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.http import Http404
 from django.db import IntegrityError, transaction
@@ -22,10 +23,10 @@ from django.test import Client, TestCase, override_settings
 from django.utils import timezone
 from allauth.account.models import EmailAddress
 
-from clipshelf import imports, services, worker
+from clipshelf import accounts, imports, services, worker
 from clipshelf import acquisition, judgment, views
 from clipshelf.models import ImportRecord, ImportRequest
-from clipshelf.models import Asset, Capture, Collection, Contribution, Entry, History, Job, Membership
+from clipshelf.models import Asset, Capture, Collection, CollectionInvitation, Contribution, Entry, History, Job, Membership
 
 User = get_user_model()
 PASSWORD = "test-pass-1234"
@@ -279,6 +280,11 @@ class PrivacyTests(ApiTestCase):
 class CollectionMembershipTests(ApiTestCase):
     def setUp(self):
         super().setUp()
+        # Invitation mail runs inline so outbox assertions are deterministic;
+        # the endpoint's off-response-path delivery thread stays unexercised.
+        inline = mock.patch.object(accounts, "deliver_async", lambda fn: fn())
+        inline.start()
+        self.addCleanup(inline.stop)
         self.alice_client = self._login(self.alice)
         self.bob_client = self._login(self.bob)
 
@@ -291,46 +297,169 @@ class CollectionMembershipTests(ApiTestCase):
         self.assertEqual(response.status_code, 201)
         return Collection.objects.get(id=response.json()["collection"]["id"])
 
-    def test_member_add_remove_and_permissions(self):
+    def _invite(self, client, collection, email):
+        return client.post(
+            f"/api/collections/{collection.id}/members",
+            data=json.dumps({"email": email}),
+            content_type="application/json",
+        )
+
+    def _invite_link(self, email):
+        """The mailed redemption path: mail went to exactly this mailbox."""
+        self.assertEqual([message.to for message in mail.outbox], [[email]])
+        url = next(
+            line.strip()
+            for line in mail.outbox[-1].body.splitlines()
+            if "/collections/invitations/" in line
+        )
+        return urlsplit(url).path
+
+    def test_member_invite_outcomes_are_uniform(self):
+        """No account-existence oracle: unknown mailbox, the owner themself,
+        a current member and a fresh invitee answer the same 202 envelope."""
+        shared = self._shared()
+        Membership.objects.create(collection=shared, user=self.bob)
+        carol = self._user("carol@example.com")
+        probes = [
+            "nobody@example.com",
+            self.bob.email,
+            self.alice.email,
+            carol.email,
+        ]
+        for email in probes:
+            response = self._invite(self.alice_client, shared, email)
+            self.assertEqual(response.status_code, 202)
+            # No response field may vary beyond the echoed address: no user
+            # id, no member object, no conflict class for the existing member.
+            self.assertEqual(
+                response.json(),
+                {"invitation": {"email": email, "collection_id": str(shared.id)}},
+            )
+        # Only the invitee with an active account got state and mail.
+        self.assertEqual(
+            set(CollectionInvitation.objects.values_list("email", flat=True)),
+            {carol.email},
+        )
+        self.assertEqual(
+            Membership.objects.filter(collection=shared).count(), 1
+        )
+        self.assertEqual([message.to for message in mail.outbox], [[carol.email]])
+        # Re-inviting the pending mailbox answers identically and resends.
+        response = self._invite(self.alice_client, shared, carol.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(
+            response.json(),
+            {"invitation": {"email": carol.email, "collection_id": str(shared.id)}},
+        )
+        self.assertEqual(
+            [message.to for message in mail.outbox], [[carol.email], [carol.email]]
+        )
+        # Exactly one live invitation survives the supersede.
+        self.assertEqual(
+            CollectionInvitation.objects.filter(
+                collection=shared,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).count(),
+            1,
+        )
+
+    def test_member_invite_rejects_malformed_email(self):
+        """Input validation stays existence-blind: 400 for syntax only."""
+        shared = self._shared()
+        response = self._invite(self.alice_client, shared, "not-an-email")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(CollectionInvitation.objects.count(), 0)
+        self.assertEqual(len(mail.outbox), 0)
+
+    def test_member_invite_accept_remove_and_permissions(self):
         shared = self._shared()
         # Non-owner cannot manage members.
-        response = self.bob_client.post(
-            f"/api/collections/{shared.id}/members",
-            data=json.dumps({"email": self.bob.email}),
-            content_type="application/json",
-        )
+        response = self._invite(self.bob_client, shared, self.bob.email)
         # Non-members are told nothing about a collection they cannot see.
         self.assertEqual(response.status_code, 404)
-        response = self.alice_client.post(
-            f"/api/collections/{shared.id}/members",
-            data=json.dumps({"email": self.bob.email}),
-            content_type="application/json",
-        )
-        self.assertEqual(response.status_code, 201)
-        # Duplicate membership conflicts; unknown email rejected.
-        self.assertEqual(
-            self.alice_client.post(
-                f"/api/collections/{shared.id}/members",
-                data=json.dumps({"email": self.bob.email}),
-                content_type="application/json",
-            ).status_code,
-            409,
-        )
-        self.assertEqual(
-            self.alice_client.post(
-                f"/api/collections/{shared.id}/members",
-                data=json.dumps({"email": "nobody@example.com"}),
-                content_type="application/json",
-            ).status_code,
-            400,
+        # The owner invites bob; membership does not materialize yet.
+        response = self._invite(self.alice_client, shared, self.bob.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=self.bob).exists()
         )
         detail = self.alice_client.get(f"/api/collections/{shared.id}").json()
         emails = {m["email"] for m in detail["members"]}
-        self.assertEqual(emails, {self.alice.email, self.bob.email})
+        self.assertEqual(emails, {self.alice.email})
         self.assertTrue(
             next(m for m in detail["members"] if m["email"] == self.alice.email)[
                 "is_owner"
             ]
+        )
+        # The emailed link, redeemed by the invited mailbox, joins bob.
+        response = self.bob_client.get(self._invite_link(self.bob.email))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(collection=shared, user=self.bob).exists()
+        )
+        self.assertFalse(
+            CollectionInvitation.objects.filter(accepted_by__isnull=True).exists()
+        )
+        detail = self.alice_client.get(f"/api/collections/{shared.id}").json()
+        emails = {m["email"] for m in detail["members"]}
+        self.assertEqual(emails, {self.alice.email, self.bob.email})
+        # The collection appears in the invitee's own library.
+        collections = self.bob_client.get("/api/collections").json()["collections"]
+        self.assertIn(str(shared.id), [c["id"] for c in collections])
+        # Re-inviting a current member answers the same 202, sends no mail.
+        response = self._invite(self.alice_client, shared, self.bob.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(mail.outbox), 1)
+        # Redeeming the spent link again never duplicates membership.
+        response = self.bob_client.get(self._invite_link(self.bob.email))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            Membership.objects.filter(collection=shared, user=self.bob).count(), 1
+        )
+        # Owner removal and non-owner management stay refused.
+        self.assertEqual(
+            self.alice_client.delete(
+                f"/api/collections/{shared.id}/members/{self.alice.id}"
+            ).status_code,
+            400,
+        )
+        self.assertEqual(
+            self.bob_client.delete(
+                f"/api/collections/{shared.id}/members/{self.alice.id}"
+            ).status_code,
+            403,
+        )
+
+    def test_member_invite_redemption_guards(self):
+        """Only the invited mailbox can redeem: other sign-ins, anonymous
+        visitors and stale tokens get no membership."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        self._invite(self.alice_client, shared, self.bob.email)
+        link = self._invite_link(self.bob.email)
+        # A different logged-in mailbox learns nothing and consumes nothing.
+        response = self._login(carol).get(link)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        self.assertTrue(
+            CollectionInvitation.objects.filter(
+                accepted_by__isnull=True, expires_at__gt=timezone.now()
+            ).exists()
+        )
+        # Anonymous visitors log in first and return to the same link.
+        response = Client().get(link)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/accounts/login/", response["Location"])
+        self.assertIn("next=", response["Location"])
+        # A stale token is dead for everyone.
+        CollectionInvitation.objects.update(expires_at=timezone.now() - timedelta(hours=1))
+        response = self.bob_client.get(link)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=self.bob).exists()
         )
 
     def test_member_removal_by_owner(self):

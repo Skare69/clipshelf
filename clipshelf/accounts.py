@@ -6,7 +6,9 @@ entry link. Admin JSON endpoints live in clipshelf.admin_views.
 """
 
 import hashlib
+import logging
 import re
+import threading
 import time
 from datetime import timedelta
 from django.views.decorators.csrf import csrf_protect
@@ -16,14 +18,15 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth import get_user as django_get_user
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db import transaction
+from django.core.mail import send_mail as django_send_mail
+from django.db import close_old_connections, transaction
 from django.http import (
     Http404,
     JsonResponse,
 )
 from django.http.multipartparser import MultiPartParserError, RequestDataTooBig
 from django.middleware.csrf import CsrfViewMiddleware
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.urls import include, path, reverse
 from django.utils import timezone
 from django.utils.http import urlencode
@@ -43,7 +46,9 @@ from allauth.headless.constants import Client
 from allauth.core import context as allauth_context
 
 from clipshelf.api import ApiError, json_error, vmessage
-from clipshelf.models import Invitation
+from clipshelf.models import CollectionInvitation, Invitation, Membership
+
+logger = logging.getLogger(__name__)
 
 # How long an administrator-issued invitation may be redeemed.
 INVITATION_TTL = timedelta(days=7)
@@ -118,6 +123,62 @@ def mail_url(url):
         return canonical_url(url)
     parts = urlsplit(url)
     return urlunsplit(("", "", parts.path, parts.query, parts.fragment))
+
+
+def deliver_async(fn):
+    """Run an email delivery off the response path.
+
+    The members endpoint answers every probe with the same fast uniform 202,
+    so SMTP latency must never distinguish an existing account from an
+    unknown mailbox. A worker thread owns its own DB connection and opens
+    and drops it around the job; the request's transaction stays untouched.
+    Tests substitute an inline runner for determinism.
+    """
+
+    def _run():
+        close_old_connections()
+        try:
+            fn()
+        finally:
+            close_old_connections()
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def send_collection_invitation_mail(request, email, token, collection_name, owner_email):
+    """Mail the redemption link for a shared-collection invitation.
+
+    Only this mailbox learns that it was invited (that a matching active
+    account exists); the caller keeps seeing the uniform 202. SMTP failures
+    stay observable in the logs — the owner can always resend.
+    """
+    url = mail_url(
+        canonical_url(
+            request.build_absolute_uri(
+                reverse("clipshelf_collection_invite", args=[token])
+            )
+        )
+    )
+    subject = _('clipshelf: you are invited to "%(name)s"') % {"name": collection_name}
+    body = _(
+        '%(owner)s invited you to the shared collection "%(name)s" on clipshelf.\n\n'
+        "Open this link to join:\n%(url)s\n\n"
+        "The link works only for the account with this exact email address "
+        "and expires after %(days)s days."
+    ) % {
+        "owner": owner_email,
+        "name": collection_name,
+        "url": url,
+        "days": INVITATION_TTL.days,
+    }
+
+    def _send():
+        try:
+            django_send_mail(subject, body, None, [email])
+        except Exception:
+            logger.exception("collection invitation mail to %s failed", email)
+
+    deliver_async(_send)
 
 
 class AccountAdapter(DefaultAccountAdapter):
@@ -197,6 +258,57 @@ def invite_view(request, token):
     return redirect(
         f"{reverse('account_signup')}?{urlencode({'email': invitation.email})}"
     )
+
+
+@require_GET
+def collection_invite_view(request, token):
+    """GET /collections/invitations/<token>: redeem a shared-collection
+    invitation as the logged-in account holding the invited mailbox.
+
+    Redemption needs an existing, verified account; anonymous visitors log in
+    first (the next-parameter returns them here). Any other mailbox gets the
+    same page — the token, not the visitor, selects the invitation.
+    """
+    invitation = CollectionInvitation.objects.filter(
+        token_hash=invitation_token_hash(token),
+        accepted_by__isnull=True,
+        expires_at__gt=timezone.now(),
+    ).first()
+    if invitation is not None and not request.user.is_authenticated:
+        return redirect(
+            f"{reverse('account_login')}?{urlencode({'next': request.path})}"
+        )
+    if invitation is None:
+        messages.error(request, _("This invitation link is no longer valid."))
+    elif request.user.email.lower() != invitation.email.lower():
+        messages.error(
+            request, _("This invitation was issued for a different mailbox.")
+        )
+    else:
+        with transaction.atomic():
+            Membership.objects.get_or_create(
+                collection=invitation.collection, user=request.user
+            )
+            # First redemption wins the consume race; later visits answer
+            # already-a-member instead of re-consuming.
+            joined = (
+                CollectionInvitation.objects.filter(
+                    pk=invitation.pk, accepted_by__isnull=True
+                ).update(accepted_by=request.user, accepted_at=timezone.now())
+                == 1
+            )
+        if joined:
+            messages.success(
+                request,
+                _('You joined "%(name)s".') % {"name": invitation.collection.name},
+            )
+        else:
+            messages.info(
+                request,
+                _('You are already a member of "%(name)s".')
+                % {"name": invitation.collection.name},
+            )
+    return render(request, "clipshelf/invitation.html")
 
 
 def api_auth(request):
@@ -369,4 +481,9 @@ account_urlpatterns = [
     path("accounts/", include(_csrf_protect_allauth(allauth_account_urlpatterns))),
     path("_allauth/", include("allauth.headless.urls")),
     path("invite/<str:token>", invite_view, name="clipshelf_invite"),
+    path(
+        "collections/invitations/<str:token>",
+        collection_invite_view,
+        name="clipshelf_collection_invite",
+    ),
 ]
