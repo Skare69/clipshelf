@@ -58,8 +58,8 @@ cffi              = { observed = "2.1.1",   license = "MIT-0",        meta = "MI
 pycparser         = { observed = "3.12",    license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 argon2-cffi-bindings = { observed = "26.1.0", license = "MIT",        meta = "MIT" }
 httpx2            = { observed = "2.16.0",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
-pydantic          = { observed = "2.14.2",  license = "MIT",          meta = "MIT" }
-pydantic-core     = { observed = "2.50.2",  license = "MIT",          meta = "MIT" }
+pydantic          = { observed = "2.14.3",  license = "MIT",          meta = "MIT" }
+pydantic-core     = { observed = "2.50.4",  license = "MIT",          meta = "MIT" }
 tenacity          = { observed = "9.2.1",   license = "Apache-2.0",   meta = "Apache-2.0" }
 typing-extensions = { observed = "4.16.0",  license = "PSF-2.0",      meta = "PSF-2.0" }
 httpcore2         = { observed = "2.16.0",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
