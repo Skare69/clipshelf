@@ -18,6 +18,7 @@ from django.contrib.auth import HASH_SESSION_KEY, get_user_model
 from django.core import mail
 from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.core.mail.backends.base import BaseEmailBackend
 from django.http import Http404
 from django.db import IntegrityError, transaction
 from django.test import Client, TestCase, override_settings
@@ -31,6 +32,14 @@ from clipshelf.models import Asset, Capture, Collection, CollectionInvitation, C
 
 User = get_user_model()
 PASSWORD = "test-pass-1234"
+
+
+class FailingEmailBackend(BaseEmailBackend):
+    """SMTP stand-in that always fails: pins that failed invitation sends
+    never start the resend cooldown."""
+
+    def send_messages(self, messages):
+        raise RuntimeError("smtp relay down")
 
 
 class ApiTestCase(TestCase):
@@ -359,8 +368,9 @@ class CollectionMembershipTests(ApiTestCase):
                 email=carol.email, mailed_at__isnull=False
             ).exists()
         )
-        # Re-inviting inside the cooldown answers identically, supersedes the
-        # pending token, and stays quiet — one mail per mailbox per cooldown.
+        # Re-inviting inside the cooldown answers identically and stays
+        # quiet — and it never touches the mailed token, which remains the
+        # live, redeemable invitation.
         response = self._invite(self.alice_client, shared, carol.email)
         self.assertEqual(response.status_code, 202)
         self.assertEqual(
@@ -370,17 +380,79 @@ class CollectionMembershipTests(ApiTestCase):
         self.assertEqual(
             [message.to for message in mail.outbox], [[carol.email]]
         )
-        # Exactly one live invitation survives the supersede (per mailbox;
-        # the other probes own their own dead-letter rows).
+        mailed = CollectionInvitation.objects.filter(
+            email=carol.email, mailed_at__isnull=False
+        )
+        self.assertEqual(mailed.count(), 1)
+        self.assertTrue(mailed.filter(expires_at__gt=timezone.now()).exists())
+        # The quiet resend added one inert unmailed row.
+        self.assertEqual(
+            CollectionInvitation.objects.filter(email=carol.email).count(), 2
+        )
+
+    def test_member_invite_resend_inside_cooldown_keeps_mailed_link(self):
+        """A resend inside the cooldown stays quiet: the token already in the
+        invitee's mailbox keeps working and still joins them."""
+        shared = self._shared()
+        self._invite(self.alice_client, shared, self.bob.email)
+        link = self._invite_link(self.bob.email)
+        response = self._invite(self.alice_client, shared, self.bob.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(mail.outbox), 1)  # the quiet resend sent no mail
+        # The mailed link redeems exactly as if no resend had happened.
+        response = self.bob_client.get(link)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(collection=shared, user=self.bob).exists()
+        )
+
+    def test_member_invite_cooldown_is_per_collection(self):
+        """A mailbox invited to different collections by different owners
+        inside one cooldown window receives every invitation."""
+        first = self._shared()  # alice's collection
+        carol = self._user("carol@example.com")
+        response = self.bob_client.post(
+            "/api/collections",
+            data=json.dumps({"name": "Bob finds"}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 201)
+        second = Collection.objects.get(id=response.json()["collection"]["id"])
+        self._invite(self.alice_client, first, carol.email)
+        self._invite(self.bob_client, second, carol.email)
+        self.assertEqual(
+            [message.to for message in mail.outbox],
+            [[carol.email], [carol.email]],
+        )
         self.assertEqual(
             CollectionInvitation.objects.filter(
-                collection=shared,
-                email=carol.email,
-                accepted_by__isnull=True,
-                expires_at__gt=timezone.now(),
+                email=carol.email, mailed_at__isnull=False
             ).count(),
-            1,
+            2,
         )
+
+    def test_member_invite_smtp_failure_allows_resend(self):
+        """A failed send starts no cooldown: the row stays unmailed and a
+        resend retries the delivery immediately."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        with override_settings(EMAIL_BACKEND="test_library.FailingEmailBackend"):
+            response = self._invite(self.alice_client, shared, carol.email)
+            self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertTrue(
+            CollectionInvitation.objects.filter(
+                email=carol.email, mailed_at__isnull=True
+            ).exists()
+        )
+        response = self._invite(self.alice_client, shared, carol.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual([message.to for message in mail.outbox], [[carol.email]])
+        mailed = CollectionInvitation.objects.filter(
+            email=carol.email, mailed_at__isnull=False
+        )
+        self.assertEqual(mailed.count(), 1)
+        self.assertTrue(mailed.filter(expires_at__gt=timezone.now()).exists())
 
     def test_member_invite_rate_limit_is_per_owner(self):
         """Over budget the answer stays 202 with the same envelope, but no

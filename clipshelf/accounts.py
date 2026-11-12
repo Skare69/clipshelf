@@ -145,9 +145,10 @@ def deliver_async(fn):
     threading.Thread(target=_run, daemon=True).start()
 
 
-# One invitation email per mailbox per cooldown, across all owners and
-# collections: repeated invites refresh the pending token without hammering
-# the inbox. The cooldown lives entirely in the delivery job.
+# One invitation email per collection and mailbox per cooldown: a resend
+# inside the window stays quiet and leaves the already-mailed token untouched
+# — it remains the live, redeemable invitation. A different collection (so a
+# different owner) has its own window and always mails.
 COLLECTION_INVITE_MAIL_COOLDOWN = timedelta(minutes=10)
 
 
@@ -155,10 +156,11 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
     """Queue the delivery job for a freshly stored collection invitation.
 
     The request has already returned its uniform 202; everything here — the
-    account lookup, the eligibility decision, the per-mailbox cooldown and
-    SMTP itself — runs off the response path, so neither the body nor the
-    timing of a probe can reveal that a matching active account exists.
-    SMTP failures stay observable in the logs; the owner can always resend.
+    account lookup, the eligibility decision, the cooldown, the supersede of
+    stale rows and SMTP itself — runs off the response path, so neither the
+    body nor the timing of a probe can reveal that a matching active account
+    exists. SMTP failures stay observable in the logs and never start the
+    cooldown, so the owner can simply resend.
     """
     url = mail_url(
         canonical_url(
@@ -181,12 +183,6 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
     }
 
     def _job():
-        now = timezone.now()
-        if CollectionInvitation.objects.filter(
-            email__iexact=email,
-            mailed_at__gt=now - COLLECTION_INVITE_MAIL_COOLDOWN,
-        ).exists():
-            return  # a mail to this mailbox just went out: stay quiet
         target = get_user_model().objects.filter(
             email__iexact=email, is_active=True
         ).first()
@@ -194,15 +190,33 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
             return  # no invitable account: nothing to reveal, the row expires
         if Membership.objects.filter(collection_id=collection_id, user=target).exists():
             return  # already a member: nothing to invite
-        marked = CollectionInvitation.objects.filter(
-            token_hash=invitation_token_hash(token), mailed_at__isnull=True
-        ).update(mailed_at=timezone.now())
-        if not marked:  # another delivery won the race for this token
-            return
+        now = timezone.now()
+        if CollectionInvitation.objects.filter(
+            collection_id=collection_id,
+            email__iexact=email,
+            mailed_at__gt=now - COLLECTION_INVITE_MAIL_COOLDOWN,
+        ).exists():
+            return  # this collection just mailed this mailbox: stay quiet,
+            # the mailed token is untouched and stays the live invitation
+        with transaction.atomic():
+            # Only rows that actually mail may supersede others, and only the
+            # older unmailed ones: a mailed link keeps working until it is
+            # redeemed or expires, so a quiet resend never breaks it.
+            CollectionInvitation.objects.filter(
+                collection_id=collection_id,
+                email__iexact=email,
+                accepted_by__isnull=True,
+                mailed_at__isnull=True,
+                expires_at__gt=now,
+            ).exclude(token_hash=invitation_token_hash(token)).update(expires_at=now)
         try:
             django_send_mail(subject, body, None, [email])
         except Exception:
             logger.exception("collection invitation mail to %s failed", email)
+            return  # the row stays unmailed: a resend retries, no cooldown
+        CollectionInvitation.objects.filter(
+            token_hash=invitation_token_hash(token)
+        ).update(mailed_at=timezone.now())
 
     deliver_async(_job)
 

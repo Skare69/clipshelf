@@ -351,25 +351,18 @@ def api_collection_members(request, collection_id):
     )
     if allowed is None:  # over budget: same 202, no write, no mail
         return answer
-    now = timezone.now()
     with transaction.atomic():
-        # Supersede the pending invitation for this mailbox, then store the
-        # fresh single-use token. The write happens for every valid address
-        # — accepted or not — so the fsync commit stays out of the timing
-        # signal; dead rows (unknown mailbox, owner, member) just expire.
-        CollectionInvitation.objects.filter(
-            collection=collection,
-            email=email,
-            accepted_by__isnull=True,
-            expires_at__gt=now,
-        ).update(expires_at=now)
+        # Every valid address gets the identical write, so the fsync commit
+        # stays out of the timing signal; the row merely expires if no
+        # account can ever accept it. Superseding older rows is the delivery
+        # job's call, made only when it actually mails.
         token = secrets.token_urlsafe(32)
         CollectionInvitation.objects.create(
             collection=collection,
             email=email,
             token_hash=accounts.invitation_token_hash(token),
             created_by=user,
-            expires_at=now + accounts.INVITATION_TTL,
+            expires_at=timezone.now() + accounts.INVITATION_TTL,
         )
     accounts.queue_collection_invitation_mail(
         request, email, token, collection.id, collection.name, user
