@@ -326,37 +326,46 @@ def collection_invite_view(request, token):
         )
     else:
         with transaction.atomic():
-            Membership.objects.get_or_create(
-                collection=invitation.collection, user=request.user
-            )
-            # First redemption wins the consume race; later visits answer
-            # already-a-member instead of re-consuming.
+            # Consume first, with the full liveness predicate in the WHERE:
+            # a removal that burns the token between the liveness read above
+            # and this write must win over an in-flight redemption. The
+            # membership is created only when the consume won.
             joined = (
                 CollectionInvitation.objects.filter(
-                    pk=invitation.pk, accepted_by__isnull=True
+                    pk=invitation.pk,
+                    accepted_by__isnull=True,
+                    expires_at__gt=timezone.now(),
                 ).update(accepted_by=request.user, accepted_at=timezone.now())
                 == 1
             )
-            # This redemption is the door: every other live token for this
-            # mailbox expires with it, so a second mailed link can never
-            # re-admit the member once the owner removes them.
-            CollectionInvitation.objects.filter(
-                collection=invitation.collection,
-                email=invitation.email,
-                accepted_by__isnull=True,
-                expires_at__gt=timezone.now(),
-            ).exclude(pk=invitation.pk).update(expires_at=timezone.now())
+            if joined:
+                Membership.objects.get_or_create(
+                    collection=invitation.collection, user=request.user
+                )
+                # This redemption is the door: every other live token for
+                # this mailbox expires with it, so a second mailed link can
+                # never re-admit the member once the owner removes them.
+                CollectionInvitation.objects.filter(
+                    collection=invitation.collection,
+                    email=invitation.email,
+                    accepted_by__isnull=True,
+                    expires_at__gt=timezone.now(),
+                ).exclude(pk=invitation.pk).update(expires_at=timezone.now())
         if joined:
             messages.success(
                 request,
                 _('You joined "%(name)s".') % {"name": invitation.collection.name},
             )
-        else:
+        elif Membership.objects.filter(
+            collection=invitation.collection, user=request.user
+        ).exists():
             messages.info(
                 request,
                 _('You are already a member of "%(name)s".')
                 % {"name": invitation.collection.name},
             )
+        else:
+            messages.error(request, _("This invitation link is no longer valid."))
     return render(request, "clipshelf/invitation.html")
 
 

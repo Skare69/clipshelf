@@ -504,6 +504,38 @@ class CollectionMembershipTests(ApiTestCase):
             Membership.objects.filter(collection=shared, user=carol).exists()
         )
 
+    def test_member_redemption_loses_to_a_concurrent_removal(self):
+        """A removal that burns the token between the redemption's liveness
+        read and its consume write wins: no membership is created."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        self._invite(self.alice_client, shared, carol.email)
+        link = self._invite_link(carol.email)
+        real_filter = CollectionInvitation.objects.filter
+
+        def burn_on_consume(*args, **kwargs):
+            # Simulate the owner's removal burn landing between the view's
+            # liveness read and its consume write.
+            if kwargs.get("pk") is not None and kwargs.get("accepted_by__isnull") is True:
+                real_filter(pk=kwargs["pk"]).update(
+                    expires_at=timezone.now() - timedelta(seconds=1)
+                )
+            return real_filter(*args, **kwargs)
+
+        with mock.patch.object(
+            CollectionInvitation.objects, "filter", side_effect=burn_on_consume
+        ):
+            response = self._login(carol).get(link)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        self.assertFalse(
+            CollectionInvitation.objects.filter(
+                accepted_by__isnull=False, expires_at__gt=timezone.now()
+            ).exists()
+        )
+
     def test_member_invite_smtp_failure_allows_resend(self):
         """A failed send starts no cooldown: the row stays unmailed and a
         resend retries the delivery immediately."""
