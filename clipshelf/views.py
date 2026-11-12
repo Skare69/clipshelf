@@ -345,7 +345,21 @@ def api_collection_member(request, collection_id, user_id):
     membership = Membership.objects.filter(collection=collection, user_id=user_id).first()
     if membership is None:
         raise Http404("not a member")
-    membership.delete()
+    with transaction.atomic():
+        membership.delete()
+        # Revocation stops the pause churn immediately: the removed member's
+        # pending jobs for this collection block in the same request instead
+        # of claim/deferring until the attempt budget runs out.
+        paused = (
+            Job.objects.filter(
+                capture__user_id=user_id,
+                collection=collection,
+                state__in=("queued", "retry"),
+            )
+            .select_for_update()
+        )
+        for job in paused:
+            job.mark_blocked(error="collection access revoked")
     return JsonResponse({"removed": True})
 
 

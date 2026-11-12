@@ -315,6 +315,47 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
         self.assertEqual(job.state, "queued")
         self.assertTrue(job.error.startswith("paused:"))
 
+    def test_paused_job_blocks_after_the_attempt_budget(self):
+        other = models.User.objects.create_user(username="w3", email="w3@example.com")
+        shared = models.Collection.objects.create(name="s", kind="shared", owner=other)
+        models.Membership.objects.create(collection=shared, user=self.user)
+        job = self.make_job(collection=shared)
+        models.Membership.objects.filter(collection=shared, user=self.user).delete()
+        for cycle in range(1, models.Job.MAX_ATTEMPTS + 1):
+            self.run_worker()
+            self.refresh(job)
+            self.assertEqual(job.attempts, cycle)
+            if cycle < models.Job.MAX_ATTEMPTS:
+                self.assertEqual(job.state, "queued")
+                self.assertTrue(job.error.startswith("paused:"))
+                self.assertIsNotNone(job.retry_at)
+                self.assertFalse(job.needs_attention)
+                job.retry_at = timezone.now() - timedelta(seconds=1)
+                job.save(update_fields=["retry_at"])
+        self.assertEqual(job.state, "blocked")
+        self.assertIsNone(job.retry_at)
+        self.assertTrue(job.error.startswith("paused:"))
+        self.assertEqual(job.attempts, models.Job.MAX_ATTEMPTS)
+        self.assertTrue(job.needs_attention)
+
+    def test_paused_job_resumes_when_access_returns_before_the_cap(self):
+        other = models.User.objects.create_user(username="w4", email="w4@example.com")
+        shared = models.Collection.objects.create(name="s", kind="shared", owner=other)
+        models.Membership.objects.create(collection=shared, user=self.user)
+        job = self.make_job(collection=shared)
+        models.Membership.objects.filter(collection=shared, user=self.user).delete()
+        self.run_worker()
+        self.refresh(job)
+        self.assertEqual((job.state, job.attempts), ("queued", 1))
+        models.Membership.objects.create(collection=shared, user=self.user)
+        job.retry_at = timezone.now() - timedelta(seconds=1)
+        job.save(update_fields=["retry_at"])
+        self.run_worker()
+        self.refresh(job)
+        self.assertEqual(job.state, "done")
+        self.assertLess(job.attempts, models.Job.MAX_ATTEMPTS)
+        self.assertFalse(job.needs_attention)
+
     def test_missing_config_blocks_without_burning_attempts(self):
         cfg = services.get_settings()
         cfg.llm_base_url = ""

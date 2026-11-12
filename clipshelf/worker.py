@@ -5,7 +5,10 @@ abandoned-running recovery on restart. Network and LLM calls happen strictly
 outside database transactions. Asset bytes are published complete at their
 final path (os.replace) before any DB reference commits, so a crash can never
 leave "done" pointing at partial files. Disabled accounts pause instead of
-processing; lost collection rights pause instead of processing.
+processing; lost collection rights pause instead of processing. Each pause
+cycle spends one attempt; access restored before the cap resumes work
+unchanged, and a permanently lost right converges to blocked instead of
+deferring forever.
 
 Finite failure policy: transient errors retry with capped exponential backoff
 up to MAX_ATTEMPTS, then block. Missing LLM settings use the CONFIG_ERROR

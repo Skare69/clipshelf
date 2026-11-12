@@ -270,10 +270,17 @@ class Job(models.Model):
         self.save()
 
     def defer(self, delay, error):
-        """Back to queued with a scheduled retry and an explanatory error."""
-        self.state = self.State.QUEUED
-        self.retry_at = timezone.now() + delay
+        """Back to queued with a scheduled retry and an explanatory error.
+        Pause cycles spend the attempt budget, so a permanently paused job
+        blocks at the cap instead of deferring forever."""
+        self.attempts = (self.attempts or 0) + 1
         self.error = error
+        if self.attempts >= self.MAX_ATTEMPTS:
+            self.state = self.State.BLOCKED
+            self.retry_at = None
+        else:
+            self.state = self.State.QUEUED
+            self.retry_at = timezone.now() + delay
         self.save()
 
     def mark_blocked(self, error=None, interpretation=None):
