@@ -317,11 +317,21 @@ class CollectionMembershipTests(ApiTestCase):
         )
 
     def _invite_link(self, email):
-        """The mailed redemption path: mail went to exactly this mailbox."""
-        self.assertEqual([message.to for message in mail.outbox], [[email]])
+        """The mailed redemption path: every mail went to exactly this
+        mailbox; the newest mail carries the newest live token."""
+        self.assertTrue(all(m.to == [email] for m in mail.outbox))
         url = next(
             line.strip()
             for line in mail.outbox[-1].body.splitlines()
+            if "/collections/invitations/" in line
+        )
+        return urlsplit(url).path
+
+    def _link_from(self, index):
+        """Redemption path of the i-th invitation mail."""
+        url = next(
+            line.strip()
+            for line in mail.outbox[index].body.splitlines()
             if "/collections/invitations/" in line
         )
         return urlsplit(url).path
@@ -429,6 +439,69 @@ class CollectionMembershipTests(ApiTestCase):
                 email=carol.email, mailed_at__isnull=False
             ).count(),
             2,
+        )
+
+    def test_member_removal_kills_outstanding_links(self):
+        """Two mailed tokens more than a cooldown apart: joining with one
+        spends the other, and removing the member burns everything left — a
+        removed member can never rejoin through an outstanding link."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        self._invite(self.alice_client, shared, carol.email)
+        link_a = self._link_from(0)
+        # A resend after the cooldown mails a second, newer token.
+        CollectionInvitation.objects.update(
+            mailed_at=timezone.now() - timedelta(minutes=11)
+        )
+        self._invite(self.alice_client, shared, carol.email)
+        self.assertEqual(len(mail.outbox), 2)
+        # Carol joins through the newer mail; the redemption itself spends
+        # every other live token for her mailbox, so the older link is dead.
+        response = self._login(carol).get(self._link_from(1))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        self.assertFalse(
+            CollectionInvitation.objects.filter(
+                collection=shared,
+                email=carol.email,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).exists()
+        )
+        # A later invite of the current member mails nothing but leaves a
+        # live row; removing the member must burn it, not just the membership.
+        self._invite(self.alice_client, shared, carol.email)
+        self.assertEqual(
+            CollectionInvitation.objects.filter(
+                collection=shared,
+                email=carol.email,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).count(),
+            1,
+        )
+        response = self.alice_client.delete(
+            f"/api/collections/{shared.id}/members/{carol.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        self.assertFalse(
+            CollectionInvitation.objects.filter(
+                collection=shared,
+                email=carol.email,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).exists()
+        )
+        # The first mailed link must not re-admit carol.
+        response = self._login(carol).get(link_a)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
         )
 
     def test_member_invite_smtp_failure_allows_resend(self):

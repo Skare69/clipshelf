@@ -337,6 +337,15 @@ def collection_invite_view(request, token):
                 ).update(accepted_by=request.user, accepted_at=timezone.now())
                 == 1
             )
+            # This redemption is the door: every other live token for this
+            # mailbox expires with it, so a second mailed link can never
+            # re-admit the member once the owner removes them.
+            CollectionInvitation.objects.filter(
+                collection=invitation.collection,
+                email=invitation.email,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).exclude(pk=invitation.pk).update(expires_at=timezone.now())
         if joined:
             messages.success(
                 request,

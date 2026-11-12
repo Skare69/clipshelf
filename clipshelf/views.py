@@ -48,6 +48,7 @@ from clipshelf.models import (
     ImportRecord,
     Job,
     Membership,
+    User,
 )
 
 DEFAULT_PAGE = 50
@@ -399,6 +400,21 @@ def api_collection_member(request, collection_id, user_id):
         )
         for job in paused:
             job.mark_blocked(error="collection access revoked")
+        # Removing a member burns their outstanding invitation links for this
+        # collection: no outstanding token may re-admit them without the
+        # owner's invite.
+        removed_email = (
+            User.objects.filter(pk=membership.user_id)
+            .values_list("email", flat=True)
+            .first()
+        )
+        if removed_email:
+            CollectionInvitation.objects.filter(
+                collection=collection,
+                email__iexact=removed_email,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).update(expires_at=timezone.now())
     return JsonResponse({"removed": True})
 
 
