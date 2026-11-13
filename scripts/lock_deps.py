@@ -189,6 +189,23 @@ def read_pins(lock: Path) -> dict[str, str]:
     return pins
 
 
+def bump(old: str, new: str) -> str:
+    """'major'/'minor'/'patch' from the first three numeric parts, else 'change'."""
+    try:
+        old, new = release(old), release(new)
+    except AttributeError:  # no leading numeric part at all
+        return "change"
+    old += (0, 0, 0)
+    new += (0, 0, 0)
+    if old[0] != new[0]:
+        return "major"
+    if old[1] != new[1]:
+        return "minor"
+    if old[2] != new[2]:
+        return "patch"
+    return "change"  # numeric prefix equal: pre/post/dev suffix or 4th-segment move
+
+
 def plat_args(plats: list[str]) -> list[str]:
     """pip flags that select wheels for Python 3.13 on one platform set."""
     args = ["--only-binary=:all:", "--python-version", "3.13", "--implementation", "cp",
@@ -274,6 +291,7 @@ def check(python: str, req: Path, lock: Path) -> int:
 
     problems = []
     warnings = []
+    changed = []
     for n in sorted(res.yanked):
         v = lock_pins.get(n, current.get(n, "?"))
         problems.append(f"yanked: {n}=={v} (pip installs yanked files under exact pins; "
@@ -293,6 +311,7 @@ def check(python: str, req: Path, lock: Path) -> int:
             problems.append(f"missing from lock: {n}=={cur}")
         elif cur != lk:
             problems.append(f"changed: {n} lock={lk} current={cur}")
+            changed.append((n, lk, cur))
     # every lock pin must carry at least one hash
     text = lock.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(text):
@@ -307,6 +326,10 @@ def check(python: str, req: Path, lock: Path) -> int:
         print("DRIFT:")
         for p in problems:
             print(f"  {p}")
+        # only version moves yield a subject; yanked/no-hash drift has none to compute
+        if changed:
+            moves = ", ".join(f"{n} {lk}->{cur} {bump(lk, cur)}" for n, lk, cur in changed)
+            print(f"suggested subject: fix: refresh the dependency lock ({moves})")
         return 1
     for w in warnings:
         print(f"warning: {w}")

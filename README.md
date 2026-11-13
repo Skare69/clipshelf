@@ -123,7 +123,10 @@ so the audited set is the shipped set:
   resolve differently from the lock (CI runs this gate): a changed pin, a
   missing pin, an extra pin in the lock that is unrelated to the current
   resolution, or a yanked pin (pip installs yanked files under exact pins and
-  pip-audit ignores yank status, so they must never ship). The one known
+  pip-audit ignores yank status, so they must never ship). When the drift is
+  changed pins, check also prints a ready-to-use conventional commit subject
+  computed from those pins, with bump classes major, minor, patch, or change.
+  The one known
   exception is Django's win32-only `tzdata` marker dependency, which may be
   present in the lock but absent from a non-Windows resolution. It also fails
   when any shipped platform (Windows, linux/amd64, linux/arm64) lacks a wheel
