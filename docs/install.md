@@ -19,9 +19,11 @@ message with `python clipshelf.py sendtestemail you@example.com`.
 
 ## Deploy on the NAS
 
-Published image (linux/amd64 + linux/arm64), built and verified by CI:
-`ghcr.io/skare69/clipshelf:0.10.0` (releases from v0.11.0 on also publish
-the raw release tag as `v<version>`). The signed Android APK is attached to each
+Published image (linux/amd64 + linux/arm64), built and verified by CI. Each
+release tags one image three ways: `latest`, the version `X.Y.Z` and the raw
+release tag `vX.Y.Z`, for example `ghcr.io/skare69/clipshelf:latest`. A manual
+workflow_dispatch run publishes only `X.Y.Z` and `vX.Y.Z`, so it never moves
+`latest`. The signed Android APK is attached to each
 [release](https://github.com/Skare69/clipshelf/releases) — there is no app
 store, you sideload it. The API can change between releases: since v0.11.0,
 `/api/entries` returns the stored description as `desc` and the
