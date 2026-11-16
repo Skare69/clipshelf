@@ -136,12 +136,14 @@ jobs:
           # Same tag set as Ottr/Velvarr (docker/metadata-action flavor
           # latest=auto): a v* tag push gets exactly latest, vX.Y.Z and X.Y.Z;
           # a workflow_dispatch gets only vX.Y.Z and X.Y.Z, so an older manual
-          # version never moves latest. Every tag derives from the validated
-          # $v, never GITHUB_REF_NAME: on workflow_dispatch that is the
-          # starting branch, not the version.
+          # version never moves latest. The gate is the event, not
+          # GITHUB_REF_TYPE: a dispatch started from a tag ref also has
+          # GITHUB_REF_TYPE=tag. Every tag derives from the validated $v,
+          # never GITHUB_REF_NAME: on workflow_dispatch that is the starting
+          # branch, not the version.
           {
             echo "tags<<TAGS"
-            if [[ "${GITHUB_REF_TYPE:-branch}" == "tag" ]]; then
+            if [[ "${GITHUB_EVENT_NAME:-workflow_dispatch}" == "push" ]]; then
               echo "${image}:latest"
             fi
             echo "${image}:v${v}"
