@@ -1,7 +1,7 @@
 name: clipshelf
 
 # Clipshelf on the NAS: one image, two roles (web + one worker), one data volume.
-# First run: see README "Deploy on the NAS" and deploy/clipshelf.env.example.
+# First run: see docs/install.md "Deploy on the NAS" and deploy/clipshelf.env.example.
 #
 # One-shot ops (profiles keep them out of `up`):
 #   docker compose --profile ops run --rm bootstrap   CLI recovery path for

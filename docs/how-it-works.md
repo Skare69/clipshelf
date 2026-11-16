@@ -43,6 +43,44 @@ flowchart LR
 
 The container runs both roles from one image: `Dockerfile` `ENTRYPOINT deploy/entrypoint.py`, `CMD serve`; `compose.yaml` defines the `web` and `worker` services plus the ops one-shots `bootstrap` and `verify`.
 
+## The loop
+
+1. **Capture** — share to the Android app (saved on the phone first, delivered in
+   the background) or paste into the web UI. Each capture returns a receipt; a
+   retry with the same request id never duplicates it.
+2. **Acquire** — the worker resolves the URL and fetches what is public: page
+   text, TikTok video with its ASR captions, photo carousels slide by slide.
+   Blocked or login-only posts stay saved with an honest warning and a retry or
+   `tiktok.json` import path.
+3. **Interpret** — one admin-managed OpenAI-compatible endpoint (any local or
+   remote vision model) reads the acquired material and returns repos, prompts,
+   links and a category, with warnings for anything it could not see or verify.
+   The model reuses the collection's categories and names a new one only when
+   none fits. GitHub READMEs are interpreted too; Hugging Face, arXiv and Colab
+   pages stay metadata only.
+   Pick a provider from the list — OpenAI, Anthropic, Gemini, OpenRouter, Groq,
+   Mistral, xAI, Z.AI, Ollama, llama.cpp, LM Studio, vLLM, or anything else you type —
+   and the model names are fetched from that endpoint rather than guessed.
+4. **Browse** — Library and Inbox per collection, search, categories, source
+   viewing, retry. Collections are the access boundary: everyone has a private
+   Personal collection, shared collections have explicit members.
+
+Captured pages are untrusted input. Optionally, clipshelf screens each capture
+for prompt injection with a TypeSafe System One battery before it reaches the
+model, and screens its findings before publishing — imported items included:
+when screening flags an import, its install command, summary and interpreted
+flag are withheld with the findings, and only a blocked job remains. Paste the
+key into **Admin →
+Screening** (or set `TYPESAFE_API_KEY` in the compose `.env`) and press Test.
+Screening degrades to a visible warning on failure, and without a key nothing
+changes. In the Inbox, a job that the guard rail blocks shows "Held by screening" with
+the reason, and screening warnings show in its notes.
+
+## Browser exports
+
+- `tiktok-extract.js` — browser export for login-required posts; the server never takes TikTok cookies
+- `whatsapp-extract.js` — browser export of one WhatsApp Web chat as a `library.json` file for the import section of the web **Add** dialog: links, images, and URL-free notes (imported as prompts); re-runs export only new messages
+
 ## Main use case: share a link from the phone
 
 ```mermaid
@@ -124,3 +162,30 @@ stateDiagram-v2
 - **Delivery decision** — `OutboxPolicy.decide` maps the HTTP status: 2xx delivers, 401/403 pauses auth, a fixed 4xx set rejects, everything else retries later
 - **Limits** — `OutboxPolicy`: 500 rows, 8 MiB total share text, 32768 UTF-8 bytes and 50 URLs per share; a full outbox rejects new shares and never evicts rows (`outboxFull`)
 - **pausedMismatch rows stay paused** — `OutboxStore.markPaused` sets them, `resetAuthPaused` resumes only `STATE_PAUSED` (`android/.../outbox/OutboxStore.java`)
+
+The Android outbox holds at most 500 rows and 8 MiB of UTF-8 share text across
+all accounts on the phone. One share may hold at most 32768 UTF-8 bytes and 50
+URLs. A full outbox rejects new shares and never evicts stored rows; delivered
+rows count until you clear them, and paused or rejected rows can be deleted.
+Android OS backup and device-to-device transfer are off
+(`android:allowBackup="false"` plus the exclude-all `data_extraction_rules.xml`
+and `backup_rules.xml`), so undelivered shares remain on this phone only.
+
+## Migrating an existing `library.json`
+
+From the running app, an old `library.json` goes through the import section of
+the **Add** dialog, like a TikTok export; entries land in the collection you pick. Media referenced
+by the old library is retained only when the old `cache/` directory was copied
+to `<data dir>/import-cache` on the server first; otherwise the manifest lists
+what was missing.
+
+For offline or bulk imports there is the management command:
+
+```
+python clipshelf.py import_library --user you@example.com --input library.json --cache cache --dry-run
+python clipshelf.py import_library --user you@example.com --input library.json --cache cache
+```
+
+The dry run reports a manifest digest and counts, and imports nothing.
+The real run imports into that account's Personal collection
+only; the original files are never modified and a repeated import is a no-op.

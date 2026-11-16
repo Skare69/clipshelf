@@ -13,7 +13,13 @@ chunks/
 # personal data - local only, never published
 library.json
 installs/
-docs/
+docs/*
+!docs/how-it-works.md
+!docs/install.md
+!docs/configuration.md
+!docs/operations.md
+!docs/privacy.md
+!docs/development.md
 
 # server, Android, and local verification state
 .venv/

@@ -10,7 +10,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 /**
- * Outbox/share invariants promised by the README, ported from the former
+ * Outbox/share invariants promised by docs/how-it-works.md, ported from the former
  * android/hostcheck main() program so CI runs them: share boundary mirrors
  * server rules, 4xx rejects while 408/429 retry, receipts and identities
  * bind to the capturing row, and the whole-outbox cap binds exactly with no
