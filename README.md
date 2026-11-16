@@ -11,6 +11,9 @@
 
 <p align="center">
   <a href="https://github.com/Skare69/clipshelf/actions/workflows/ci.yml"><img src="https://github.com/Skare69/clipshelf/actions/workflows/ci.yml/badge.svg" alt="tests"></a>
+</p>
+
+<p align="center">
   <a href="https://github.com/ottr-ai/ottr"><img src="https://raw.githubusercontent.com/ottr-ai/ottr/main/.github/assets/built-with-ottr.png" alt="Built with Ottr"></a>
 </p>
 
