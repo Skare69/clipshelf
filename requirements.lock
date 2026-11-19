@@ -4,7 +4,7 @@
 # Policy: regenerate whenever requirements.txt changes or `check` fails.
 # Release age: 7+ days before the Date line; newer pins only via make --fresh.
 # Platforms covered: win_amd64, manylinux x86_64/aarch64. Python 3.13 (cp313/abi3).
-# Date: 2026-11-12
+# Date: 2026-11-19
 
 annotated-types==0.8.0 \
     --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
@@ -34,8 +34,8 @@ curl-cffi==0.17.0 \
     --hash=sha256:af0782d5e340b65fd76701630f0284a8f8243d77df5f2637efd09a4b009f4e24
 django==5.2.19 \
     --hash=sha256:5965d974a5218a2b68a11dd1276434707f23886525c23f0598eccedaf4f4ca00
-django-allauth==65.21.1 \
-    --hash=sha256:7bdf018c9f3f0a32c80677f84e7777272d9c833b180bd6734314c4831c802a9e
+django-allauth==65.22.0 \
+    --hash=sha256:5ea1501ff5d3c56bffd4bfbf2e7b88e010960ec1baa7c75b6257d51ca13064b5
 gallery-dl==1.32.19 \
     --hash=sha256:f6b1eb5e9a7409a988b754335d99dbb1873e130d133ed5d164d32e5e645d1c50
 h11==0.16.0 \
