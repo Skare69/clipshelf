@@ -1,8 +1,30 @@
 # Development
 
-This file describes the code layout, the tests, and the dependency pinning rules.
+This file describes how to run the app locally for development, the code
+layout, the tests, and the dependency pinning rules.
+
+## Run it locally
+
+```
+python3.13 -m venv .venv && .venv/bin/python -m pip install --require-hashes -r requirements.lock
+CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data .venv/bin/python clipshelf.py serve 127.0.0.1:8000   # shell 1
+CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data .venv/bin/python clipshelf.py worker                 # shell 2
+```
+
+The first-start details (setup wizard, admin recovery, mail) are in [install.md](install.md#run-it-locally).
 
 ## Layout
+
+The product is four pieces:
+
+| Piece | What it does |
+|---|---|
+| Django app (`clipshelf/`) | accounts, collections, capture receipts, library/search, source viewing, admin |
+| Worker (`clipshelf.py worker`) | acquisition (pages, TikTok video/carousels), interpretation, retries |
+| Android app (`android/`) | share-sheet capture with a durable outbox, background delivery, online browsing |
+| Container (`Dockerfile`, `compose.yaml`) | one image, web + worker roles, SQLite and retained media on one data volume |
+
+The source paths:
 
 | path | what |
 |---|---|
@@ -20,7 +42,7 @@ This file describes the code layout, the tests, and the dependency pinning rules
 
 Tests: `sh scripts/test.sh` is the one test list, and CI runs the same file.
 It runs after the install, license, lint and audit gates, with `PY` set to an
-interpreter that has `requirements.lock` installed (the local setup in the README uses
+interpreter that has `requirements.lock` installed (the local setup above uses
 `.venv/bin/python`). Run it with a throwaway data dir, never `./data` (the
 app writes its secret key there):
 `CLIPSHELF_DATA_DIR=/tmp/clipshelf-test PY=.venv/bin/python sh scripts/test.sh`.
@@ -92,7 +114,7 @@ suite still passes is a survived mutant — a behavior no test guards.
 ## Dependency and build pinning
 
 `requirements.txt` holds the version ranges. CI, the published image and the
-local setup in the README install one hash-locked resolution of it — `requirements.lock`,
+local setup in this file install one hash-locked resolution of it — `requirements.lock`,
 with per-platform wheel hashes for Windows development and linux/amd64 + arm64 —
 so the audited set is the shipped set:
 
