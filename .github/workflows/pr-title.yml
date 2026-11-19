@@ -1,0 +1,22 @@
+name: PR title
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+permissions:
+  contents: read
+jobs:
+  pr-title:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require Conventional Commits title
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          # dependabot titles are "Bump x from y to z"; dependency PRs merge as
+          # "chore(deps): ..." squash commits, so their titles are exempt here.
+          case "$AUTHOR" in *dependabot*) exit 0;; esac
+          if ! printf '%s\n' "$TITLE" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: [a-zA-Z]'; then
+            echo "::error::PR title must follow Conventional Commits: type(scope)?: title (e.g. 'feat: add arm64 workers'). Got: $TITLE"
+            exit 1
+          fi
