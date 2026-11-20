@@ -4,7 +4,7 @@
 # Policy: regenerate whenever requirements.txt changes or `check` fails.
 # Release age: 7+ days before the Date line; newer pins only via make --fresh.
 # Platforms covered: win_amd64, manylinux x86_64/aarch64. Python 3.13 (cp313/abi3).
-# Date: 2026-11-19
+# Date: 2026-11-20
 
 annotated-types==0.8.0 \
     --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
@@ -12,10 +12,10 @@ anyio==4.16.0 \
     --hash=sha256:c66ae634e0b8228396b801741beb3294326d4b6102f7bba4041c0dfb58c29026
 argon2-cffi==25.1.0 \
     --hash=sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741
-argon2-cffi-bindings==26.1.0 \
-    --hash=sha256:27f1821903e2ceadcb88ec2b45ef190897b7682449c772f4d9b53e42c520cf29 \
-    --hash=sha256:2c36ff87b5dfaa477d0bd51e9d7f6abdae7c8955d2983c97419085d842154b3e \
-    --hash=sha256:78de2d65e0b9ea7ce9d1b1c3e87297b2d7305a02c266ee2a2d6910daddd7ee69
+argon2-cffi-bindings==26.2.0 \
+    --hash=sha256:2d475baecbcb506e40ab1cb05a84c9cc913a8950061a4045fd0ec0eb54aa7fa2 \
+    --hash=sha256:92d65a0831e78294e19d7297d101eaa871033825ad2aa7cb87af2f706062acd7 \
+    --hash=sha256:d2d4ae065e7cce4b286d3eb7c59128bfd11f8e407863b88629e9d391b864a3df
 asgiref==3.13.0 \
     --hash=sha256:f9596a2434512686473d50f96ff6207fbba49ae1a785dfac614df4aeb085674d
 certifi==2026.10.23 \
@@ -34,8 +34,8 @@ curl-cffi==0.17.0 \
     --hash=sha256:af0782d5e340b65fd76701630f0284a8f8243d77df5f2637efd09a4b009f4e24
 django==5.2.19 \
     --hash=sha256:5965d974a5218a2b68a11dd1276434707f23886525c23f0598eccedaf4f4ca00
-django-allauth==65.22.0 \
-    --hash=sha256:5ea1501ff5d3c56bffd4bfbf2e7b88e010960ec1baa7c75b6257d51ca13064b5
+django-allauth==65.22.1 \
+    --hash=sha256:08f7a3ddbd5ff7f1000d685dee9c0678d0da2057e18bed473a6eb2de18bd04e4
 gallery-dl==1.32.19 \
     --hash=sha256:f6b1eb5e9a7409a988b754335d99dbb1873e130d133ed5d164d32e5e645d1c50
 h11==0.16.0 \
