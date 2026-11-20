@@ -25,7 +25,9 @@ These facts come from `clipshelf/templates/` and `clipshelf/static/`:
 - Notices use a polite live region (`role="status"`, `aria-live="polite"`).
 - Form errors use `role="alert"`, and import progress uses
   `role="progressbar"` with value attributes.
-- Decorative marks use empty `alt` text.
+- Decorative marks use empty `alt` text, and media thumbnails carry alt text:
+  the asset name, or `retained image` when the asset has no name
+  (`static/clipshelf/panels.js`).
 
 Video captures keep their ASR captions as entry text, so the words in a video
 stay readable.
@@ -35,8 +37,8 @@ stay readable.
 - The UI text is English only. There are no translations yet.
 - The Android app labels few views for TalkBack. Today it sets one
   `contentDescription`. We have not audited TalkBack navigation.
-- Media thumbnails carry no `alt` text. The model summary text is the
-  description of a capture.
+- The video and audio players in the entry grid carry no caption track.
+  The ASR captions stay in the entry text.
 - We have not audited color contrast.
 
 ## How to report a barrier
