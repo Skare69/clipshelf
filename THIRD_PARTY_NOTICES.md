@@ -52,7 +52,7 @@ are the source of record; every wheel ships its license text inside
 | Package | Observed | License | Notes |
 |---|---|---|---|
 | django | 5.2.19 | BSD-3-Clause | |
-| django-allauth | 65.22.0 | MIT | |
+| django-allauth | 65.22.1 | MIT | |
 | waitress | 3.0.2 | ZPL-2.1 | |
 | pillow | 13.0.0 | MIT-CMU | |
 | gallery-dl | 1.32.19 | **GPL-2.0-only** | subprocess only; obligations below |
@@ -70,7 +70,7 @@ are the source of record; every wheel ships its license text inside
 | curl-cffi | 0.17.0 | MIT | |
 | cffi | 2.1.1 | MIT-0 | |
 | pycparser | 3.12 | BSD-3-Clause | |
-| argon2-cffi-bindings | 26.1.0 | MIT | |
+| argon2-cffi-bindings | 26.2.0 | MIT | |
 | httpx2 | 2.16.0 | BSD-3-Clause | |
 | pydantic | 2.14.3 | MIT | |
 | pydantic-core | 2.50.4 | MIT | |
