@@ -69,7 +69,9 @@ To run it locally for development, see [docs/development.md](docs/development.md
 
 ## Contribute
 
-Issues and pull requests are welcome.
+Issues and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the setup and the checks, [ACCESSIBILITY.md](ACCESSIBILITY.md) for
+accessibility, and [SECURITY.md](SECURITY.md) for security reports.
 
 ## License
 
