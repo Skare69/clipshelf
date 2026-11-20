@@ -28,6 +28,7 @@ from django.http import (
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.static import serve as _static_serve
@@ -37,7 +38,7 @@ from django.views.static import serve as _static_serve
 from allauth.core.internal import ratelimit
 
 from clipshelf.api import ApiError, json_body, json_error, vmessage
-from clipshelf import accounts, asset_files, imports, services
+from clipshelf import accounts, asset_files, follows, imports, services
 from clipshelf.models import (
     Asset,
     Capture,
@@ -45,6 +46,7 @@ from clipshelf.models import (
     CollectionInvitation,
     Contribution,
     Entry,
+    FollowedSource,
     ImportRecord,
     Job,
     Membership,
@@ -55,6 +57,9 @@ DEFAULT_PAGE = 50
 MAX_PAGE = 500
 MAX_NAME_LEN = 200
 MAX_IMPORT_DEPTH = 12
+FEED_DEFAULT_LIMIT = 100
+FEED_MAX_LIMIT = 500
+FEED_SCAN_MAX = 5000             # newest entries the feed scan reads
 STAGING_SUBDIR = "staging"
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -751,4 +756,77 @@ def api_import(request):
             pass
         raise
     return JsonResponse({"import": {"id": str(record.id), "status": "pending"}}, status=201)
+
+
+# ------------------------------------------------------------- followed sources
+
+@api
+@require_http_methods(["GET", "POST"])
+def api_follows(request):
+    user = request.user
+    if request.method == "GET":
+        rows = FollowedSource.objects.filter(user=user).order_by("created_at")
+        return JsonResponse({"follows": [follows.follow_json(f) for f in rows]})
+    body = json_body(request)
+    try:
+        source = follows.create_follow(
+            user, body.get("url"), body.get("tag"), bool(body.get("full")))
+    except ValueError as exc:
+        if str(exc) == follows.DUPLICATE:
+            raise ApiError(409, detail=str(exc))
+        raise ApiError(400, detail=str(exc))
+    return JsonResponse({"follow": follows.follow_json(source)}, status=201)
+
+
+@api
+@require_http_methods(["DELETE", "POST"])
+def api_follow_detail(request, follow_id):
+    user = request.user
+    source = FollowedSource.objects.filter(user=user, pk=follow_id).first()
+    if source is None:  # another user's follow is not visible here either
+        raise Http404("follow not found")
+    if request.method == "DELETE":
+        source.delete()  # SET_NULL keeps captured posts, jobs and entries
+        return JsonResponse({"removed": True})
+    body = json_body(request)
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ApiError(400, detail="enabled must be a boolean")
+    source.enabled = enabled
+    source.save(update_fields=["enabled"])
+    return JsonResponse({"follow": follows.follow_json(source)})
+
+
+@api
+@require_GET
+def api_feed(request):
+    """Entries added since a timestamp across the user's accessible
+    collections, newest first; the scan window is the newest FEED_SCAN_MAX."""
+    user = request.user
+    raw_since = request.GET.get("since")
+    if not raw_since:
+        raise ApiError(400, detail="since is required")
+    since = parse_datetime(raw_since)
+    if since is None or timezone.is_naive(since):
+        raise ApiError(400, detail="since must be an ISO datetime with a UTC offset")
+    tag = (request.GET.get("tag") or "").strip().lower()
+    try:
+        limit = int(request.GET.get("limit", str(FEED_DEFAULT_LIMIT)))
+    except ValueError:
+        raise ApiError(400, detail="limit must be an integer")
+    if limit <= 0:
+        raise ApiError(400, detail="limit must be positive")
+    limit = min(limit, FEED_MAX_LIMIT)
+    accessible = services.accessible_collections(user)
+    entries = (Entry.objects.filter(collection__in=accessible, created_at__gte=since)
+               .select_related("collection").order_by("-created_at")[:FEED_SCAN_MAX])
+    out = []
+    for entry in entries:
+        item = services.serialize_entry(entry, user)
+        if tag and not any(t.lower() == tag for t in item.get("tags") or []):
+            continue
+        out.append(item)
+        if len(out) >= limit:
+            break
+    return JsonResponse({"entries": out, "count": len(out)})
 

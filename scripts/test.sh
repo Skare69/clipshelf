@@ -12,6 +12,7 @@ $PY clipshelf.py migrate
 $PY clipshelf.py test --verbosity 1
 $PY test_clipshelf.py
 $PY test_sources.py
+$PY test_follows.py
 # Property checks: the trust-boundary parsers under a seeded stdlib fuzz loop.
 $PY test_properties.py
 # Publish-tag regression: docker-publish derives tags from the validated

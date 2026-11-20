@@ -734,6 +734,70 @@ function membersPanel(c) {
 }
 
 /* ---------- settings ---------- */
+function followedSourcesPanel() {
+  const p = el("section", { class: "panel" }, el("h2", { text: "Followed sources" }));
+  const body = el("div", {});
+  p.append(body);
+  const load = async () => {
+    body.replaceChildren(el("p", { class: "hint", text: "Loading the sources…" }));
+    let j;
+    try { j = await api("/api/follows"); }
+    catch (e) { if (e.status !== 401) body.replaceChildren(el("p", { class: "err", text: e.message })); return; }
+    const rows = (j.follows || []).map(f => {
+      const acts = el("div", { class: "acts" },
+        el("button", { class: "btn small", type: "button", text: f.enabled ? "Pause" : "Resume",
+          onclick: async () => {
+            try { await api("/api/follows/" + f.id, { method: "POST", body: { enabled: !f.enabled } }); load(); }
+            catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
+          } }),
+        el("button", { class: "btn small danger", type: "button", text: "Remove",
+          onclick: async () => {
+            const vals = await confirmDialog({ head: "Remove this source?",
+              text: "Clipshelf stops the checks for this profile. The posts it already captured stay in the library.",
+              ok: "Remove" });
+            if (!vals) return;
+            try { await api("/api/follows/" + f.id, { method: "DELETE" }); load(); }
+            catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
+          } }));
+      return el("div", { class: "row" },
+        el("span", { class: "grow", text: f.profile_url, style: "overflow-wrap:anywhere" }),
+        el("span", { class: "tag", text: f.tag }),
+        el("span", { class: "badge" + (f.enabled ? " ok" : ""), text: f.enabled ? "Enabled" : "Paused" }),
+        f.last_check
+          ? el("time", { datetime: f.last_check, text: "Last check: " + fmtWhen(f.last_check) })
+          : el("span", { text: "Never checked" }),
+        f.last_error ? el("span", { class: "err", text: f.last_error }) : null,
+        acts);
+    });
+    body.replaceChildren(
+      rows.length ? el("div", {}, ...rows)
+        : el("p", { class: "hint", text: "No followed sources yet. Add a TikTok profile below." }),
+      addForm,
+      el("p", { class: "hint", text: "Clipshelf checks each enabled source on a schedule. It queues new posts with the topic tag. A paused source stays in the list and waits." }));
+  };
+  const url = el("input", { type: "url", id: "followUrl", required: true, class: "grow",
+    placeholder: "https://www.tiktok.com/@handle", autocomplete: "off" });
+  const tag = el("input", { type: "text", id: "followTag", maxlength: 100, required: true, autocomplete: "off" });
+  const full = el("input", { type: "checkbox", id: "followFull" });
+  const addForm = el("form", { class: "field" },
+    el("label", { for: "followUrl", text: "Profile URL" }), url,
+    el("label", { for: "followTag", text: "Topic tag" }), tag,
+    el("label", { class: "check", for: "followFull" }, full, "Include older posts on the first check"),
+    el("button", { class: "btn primary", type: "submit", text: "Follow" }));
+  addForm.addEventListener("submit", async ev => {
+    ev.preventDefault();
+    const u = url.value.trim(), t = tag.value.trim();
+    if (!u || !t) return;
+    try {
+      await api("/api/follows", { method: "POST", body: { url: u, tag: t, full: full.checked } });
+      url.value = ""; tag.value = ""; full.checked = false;
+      load();
+    }
+    catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
+  });
+  load();
+  return p;
+}
 function renderSettings() {
   const me = S.me; if (!me) return;
   head("Settings");
@@ -756,15 +820,14 @@ function renderSettings() {
   const logoutForm = el("form", { method: "post", action: "/accounts/logout/" },
     el("input", { type: "hidden", name: "csrfmiddlewaretoken", value: csrf() }),
     el("button", { class: "btn", type: "submit", text: "Sign out" }));
-  out.replaceChildren(
-    el("section", { class: "panel" }, el("h2", { text: "Account" }),
-      el("p", { class: "row" }, "Signed in as ", el("b", { text: me.user.email }),
-        me.user.is_app_admin ? el("span", { class: "badge ink", text: "Admin" }) : null),
-      el("div", { class: "acts", style: "margin-top:16px" },
-        el("a", { class: "btn", href: "/accounts/email/" }, "Email addresses"),
-        el("a", { class: "btn", href: "/accounts/password/change/" }, "Change password"),
-        logoutForm)),
-    form);
+  const account = el("section", { class: "panel" }, el("h2", { text: "Account" }),
+    el("p", { class: "row" }, "Signed in as ", el("b", { text: me.user.email }),
+      me.user.is_app_admin ? el("span", { class: "badge ink", text: "Admin" }) : null),
+    el("div", { class: "acts", style: "margin-top:16px" },
+      el("a", { class: "btn", href: "/accounts/email/" }, "Email addresses"),
+      el("a", { class: "btn", href: "/accounts/password/change/" }, "Change password"),
+      logoutForm));
+  out.replaceChildren(form, followedSourcesPanel(), account);
   renderToc();
 }
 

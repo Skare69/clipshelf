@@ -25,6 +25,7 @@ Share a link from your phone and your own server fetches what is actually in the
 
 - Share a link from the Android share sheet, even offline. The app queues it and delivers it later.
 - Paste a URL into the web **Add** dialog from any browser.
+- Follow a TikTok creator profile with a topic tag. The worker checks each followed profile on a schedule and captures its new posts by itself.
 - Keep the whole post: page text, TikTok video with its ASR captions, photo carousels slide by slide with their audio, and the original source for viewing.
 - Get a summary and a category for every entry from a vision model that you host.
 - Browse the Library, search it, and group entries into collections.

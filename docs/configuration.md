@@ -13,9 +13,24 @@ always check their CSRF token, and other cookie
 mutations stay protected by `SameSite=Lax` sessions
 regardless. Setting `CLIPSHELF_CSRF=1` turns CSRF verification on and then
 requires `CLIPSHELF_ORIGIN` or a concrete `CLIPSHELF_ALLOWED_HOSTS`. Setting
-`CLIPSHELF_ORIGIN` to an `https://` URL additionally enables the HTTPS
+Setting `CLIPSHELF_ORIGIN` to an `https://` URL additionally enables the HTTPS
 redirect, HSTS and secure cookies — set it only when a TLS ingress actually
 terminates in front of the app. Behind such an ingress, set it before you open
 the setup wizard. Without it, the wizard's CSRF check sees an `https://` Origin
 on a plain-HTTP request and answers 403. Wildcard hosts permit DNS rebinding;
 narrow them by setting `CLIPSHELF_ALLOWED_HOSTS`.
+
+## Followed sources
+
+Followed creator profiles are checked by the worker on a schedule. Two
+instance-wide settings hold the schedule; the admin API
+(`api/admin/follows-settings`, GET and POST with reauthentication) reads and
+writes them:
+
+- `poll_seconds` — seconds between checks per enabled source. Default `21600`
+  (6 hours), range 300–86400.
+- `backfill_cap` — posts queued by the first check of a new follow (newest
+  first). Default `50`, range 1–200.
+
+A failed check backs off with the same schedule as capture jobs, and a paused
+source is never checked. See [how-it-works.md](how-it-works.md#followed-sources).

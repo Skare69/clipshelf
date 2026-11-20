@@ -132,6 +132,10 @@ class Capture(models.Model):
     raw_text = models.TextField()
     requested_collection_id = models.UUIDField(null=True, blank=True)  # what was asked, not an FK
     collection = models.ForeignKey(Collection, on_delete=models.PROTECT, related_name="captures")
+    follow = models.ForeignKey(
+        "clipshelf.FollowedSource", null=True, blank=True,
+        on_delete=models.SET_NULL, related_name="captures",
+    )
     request_hash = models.CharField(max_length=64)
     received_at = models.DateTimeField(auto_now_add=True)
     notice = models.TextField(blank=True, default="")
@@ -450,6 +454,8 @@ class ServerSettings(models.Model):
     )
     llm_verified_at = models.DateTimeField(null=True, blank=True)
     typesafe_api_key = models.CharField(max_length=2048, blank=True, default="")
+    follow_poll_seconds = models.PositiveIntegerField(default=21600)
+    follow_backfill_cap = models.PositiveSmallIntegerField(default=50)
 
     def save(self, *args, **kwargs):
         """Verification invalidation and endpoint key isolation live here, so
@@ -644,3 +650,59 @@ class ImportRequest(models.Model):
 
     def __str__(self):
         return f"{self.request_id} -> {self.record_id}"
+
+
+class FollowedSource(models.Model):
+    """One followed creator profile listed on a schedule. The URL is stored
+    exactly as follows.validate_profile_url normalized it; uniqueness uses
+    that form. last_check only ever moves on a successful listing."""
+
+    class Platform(models.TextChoices):
+        TIKTOK = "tiktok", "TikTok"
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="followed_sources")
+    platform = models.CharField(max_length=16, choices=Platform.choices, default=Platform.TIKTOK)
+    profile_url = models.CharField(max_length=lib.MAX_URL_LENGTH)
+    tag = models.CharField(max_length=100)
+    enabled = models.BooleanField(default=True)
+    full_backfill = models.BooleanField(default=False)
+    backfill_done = models.BooleanField(default=False)
+    last_check = models.DateTimeField(null=True, blank=True)
+    next_check = models.DateTimeField(null=True, blank=True)
+    last_error = models.TextField(blank=True, default="")
+    failures = models.PositiveIntegerField(default=0)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "platform", "profile_url"],
+                name="clipshelf_followedsource_user_platform_profile_unique",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.profile_url} [{self.tag}]"
+
+
+class SeenPost(models.Model):
+    """The never-twice ledger for a followed source: every listed post gets a
+    row before anything is queued, so the unique constraint alone makes a
+    double queue impossible under concurrent listings."""
+
+    id = models.BigAutoField(primary_key=True)
+    source = models.ForeignKey(FollowedSource, on_delete=models.CASCADE, related_name="seen_posts")
+    post_id = models.CharField(max_length=64)
+    post_url = models.CharField(max_length=lib.MAX_URL_LENGTH, blank=True, default="")
+    seen_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["source", "post_id"], name="clipshelf_seenpost_source_post_unique"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.source_id}:{self.post_id}"

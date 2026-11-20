@@ -35,6 +35,7 @@ from django.utils.dateparse import parse_datetime
 from clipshelf import (
     acquisition,
     asset_files,
+    follows,
     imports,
     interpretation,
     lib,
@@ -48,6 +49,7 @@ log = logging.getLogger(__name__)
 CONFIG_ERROR = "llm-not-configured"  # blocked marker; claim resumes when config exists
 # MAX_ATTEMPTS moved to models.Job; the finite-failure policy lives in Job.fail.
 POLL_SECONDS = 5
+SOURCE_CHECK_CONCURRENCY = 2     # profile listings in flight server wide
 
 
 def _concurrency():
@@ -101,6 +103,7 @@ def main(once=False, stdout=None):
         # the whole pool: at least one slot stays free for captures.
         pending = set()
         import_futures = set()
+        source_futures = {}  # future -> source id; one listing per source at once
         try:
             while True:
                 free = _concurrency() - len(pending)
@@ -113,6 +116,13 @@ def main(once=False, stdout=None):
                         pending.add(future)
                     pending.update(pool.submit(_process, job)
                                    for job in _claim_batch(free - len(claimed)))
+                    free_checks = SOURCE_CHECK_CONCURRENCY - len(source_futures)
+                    if free_checks > 0:
+                        for source in _claim_sources(free_checks,
+                                                     set(source_futures.values())):
+                            future = pool.submit(_run_source, source, say)
+                            source_futures[future] = source.id
+                            pending.add(future)
                 if not pending:
                     if once:
                         break
@@ -121,6 +131,8 @@ def main(once=False, stdout=None):
                 done, _ = wait(pending, return_when=FIRST_COMPLETED)
                 pending.difference_update(done)
                 import_futures -= done
+                for f in done:
+                    source_futures.pop(f, None)  # its listing slot frees up
                 for f in done:
                     f.result()
         except KeyboardInterrupt:
@@ -193,6 +205,18 @@ def _claim(jid):
         return None
 
 
+def _claim_sources(limit, in_flight=()):
+    """Due enabled follows, oldest next_check first (null is due now).
+    In-flight ids are excluded so one source never lists twice at once; the
+    exclusive coordinator lock is the only claim, so no state flips here."""
+    due = Q(next_check__isnull=True) | Q(next_check__lte=timezone.now())
+    qs = (models.FollowedSource.objects.filter(enabled=True).filter(due)
+          .order_by("next_check", "created_at"))
+    if in_flight:
+        qs = qs.exclude(id__in=in_flight)
+    return list(qs[:limit])
+
+
 def _warn(job, *messages):
     return list(dict.fromkeys((job.warnings or []) + [m for m in messages if m]))[:100]
 
@@ -241,6 +265,13 @@ def _acquire_phase(job):
     # An imported job keeps the export's title and note where the page has none.
     source["title"] = source["title"] or job.source.get("title", "")
     source["desc"] = source["desc"] or job.source.get("desc", "")
+    # A followed-source capture carries its topic tag: prepended, deduplicated,
+    # capped — store_source passes metadata tags into the contribution.
+    follow = job.capture.follow
+    if follow is not None:
+        tags = [t for t in source["metadata"].get("tags") or [] if t != follow.tag]
+        tags.insert(0, follow.tag)
+        source["metadata"]["tags"] = tags[:services.TAGS_MAX]
     asset_files.publish(source, staging, move=True)
     status = source.get("acquisition") or "error"
     # store_source owns every source fact: final_url, acquisition and warnings.
@@ -396,6 +427,18 @@ def _run_import(record, say=None):
                           record.id)
     if say:
         say(f"import {record.id}: done ({result.get('counts', {})})")
+
+
+def _run_source(source, say=None):
+    """One followed-source listing cycle with the coordinator guard: a source
+    crash is logged and returns, never killing the loop (same policy as
+    _run_import). check_source itself handles every listing failure."""
+    try:
+        follows.check_source(source, say)
+    except Exception as exc:
+        log.exception("follow source %s failed", source.id)
+        if say:
+            say(f"follow {source.id}: failed ({exc})")
 
 
 # ------------------------------------------------- staging retention (review S12)

@@ -779,6 +779,87 @@ def test_tiktok_host_dispatch(tmp):
         tiktok.assert_called_once()
 
 
+def test_profile_listing_bounds(tmp):
+    """list_profile_posts reads flat-playlist JSON only: ids and http(s)
+    URLs, numeric ids newest first, non-numeric ids last. Invalid input,
+    a non-zero exit, a timeout or unreadable JSON raises ListingError.
+    The fake yt-dlp keeps the test offline."""
+    payload = {"id": "playlist", "entries": [
+        {"id": "103", "url": "https://www.tiktok.com/@u/video/103"},
+        {"id": "not-a-number", "url": "https://www.tiktok.com/@u/video/x"},
+        {"id": "105", "url": "https://www.tiktok.com/@u/video/105"},
+        {"id": "104"},  # no url: skipped
+        {"id": "102", "url": "ftp://cdn.example/file"},  # not http(s): skipped
+        {"id": "", "url": "https://www.tiktok.com/@u/video/none"},  # no id
+        {"url": "https://www.tiktok.com/@u/video/web"},  # no id
+        {"id": "101", "webpage_url": "https://www.tiktok.com/@u/video/101"},
+    ]}
+    argvs = []
+
+    def fake_run(argv):
+        argvs.append(argv)
+        return 0, json.dumps(payload).encode(), ""
+
+    with mock.patch.object(acq, "_run_listing", side_effect=fake_run):
+        listing = acq.list_profile_posts("https://www.tiktok.com/@u")
+    assert [(post["id"], post["url"]) for post in listing] == [
+        ("105", "https://www.tiktok.com/@u/video/105"),
+        ("103", "https://www.tiktok.com/@u/video/103"),
+        ("101", "https://www.tiktok.com/@u/video/101"),
+        ("not-a-number", "https://www.tiktok.com/@u/video/x")]
+    # The fixed argv keeps the bounded flat-playlist window.
+    assert "--flat-playlist" in argvs[0]
+    assert argvs[0][argvs[0].index("--playlist-items") + 1] == \
+        f"1:{acq.PROFILE_LIST_MAX}"
+
+    def expect_listing_error(url, listing_patch):
+        with listing_patch:
+            try:
+                acq.list_profile_posts(url)
+            except acq.ListingError as exc:
+                return str(exc)
+            raise AssertionError(f"listing accepted bad result for {url}")
+
+    # Unreadable JSON, or JSON without an entries list.
+    message = expect_listing_error("https://www.tiktok.com/@u",
+                                   mock.patch.object(acq, "_run_listing",
+                                                     return_value=(0, b"{oops", b"")))
+    assert "profile listing failed" in message
+    message = expect_listing_error("https://www.tiktok.com/@u",
+                                   mock.patch.object(acq, "_run_listing",
+                                                     return_value=(0, b'{"id": "x"}', b"")))
+    assert "profile listing failed" in message
+    # A non-zero exit maps the challenge stderr to the stable failure name.
+    stderr = "ERROR: challenge solving required; please wait (captcha)"
+    message = expect_listing_error("https://www.tiktok.com/@u",
+                                   mock.patch.object(acq, "_run_listing",
+                                                     return_value=(1, b"", stderr)))
+    assert "profile listing failed (challenge)" in message
+
+    # A subprocess timeout becomes (124, b"", tail) and then ListingError.
+    def raise_timeout(argv, **kwargs):
+        raise acq.subprocess.TimeoutExpired(cmd=argv, timeout=1)
+
+    with mock.patch.object(acq.subprocess, "run", side_effect=raise_timeout):
+        assert acq._run_listing(["yt-dlp"]) == \
+            (124, b"", f"extractor exceeded {acq.EXTRACTOR_TIMEOUT}s time bound")
+    message = expect_listing_error(
+        "https://www.tiktok.com/@u",
+        mock.patch.object(acq, "_run_listing",
+                          return_value=(124, b"",
+                                        f"extractor exceeded {acq.EXTRACTOR_TIMEOUT}s time bound")))
+    assert "profile listing failed" in message
+
+    # Invalid input raises before any subprocess runs.
+    for bad in (None, "", "not a url", "https://example.com/@user"):
+        message = expect_listing_error(
+            bad,
+            mock.patch.object(acq, "_run_listing",
+                              side_effect=AssertionError("network reached")))
+        assert "profile listing failed" in message, bad
+    print("profile listing bounds ok")
+
+
 def test_extractor_output_bounds():
     """Extractor output above the local bound is never adopted, and a video
     that fails ffprobe is deleted like _import_video does; a valid small file
@@ -2584,6 +2665,7 @@ def test():
         test_import_media_bounds(tmp)
         test_acquisition_regressions(tmp)
         test_tiktok_host_dispatch(tmp)
+        test_profile_listing_bounds(tmp)
         test_acquisition_mutant_pins(tmp)
         test_interpretation_regressions(tmp)
     test_direct_media_single_fetch()

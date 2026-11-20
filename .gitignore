@@ -20,6 +20,8 @@ docs/*
 !docs/operations.md
 !docs/privacy.md
 !docs/development.md
+!docs/specs/
+!docs/specs/**
 
 # server, Android, and local verification state
 .venv/

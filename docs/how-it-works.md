@@ -30,15 +30,16 @@ flowchart LR
 
 - **Android app** — `android/app/src/main/java/dev/clipshelf/app/` (share receiver, durable outbox, background delivery)
 - **Web UI** — `clipshelf/templates/`, `clipshelf/static/` (Django templates, vanilla JS, no build step)
-- **Django web process** — `clipshelf/cli.py` (`serve`, Waitress on `clipshelf/project/wsgi.py`); routes in `clipshelf/urls.py`, JSON API in `clipshelf/views.py` (`api_captures`, `api_entries`, `api_import`, `api_job_retry`), accounts in `clipshelf/accounts.py` (django-allauth), admin endpoints in `clipshelf/admin_views.py`, first-run wizard in `clipshelf/setup.py`
-- **Worker process** — `clipshelf/management/commands/worker.py` starts `clipshelf/worker.py` `main()`: claims jobs (`_claim`, `_claim_batch`), acquires, interprets, publishes, and drains imports (`_claim_imports`, `_run_import`)
+- **Django web process** — `clipshelf/cli.py` (`serve`, Waitress on `clipshelf/project/wsgi.py`); routes in `clipshelf/urls.py`, JSON API in `clipshelf/views.py` (`api_captures`, `api_entries`, `api_import`, `api_job_retry`, `api_follows`, `api_feed`), accounts in `clipshelf/accounts.py` (django-allauth), admin endpoints in `clipshelf/admin_views.py`, first-run wizard in `clipshelf/setup.py`
+- **Worker process** — `clipshelf/management/commands/worker.py` starts `clipshelf/worker.py` `main()`: claims jobs (`_claim`, `_claim_batch`), acquires, interprets, publishes, drains imports (`_claim_imports`, `_run_import`), and checks followed sources (`_claim_sources`)
+- **Followed sources** — `clipshelf/follows.py` (`create_follow`, `check_source`): profile listings over `clipshelf/acquisition.py` `list_profile_posts` (yt-dlp `--flat-playlist`, ids and URLs only), the `SeenPost` ledger, and the schedule settings on `ServerSettings`
 - **Acquisition** — `clipshelf/acquisition.py` (`acquire`, `_acquire_page`, `_acquire_tiktok`) over `clipshelf/network.py` (`validate_url`, `fetch_public`, public-IP pinning, `extractor_egress` proxy)
 - **Interpretation** — `clipshelf/interpretation.py` (`interpret`, one OpenAI-compatible `POST /chat/completions` per job with one malformed-output retry)
 - **TypeSafe screening** — `clipshelf/judgment.py` (`screen_material` before the model, `screen_findings` before publishing) and `clipshelf/services.py` `screening_gate`; optional, fail-open
 - **Import engine** — `clipshelf/imports.py` (`run_staged_import`, `_commit_import`), admitted by `clipshelf/views.py` `api_import` or the `import_library` command (`clipshelf/management/commands/import_library.py`)
 - **Publication** — `clipshelf/services.py` (`accept_capture`, `store_source`, `store_findings`) and `clipshelf/publication.py` (`contribute_link`, `publish_prompt`, dedup keys, tombstones)
 - **Browser export scripts** — `tiktok-extract.js`, `whatsapp-extract.js` (run in the operator's browser; the server never takes login cookies)
-- **Data dir** — `CLIPSHELF_DATA_DIR`: `db.sqlite3` (schema in `clipshelf/models.py`: `User`, `Collection`, `Membership`, `Capture`, `Job`, `Entry`, `Contribution`, `History`, `Asset`, `ServerSettings`, `Invitation`, `ImportRecord`, `ImportRequest`), `assets/` (retained media via `clipshelf/asset_files.py`), `staging/` (acquisition and import scratch, 30-day retention, `clean` command)
+- **Data dir** — `CLIPSHELF_DATA_DIR`: `db.sqlite3` (schema in `clipshelf/models.py`: `User`, `Collection`, `Membership`, `Capture`, `Job`, `Entry`, `Contribution`, `History`, `Asset`, `ServerSettings`, `Invitation`, `ImportRecord`, `ImportRequest`, `FollowedSource`, `SeenPost`), `assets/` (retained media via `clipshelf/asset_files.py`), `staging/` (acquisition and import scratch, 30-day retention, `clean` command)
 - **Model endpoint** — any OpenAI-compatible vision endpoint the admin configures (external, not in this repo)
 
 The container runs both roles from one image: `Dockerfile` `ENTRYPOINT deploy/entrypoint.py`, `CMD serve`; `compose.yaml` defines the `web` and `worker` services plus the ops one-shots `bootstrap` and `verify`.
@@ -80,6 +81,29 @@ the reason, and screening warnings show in its notes.
 
 - `tiktok-extract.js` — browser export for login-required posts; the server never takes TikTok cookies
 - `whatsapp-extract.js` — browser export of one WhatsApp Web chat as a `library.json` file for the import section of the web **Add** dialog: links, images, and URL-free notes (imported as prompts); re-runs export only new messages
+
+## Followed sources
+
+Follow a TikTok creator profile in **Settings → Followed sources** with a topic
+tag. The worker lists each enabled profile on a schedule (every 6 hours by
+default), reads post ids and URLs only, and queues each new post as an
+ordinary capture with the topic tag on the entry. The first check after a
+follow queues at most the newest 50 posts (the backfill cap); older posts in
+the listing window are recorded as seen and never queued, unless you turn on
+"Include older posts on the first check".
+
+- A seen-post ledger with a unique constraint per source and post means a post
+  is never queued twice, even when two listings run at the same time.
+- A failed listing (private post, region block, bot challenge) shows the
+  reason on the source row, keeps the last check time, marks nothing as seen,
+  and retries with the same backoff as capture jobs.
+- Pause stops the checks for one source; remove stops them and deletes the
+  ledger. Posts already in the library stay.
+- `GET /api/feed?since=<ISO time>&tag=<tag>&limit=<n>` returns the entries
+  added since a timestamp across your collections, newest first, for external
+  readers.
+- The schedule and the cap are operator settings
+  (`api/admin/follows-settings`); see [configuration.md](configuration.md).
 
 ## Main use case: share a link from the phone
 

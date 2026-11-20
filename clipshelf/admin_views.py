@@ -438,6 +438,31 @@ def screening_check(request, user):
     return JsonResponse({"ok": True, "message": f"screening ok (p={p:.2f})"})
 
 
+def _follows_dict() -> dict:
+    s = get_settings()
+    return {"poll_seconds": s.follow_poll_seconds, "backfill_cap": s.follow_backfill_cap}
+
+
+@admin_endpoint("GET", "POST")
+def follows_settings(request, user):
+    """Followed-source schedule: poll seconds and the first-check backfill cap."""
+    s = get_settings()
+    if request.method == "GET":
+        return JsonResponse({"follows_settings": _follows_dict()})
+    body = json_body(request)
+    _require_reauth(request, body)
+    poll = body.get("poll_seconds")
+    cap = body.get("backfill_cap")
+    if not isinstance(poll, int) or isinstance(poll, bool) or not 300 <= poll <= 86400:
+        raise ApiError(400, detail="poll_seconds must be 300-86400")
+    if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= 200:
+        raise ApiError(400, detail="backfill_cap must be 1-200")
+    s.follow_poll_seconds = poll
+    s.follow_backfill_cap = cap
+    s.save(update_fields=["follow_poll_seconds", "follow_backfill_cap"])
+    return JsonResponse({"follows_settings": _follows_dict()})
+
+
 admin_urlpatterns = [
     path("admin/users", user_list, name="clipshelf_admin_users"),
     path(
@@ -460,4 +485,6 @@ admin_urlpatterns = [
     path("admin/screening", screening, name="clipshelf_admin_screening"),
     path("admin/screening/check", screening_check,
          name="clipshelf_admin_screening_check"),
+    path("admin/follows-settings", follows_settings,
+         name="clipshelf_admin_follows_settings"),
 ]

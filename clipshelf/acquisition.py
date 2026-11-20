@@ -24,8 +24,8 @@ from PIL import Image
 from clipshelf import network
 from clipshelf.lib import MAX_URL_LENGTH, PageParser, is_short, is_tiktok, norm
 
-__all__ = ["AcquisitionError", "acquire", "import_export", "validate_image",
-           "validate_video_file"]
+__all__ = ["AcquisitionError", "ListingError", "acquire", "import_export",
+           "list_profile_posts", "validate_image", "validate_video_file"]
 
 PAGE_MAX_BYTES = 8 << 20          # HTML/JSON page fetch ceiling
 MEDIA_MAX_BYTES = 256 << 20       # direct image/video/audio link ceiling
@@ -48,6 +48,13 @@ _IMAGE_FORMAT_TYPE = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/w
 
 class AcquisitionError(Exception):
     """Invalid or oversized input; per-URL failures become source status."""
+
+
+class ListingError(AcquisitionError):
+    """A profile listing failed; str names the honest _tiktok_failure reason."""
+
+
+PROFILE_LIST_MAX = 200           # posts per profile listing window
 
 
 class ImportBudgetExhausted(AcquisitionError):
@@ -484,6 +491,66 @@ def _acquire_tiktok(url, directory, source):
             source["acquisition"] = "blocked" if failure != "error" else "error"
             _warn(source, f"no metadata or media acquired ({failure}); "
                           "retry or browser import")
+
+
+# ------------------------------------------------- profile listing (follows)
+
+def _profile_list_argv(proxy, url):
+    """Fixed argument array; --flat-playlist reads ids and URLs only, never
+    media, so one listing costs one request round trip."""
+    return [sys.executable, "-m", "yt_dlp", "--ignore-config", "--no-cookies",
+            "--no-cookies-from-browser", "--proxy", proxy, "--socket-timeout", "30",
+            "--retries", "3", "--flat-playlist", "-J",
+            "--playlist-items", f"1:{PROFILE_LIST_MAX}", url]
+
+
+def _run_listing(argv):
+    """Bounded subprocess like _run_extractor, but stdout is the payload."""
+    try:
+        proc = subprocess.run(argv, capture_output=True, timeout=EXTRACTOR_TIMEOUT,
+                              env=network.scrub_env(), check=False, shell=False)
+    except subprocess.TimeoutExpired:
+        return 124, b"", f"extractor exceeded {EXTRACTOR_TIMEOUT}s time bound"
+    return (proc.returncode, proc.stdout,
+            proc.stderr.decode(errors="replace")[-4000:])
+
+
+def list_profile_posts(url):
+    """List a TikTok profile: [{\"id\", \"url\"}] sorted newest first (numeric
+    ids descending, non-numeric ids last). Reads the flat-playlist JSON only;
+    no media downloads. Invalid input, non-zero exit, timeout, or unreadable
+    JSON raises ListingError with the _tiktok_failure mapping."""
+    if not isinstance(url, str) or not norm(url) or not is_tiktok(url):
+        raise ListingError(f"profile listing failed ({_tiktok_failure('')})")
+    with network.extractor_egress() as proxy:
+        code, out, err = _run_listing(_profile_list_argv(proxy, url))
+    if code != 0:
+        raise ListingError(f"profile listing failed ({_tiktok_failure(err)})")
+    try:
+        data = json.loads(out.decode("utf-8", errors="replace"))
+        entries = data.get("entries") if isinstance(data, dict) else None
+        if not isinstance(entries, list):
+            raise ValueError("entries is not a list")
+    except ValueError:
+        raise ListingError(f"profile listing failed ({_tiktok_failure(err)})")
+    posts = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        post_id = str(entry.get("id") or "")[:64]
+        post_url = str(entry.get("url") or entry.get("webpage_url") or "")
+        if not post_id or not post_url.startswith(("http://", "https://")):
+            continue
+        posts.append({"id": post_id, "url": post_url[:MAX_URL_LENGTH]})
+
+    def sort_key(post):
+        try:
+            return (0, -int(post["id"]))
+        except ValueError:
+            return (1, 0)  # non-numeric ids sort last
+
+    posts.sort(key=sort_key)
+    return posts
 
 
 # --------------------------------------------------------------- entry

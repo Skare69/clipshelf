@@ -130,11 +130,12 @@ def destination_for(user, requested_id):
 # Capture intake
 # ---------------------------------------------------------------------------
 
-def accept_capture(user, client_request_id, text, collection_id):
+def accept_capture(user, client_request_id, text, collection_id, follow=None):
     """Validate and durably accept a capture: one transaction writes the
     receipt and queued jobs. Identical retries return the existing capture
     unchanged (created=False); conflicting reuse of the request ID raises
-    ValidationError(code="conflict")."""
+    ValidationError(code="conflict"). follow records followed-source
+    provenance on the capture (null for ordinary captures)."""
     if not isinstance(text, str) or not text.strip():
         raise ValidationError({"text": "Text is required."}, code="invalid")
     encoded = text.encode("utf-8")
@@ -166,6 +167,7 @@ def accept_capture(user, client_request_id, text, collection_id):
                 raw_text=text,
                 requested_collection_id=requested,
                 collection=collection,
+                follow=follow,
                 request_hash=request_hash,
                 notice=notice,
             )

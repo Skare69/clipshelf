@@ -1,0 +1,490 @@
+"""Followed-sources regressions: backfill bounds, the seen ledger, the
+concurrent double-queue guard, worker claims and tag stamping, the follow
+API and the feed filters.
+
+Offline: the yt-dlp listing is a mock; no network and no real yt-dlp run.
+"""
+import json
+import os
+import shutil
+import tempfile
+import threading
+import urllib.parse
+import uuid
+from datetime import timedelta
+from pathlib import Path
+from unittest import mock
+
+# Standalone self-check (`$PY test_follows.py`): model imports at module
+# level need Django up first. django.setup() is idempotent under the
+# Django test discovery (`clipshelf.py test`).
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "clipshelf.project.settings")
+import django
+
+django.setup()
+
+from django.contrib.auth import get_user_model
+from django.db import connection
+from django.test import Client, TestCase, TransactionTestCase, override_settings
+from django.utils import timezone
+from django.utils.dateparse import parse_datetime
+from allauth.account.models import EmailAddress
+
+from clipshelf import acquisition, follows, services, worker
+from clipshelf.models import Capture, Contribution, Entry, FollowedSource, Job, SeenPost
+
+PASSWORD = "test-pass-1234"
+PROFILE = "https://www.tiktok.com/@creator"
+FOLLOW_KEYS = {"id", "platform", "profile_url", "tag", "enabled",
+               "full_backfill", "last_check", "next_check", "last_error",
+               "created_at"}
+
+
+def posts(*post_ids):
+    """Fake listing output, newest first: one post id and URL per post."""
+    return [{"id": pid, "url": f"https://www.tiktok.com/@creator/video/{pid}"}
+            for pid in post_ids]
+
+
+def crid_for(source, post_id):
+    """The deterministic capture request id check_source derives per post."""
+    return uuid.uuid5(uuid.NAMESPACE_URL, f"{source.id}:{post_id}")
+
+
+class FollowMixin:
+    """Real database, real views: a throwaway DATA_DIR, two users with a
+    verified mailbox each, and their Personal collections."""
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp(prefix="clipshelf-follow-test-")
+        self.tmp = Path(tmp)
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        override = override_settings(DATA_DIR=tmp)
+        override.enable()
+        self.addCleanup(override.disable)
+        self.alice = self._user("alice@example.com")
+        self.bob = self._user("bob@example.com")
+        self.alice_personal = services.personal_collection(self.alice)
+        self.bob_personal = services.personal_collection(self.bob)
+
+    def _user(self, email):
+        user = get_user_model().objects.create_user(
+            username=email, email=email, password=PASSWORD)
+        # The api guard admits only accounts with a verified mailbox.
+        EmailAddress.objects.create(
+            user=user, email=email, verified=True, primary=True)
+        return user
+
+    def _login(self, user):
+        client = Client()
+        client.force_login(user)
+        return client
+
+    def _set_cap(self, cap):
+        cfg = services.get_settings()
+        cfg.follow_backfill_cap = cap
+        cfg.save()
+
+    def _post_json(self, client, path, payload):
+        return client.post(path, data=json.dumps(payload),
+                           content_type="application/json")
+
+
+# ----------------------------------------------------------------- queue
+
+class QueueBoundsTests(FollowMixin, TestCase):
+    """The backfill cap bounds the first listing; the seen ledger never
+    double queues."""
+
+    def _check(self, source, listing):
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               return_value=listing):
+            return follows.check_source(source)
+
+    def _queued_ids(self, source, *post_ids):
+        return {pid for pid in post_ids
+                if Capture.objects.filter(
+                    user=source.user,
+                    client_request_id=crid_for(source, pid)).exists()}
+
+    def test_first_listing_queues_cap_newest_first(self):
+        self._set_cap(2)
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        self.assertEqual(self._check(source, posts("104", "103", "102", "101")),
+                         "ok")
+        source.refresh_from_db()
+        self.assertTrue(source.backfill_done)
+        self.assertFalse(source.last_error)
+        self.assertEqual(source.failures, 0)
+        self.assertIsNotNone(source.last_check)
+        self.assertGreater(source.next_check, timezone.now())
+        # Exactly the cap, newest first: the two newest posts queued,
+        # the two older posts not.
+        self.assertEqual(self._queued_ids(source, "101", "102", "103", "104"),
+                         {"104", "103"})
+        self.assertEqual(Capture.objects.filter(follow=source).count(), 2)
+        # Every listed post is seen, queued or not.
+        self.assertEqual(source.seen_posts.count(), 4)
+        # The capture lands in the default destination (Personal fallback).
+        capture = Capture.objects.get(follow=source,
+                                      client_request_id=crid_for(source, "104"))
+        self.assertEqual(capture.collection, self.alice_personal)
+
+    def test_full_backfill_queues_whole_window(self):
+        self._set_cap(2)
+        source = follows.create_follow(self.alice, PROFILE, "recipes", full=True)
+        self.assertEqual(self._check(source, posts("104", "103", "102", "101")),
+                         "ok")
+        self.assertEqual(self._queued_ids(source, "101", "102", "103", "104"),
+                         {"104", "103", "102", "101"})
+
+    def test_second_listing_queues_only_new_ids(self):
+        self._set_cap(2)
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        self._check(source, posts("104", "103", "102", "101"))
+        self.assertEqual(Capture.objects.filter(follow=source).count(), 2)
+        self.assertEqual(self._check(source, posts("106", "105", "104", "103")),
+                         "ok")
+        self.assertEqual(
+            self._queued_ids(source, "101", "102", "103", "104", "105", "106"),
+            {"103", "104", "105", "106"})
+        self.assertEqual(Capture.objects.filter(follow=source).count(), 4)
+        self.assertEqual(source.seen_posts.count(), 6)
+
+    def test_repeat_listing_queues_nothing(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        self._check(source, posts("104", "103"))
+        captures_before = Capture.objects.filter(follow=source).count()
+        seen_before = source.seen_posts.count()
+        self.assertEqual(self._check(source, posts("104", "103")), "ok")
+        source.refresh_from_db()
+        self.assertEqual(Capture.objects.filter(follow=source).count(),
+                         captures_before)
+        self.assertEqual(source.seen_posts.count(), seen_before)
+        self.assertFalse(source.last_error)
+        self.assertIsNotNone(source.next_check)
+
+
+# -------------------------------------------------------- listing failure
+
+class ListingFailureTests(FollowMixin, TestCase):
+    def test_challenge_failure_keeps_ledger_and_backs_off(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        error = acquisition.ListingError("profile listing failed (challenge)")
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               side_effect=error):
+            status = follows.check_source(source)
+        self.assertEqual(status, "error")
+        source.refresh_from_db()
+        self.assertEqual(source.last_error, "profile listing failed (challenge)")
+        self.assertEqual(source.failures, 1)
+        self.assertIsNone(source.last_check)  # a failure never moves last_check
+        self.assertEqual(Capture.objects.filter(follow=source).count(), 0)
+        self.assertEqual(SeenPost.objects.count(), 0)
+        gap = source.next_check - timezone.now()
+        self.assertAlmostEqual(gap.total_seconds(),
+                               Job.backoff(1).total_seconds(), delta=10)
+
+
+# ------------------------------------------------------------ concurrency
+
+class ConcurrentListingTests(FollowMixin, TransactionTestCase):
+    def test_two_listings_queue_each_post_once(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        listing = posts("104", "103")
+        barrier = threading.Barrier(2)
+        results, failures = [], []
+
+        def fake_listing(url):
+            barrier.wait(timeout=10)
+            return listing
+
+        def run_check():
+            try:
+                with mock.patch.object(acquisition, "list_profile_posts",
+                                       side_effect=fake_listing):
+                    results.append(follows.check_source(source))
+            except Exception as exc:  # surfaced below, never hidden
+                failures.append(exc)
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=run_check) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(60)
+        for thread in threads:
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(sorted(results), ["ok", "ok"])
+        # The seen-row unique constraint decides: one capture per post.
+        for pid in ("104", "103"):
+            self.assertEqual(
+                Capture.objects.filter(
+                    user=self.alice,
+                    client_request_id=crid_for(source, pid)).count(), 1)
+        self.assertEqual(Capture.objects.filter(follow=source).count(), 2)
+        self.assertEqual(source.seen_posts.count(), 2)
+
+
+# ----------------------------------------------------------------- worker
+
+class WorkerSourceTests(FollowMixin, TestCase):
+    def test_claim_sources_filters_paused_and_future(self):
+        due_now = follows.create_follow(
+            self.alice, "https://www.tiktok.com/@a", "a")
+        past = follows.create_follow(self.alice, "https://www.tiktok.com/@b", "b")
+        past.next_check = timezone.now() - timedelta(hours=1)
+        past.save(update_fields=["next_check"])
+        future = follows.create_follow(self.alice, "https://www.tiktok.com/@c", "c")
+        future.next_check = timezone.now() + timedelta(hours=1)
+        future.save(update_fields=["next_check"])
+        paused = follows.create_follow(self.alice, "https://www.tiktok.com/@d", "d")
+        paused.enabled = False
+        paused.save(update_fields=["enabled"])
+
+        # Due enabled sources only: a null next_check is due now, and it
+        # sorts first.
+        self.assertEqual([s.id for s in worker._claim_sources(10)],
+                         [due_now.id, past.id])
+        self.assertEqual([s.id for s in worker._claim_sources(1)],
+                         [due_now.id])
+        # In-flight ids stay claimed out so one source never lists twice.
+        self.assertEqual([s.id for s in worker._claim_sources(10, {due_now.id})],
+                         [past.id])
+
+    def test_acquire_phase_stamps_follow_tag(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        follow_url = posts("104")[0]["url"]
+        capture, _ = services.accept_capture(
+            self.alice, crid_for(source, "104"), follow_url, None, follow=source)
+        job = Job.objects.get(capture=capture)
+        plain_url = "https://example.com/page"
+        plain_capture, _ = services.accept_capture(
+            self.alice, uuid.uuid4(), plain_url, None)
+        plain_job = Job.objects.get(capture=plain_capture)
+        tags_by_url = {follow_url: ["misc", "recipes"],
+                       plain_url: ["misc", "recipes"]}
+
+        def fake_acquire(url, directory):
+            page = Path(directory) / "page.html"
+            page.write_text(f"<html>{url}</html>", encoding="utf-8")
+            return {"url": url, "original_url": url, "title": "t", "desc": "d",
+                    "text": "x", "links": [],
+                    "assets": [{"path": str(page), "kind": "page",
+                                "content_type": "text/html", "position": 0}],
+                    "acquisition": "complete", "warnings": [],
+                    "metadata": {"tags": list(tags_by_url[url])}}
+
+        with mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire):
+            self.assertTrue(worker._acquire_phase(job))
+            self.assertTrue(worker._acquire_phase(plain_job))
+        job.refresh_from_db()
+        plain_job.refresh_from_db()
+        # The topic tag leads the source metadata tags; duplicates drop out.
+        self.assertEqual(job.source["metadata"]["tags"], ["recipes", "misc"])
+        # A capture without follow provenance keeps the acquired tags as-is.
+        self.assertEqual(plain_job.source["metadata"]["tags"], ["misc", "recipes"])
+        # store_source carries the stamped tags into the contribution data.
+        self.assertEqual(Contribution.objects.get(job=job).data["tags"],
+                         ["recipes", "misc"])
+        self.assertEqual(Contribution.objects.get(job=plain_job).data["tags"],
+                         ["misc", "recipes"])
+
+
+# ------------------------------------------------------------- follow api
+
+class FollowApiTests(FollowMixin, TestCase):
+    def test_create_and_list_own_follows(self):
+        client = self._login(self.alice)
+        response = self._post_json(client, "/api/follows", {
+            "url": "https://tiktok.com/@User?utm=x", "tag": " recipes "})
+        self.assertEqual(response.status_code, 201)
+        follow = response.json()["follow"]
+        # The stored URL is the canonical form: pinned host, no query,
+        # lowercased handle.
+        self.assertEqual(follow["profile_url"], "https://www.tiktok.com/@user")
+        self.assertEqual(follow["tag"], "recipes")
+        self.assertTrue(follow["enabled"])
+        self.assertFalse(follow["full_backfill"])
+        self.assertEqual(
+            FollowedSource.objects.get(pk=follow["id"]).user, self.alice)
+
+        bob_client = self._login(self.bob)
+        self.assertEqual(self._post_json(
+            bob_client, "/api/follows",
+            {"url": PROFILE, "tag": "dances"}).status_code, 201)
+        self.assertEqual([f["id"] for f in
+                          client.get("/api/follows").json()["follows"]],
+                         [follow["id"]])
+
+    def test_follow_json_shape(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        follow = self._login(self.alice).get("/api/follows").json()["follows"][0]
+        self.assertEqual(set(follow), FOLLOW_KEYS)
+        self.assertEqual(follow["id"], str(source.id))
+        self.assertEqual(follow["platform"], "tiktok")
+        self.assertIsNone(follow["last_check"])  # never listed yet
+        self.assertIsNone(follow["next_check"])
+        self.assertEqual(follow["last_error"], "")
+        self.assertIsNotNone(parse_datetime(follow["created_at"]))
+
+    def test_create_rejects_bad_url_and_tag(self):
+        client = self._login(self.alice)
+        for payload in (
+            {"url": "https://example.com/@user", "tag": "x"},
+            {"url": "https://www.tiktok.com/@user/video/123", "tag": "x"},
+            {"url": PROFILE, "tag": ""},
+            {"url": PROFILE, "tag": "x" * 101},
+            {},
+        ):
+            response = self._post_json(client, "/api/follows", payload)
+            self.assertEqual(response.status_code, 400, payload)
+        self.assertEqual(FollowedSource.objects.count(), 0)
+
+    def test_pause_resume_and_unfollow(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        client = self._login(self.alice)
+        detail = f"/api/follows/{source.id}"
+
+        paused = self._post_json(client, detail, {"enabled": False})
+        self.assertEqual(paused.status_code, 200)
+        self.assertFalse(paused.json()["follow"]["enabled"])
+        source.refresh_from_db()
+        self.assertFalse(source.enabled)
+        resumed = self._post_json(client, detail, {"enabled": True})
+        self.assertTrue(resumed.json()["follow"]["enabled"])
+
+        # One check queued a capture; unfollow keeps already-captured posts.
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               return_value=posts("104")):
+            follows.check_source(source)
+        self.assertEqual(Capture.objects.filter(follow=source).count(), 1)
+        removed = client.delete(detail)
+        self.assertEqual(removed.status_code, 200)
+        self.assertEqual(removed.json(), {"removed": True})
+        self.assertFalse(FollowedSource.objects.filter(pk=source.id).exists())
+        self.assertEqual(Capture.objects.count(), 1)
+        self.assertIsNone(Capture.objects.get().follow)
+
+    def test_foreign_follow_answers_404(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        client = self._login(self.bob)
+        detail = f"/api/follows/{source.id}"
+        # The route holds DELETE and POST only; a foreign id is invisible.
+        self.assertEqual(self._post_json(
+            client, detail, {"enabled": False}).status_code, 404)
+        self.assertEqual(client.delete(detail).status_code, 404)
+        source.refresh_from_db()
+        self.assertTrue(source.enabled)
+
+
+class FollowConflictTests(FollowMixin, TransactionTestCase):
+    """Duplicate detection fires on the real unique constraint; a
+    TransactionTestCase keeps the failed insert out of the test-wide
+    transaction, like the request's own autocommit."""
+
+    def test_duplicate_spelling_is_conflict(self):
+        client = self._login(self.alice)
+        created = self._post_json(client, "/api/follows", {
+            "url": "https://www.tiktok.com/@user", "tag": "recipes"})
+        self.assertEqual(created.status_code, 201)
+        # One profile per user: host, case and query spelling collapse onto
+        # the canonical form first.
+        response = self._post_json(client, "/api/follows", {
+            "url": "https://tiktok.com/@USER?igsh=1", "tag": "other"})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(FollowedSource.objects.count(), 1)
+
+
+# -------------------------------------------------------------------- feed
+
+class FeedApiTests(FollowMixin, TestCase):
+    def _entry(self, user, collection, url, tags=(), at=None):
+        capture = Capture.objects.create(
+            user=user, client_request_id=uuid.uuid4(), raw_text=url,
+            requested_collection_id=None, collection=collection,
+            request_hash="h", received_at=timezone.now(), notice="")
+        job = Job.objects.create(capture=capture, collection=collection, url=url,
+                                 state="done", acquisition="complete",
+                                 interpretation="complete", attempts=1,
+                                 warnings=[])
+        entry = Entry.objects.create(collection=collection, kind="link", key=url)
+        Contribution.objects.create(entry=entry, user=user, capture=capture,
+                                    job=job, origin="test",
+                                    data={"tags": list(tags)})
+        if at is not None:
+            Entry.objects.filter(pk=entry.pk).update(created_at=at)
+        return entry
+
+    def _feed(self, client, query):
+        return client.get("/api/feed?" + urllib.parse.urlencode(query))
+
+    def test_feed_filters_by_tag_and_since_and_hides_other_users(self):
+        now = timezone.now()
+        old = self._entry(self.alice, self.alice_personal,
+                          "https://example.com/old", tags=("recipes",),
+                          at=now - timedelta(hours=3))
+        travel = self._entry(self.alice, self.alice_personal,
+                             "https://example.com/travel", tags=("travel",),
+                             at=now - timedelta(hours=2))
+        new = self._entry(self.alice, self.alice_personal,
+                          "https://example.com/new", tags=("recipes",),
+                          at=now - timedelta(hours=1))
+        foreign = self._entry(self.bob, self.bob_personal,
+                              "https://example.com/foreign", tags=("recipes",),
+                              at=now - timedelta(hours=1))
+
+        client = self._login(self.alice)
+        # The window starts after `old`: only the two newer entries qualify,
+        # newest first.
+        data = self._feed(client, {
+            "since": (now - timedelta(hours=2, minutes=30)).isoformat()}).json()
+        self.assertEqual(data["count"], 2)
+        self.assertEqual([item["id"] for item in data["entries"]],
+                         [str(new.id), str(travel.id)])
+        # Case-insensitive tag filter on the serialized tags.
+        data = self._feed(client, {
+            "since": (now - timedelta(hours=4)).isoformat(),
+            "tag": "RECIPES"}).json()
+        self.assertEqual([item["id"] for item in data["entries"]],
+                         [str(new.id), str(old.id)])
+        # Another user's entries never show; collection access is the wall.
+        ids = [item["id"] for item in self._feed(client, {
+            "since": (now - timedelta(hours=4)).isoformat()}).json()["entries"]]
+        self.assertNotIn(str(foreign.id), ids)
+        own = self._feed(self._login(self.bob), {
+            "since": (now - timedelta(hours=4)).isoformat()}).json()
+        self.assertEqual([item["id"] for item in own["entries"]],
+                         [str(foreign.id)])
+
+    def test_feed_since_and_limit_bounds(self):
+        now = timezone.now()
+        self._entry(self.alice, self.alice_personal, "https://example.com/first",
+                    at=now - timedelta(hours=2))
+        second = self._entry(self.alice, self.alice_personal,
+                             "https://example.com/second",
+                             at=now - timedelta(hours=1))
+        client = self._login(self.alice)
+        self.assertEqual(self._feed(client, {}).status_code, 400)
+        self.assertEqual(
+            self._feed(client, {"since": "2026-01-01T00:00:00"}).status_code, 400)
+        aware = (now - timedelta(hours=3)).isoformat()
+        self.assertEqual(
+            self._feed(client, {"since": aware, "limit": "abc"}).status_code, 400)
+        self.assertEqual(
+            self._feed(client, {"since": aware, "limit": "0"}).status_code, 400)
+        data = self._feed(client, {"since": aware, "limit": "1"}).json()
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["entries"][0]["id"], str(second.id))
+        # A limit above FEED_MAX_LIMIT caps silently; it never errors.
+        data = self._feed(client, {"since": aware, "limit": "99999"}).json()
+        self.assertEqual(data["count"], 2)
+
+
+if __name__ == "__main__":
+    from django.conf import settings
+    from django.test.utils import get_runner
+
+    raise SystemExit(bool(get_runner(settings)().run_tests(["test_follows"])))
