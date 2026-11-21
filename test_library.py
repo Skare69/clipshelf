@@ -826,6 +826,50 @@ class CollectionMembershipTests(ApiTestCase):
             response.json()["default_collection_id"], str(self.bob_personal.id)
         )
 
+    def test_collection_detail_hides_member_emails_from_non_owner(self):
+        """The roster is owner-only data: a member's detail view carries no
+        address but their own, while the owner still sees everyone."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        Membership.objects.create(collection=shared, user=self.bob)
+        Membership.objects.create(collection=shared, user=carol)
+        # The owner's view is unchanged: the full roster.
+        detail = self.alice_client.get(f"/api/collections/{shared.id}").json()
+        emails = {m["email"] for m in detail["members"]}
+        self.assertEqual(
+            emails, {self.alice.email, self.bob.email, carol.email}
+        )
+        # A member's view: their own row alone, nothing else.
+        response = self.bob_client.get(f"/api/collections/{shared.id}")
+        self.assertEqual(response.status_code, 200)
+        body = response.content.decode()
+        self.assertNotIn(self.alice.email, body)
+        self.assertNotIn(carol.email, body)
+        detail = response.json()
+        self.assertEqual(
+            detail["members"],
+            [{"id": str(self.bob.id), "email": self.bob.email, "is_owner": False}],
+        )
+        self.assertFalse(detail["collection"]["can_manage"])
+
+    def test_collection_detail_caps_member_roster(self):
+        """The owner's roster response is capped; member_count and
+        members_truncated report the true size so the cap cannot hide
+        members silently."""
+        shared = self._shared()
+        extra = User.objects.bulk_create(
+            User(username=f"m{i}@example.com", email=f"m{i}@example.com")
+            for i in range(views.MAX_ROSTER)  # owner + MAX_ROSTER members
+        )
+        Membership.objects.bulk_create(
+            Membership(collection=shared, user=u) for u in extra
+        )
+        detail = self.alice_client.get(f"/api/collections/{shared.id}").json()
+        self.assertEqual(len(detail["members"]), views.MAX_ROSTER)
+        self.assertTrue(detail["members_truncated"])
+        self.assertEqual(detail["member_count"], views.MAX_ROSTER + 1)
+        self.assertTrue(detail["members"][0]["is_owner"])
+
 
 class RemovalTests(ApiTestCase):
     def test_contributor_removal_preserves_others(self):

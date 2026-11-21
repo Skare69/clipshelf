@@ -56,6 +56,7 @@ from clipshelf.models import (
 DEFAULT_PAGE = 50
 MAX_PAGE = 500
 MAX_NAME_LEN = 200
+MAX_ROSTER = 500                 # member rows the detail endpoint returns
 MAX_IMPORT_DEPTH = 12
 FEED_DEFAULT_LIMIT = 100
 FEED_MAX_LIMIT = 500
@@ -298,17 +299,31 @@ def api_collection_detail(request, collection_id):
     user = request.user
     collection = _accessible_collection(user, collection_id)
     owner = collection.owner
-    members = [{"id": str(owner.id), "email": owner.email, "is_owner": True}]
-    members += [
+    roster = [{"id": str(owner.id), "email": owner.email, "is_owner": True}]
+    roster += [
         {"id": str(m.user_id), "email": m.user.email, "is_owner": False}
         for m in Membership.objects.filter(collection=collection)
         .exclude(user_id=collection.owner_id)
         .select_related("user")
         .order_by("created_at")
     ]
-    return JsonResponse(
-        {"collection": _collection_json(collection, user), "members": members}
-    )
+    payload = {"collection": _collection_json(collection, user)}
+    if collection.owner_id == user.id:
+        # The roster is owner-only data: membership is by invited email, so
+        # exposing it to members would publish addresses the caller never
+        # met. The owner's list is capped; member_count and
+        # members_truncated report the true size, so the cap never hides a
+        # member silently.
+        payload["members"] = roster[:MAX_ROSTER]
+        payload["member_count"] = len(roster)
+        payload["members_truncated"] = len(roster) > MAX_ROSTER
+    else:
+        payload["members"] = [
+            {"id": str(user.id), "email": user.email, "is_owner": False}
+        ]
+        payload["member_count"] = 1
+        payload["members_truncated"] = False
+    return JsonResponse(payload)
 
 
 @api
