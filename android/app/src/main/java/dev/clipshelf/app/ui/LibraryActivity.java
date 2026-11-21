@@ -102,6 +102,16 @@ public class LibraryActivity extends AppCompatActivity {
         reload();
     }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        // Bottom nav returns to this live instance with CLEAR_TOP|SINGLE_TOP,
+        // so onCreate never runs again: reload on every re-delivered intent to
+        // pick up the session Settings last stored (a revoked token must not
+        // survive the return).
+        reload();
+    }
+
     private boolean onMenuItem(MenuItem item) {
         int id = item.getItemId();
         if (id == R.id.menu_sort) {

@@ -5,6 +5,7 @@ import static org.junit.Assert.fail;
 import static org.robolectric.Shadows.shadowOf;
 
 import android.content.Context;
+import android.content.Intent;
 import android.os.Looper;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
@@ -19,6 +20,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
+import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 
 import com.sun.net.httpserver.HttpExchange;
@@ -102,6 +104,32 @@ public class LibrarySessionReloadTest {
         Creds.save(ctx, profile(originB.url), TOKEN_B);
         Toolbar toolbar = library.findViewById(R.id.toolbar);
         toolbar.getMenu().performIdentifierAction(R.id.menu_refresh, 0);
+
+        await(originB, "/api/me", TOKEN_B);
+        await(originB, "/api/entries", TOKEN_B);
+        assertTrue("the old origin must not be contacted after the change",
+                originA.hits.isEmpty());
+    }
+
+    /** Same swap, but bottom nav returns through onNewIntent (CLEAR_TOP|SINGLE_TOP
+     *  reuses this instance): the resumed Library must reload onto the new
+     *  session, never send the revoked token. */
+    @Test
+    public void onNewIntentAfterEndpointChangeSendsTheNewSession() throws Exception {
+        Creds.save(ctx, profile(originA.url), TOKEN_A);
+        ActivityController<LibraryActivity> controller =
+                Robolectric.buildActivity(LibraryActivity.class).setup();
+        LibraryActivity library = controller.get();
+        await(originA, "/api/me", TOKEN_A);
+        await(originA, "/api/entries", TOKEN_A);
+        originA.hits.clear();
+
+        Creds.save(ctx, profile(originB.url), TOKEN_B);
+        // The intent Ui.bottomNav sends, delivered the way the framework
+        // delivers a CLEAR_TOP|SINGLE_TOP resume of the live instance.
+        controller.newIntent(new Intent(library, LibraryActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION
+                        | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP));
 
         await(originB, "/api/me", TOKEN_B);
         await(originB, "/api/entries", TOKEN_B);
