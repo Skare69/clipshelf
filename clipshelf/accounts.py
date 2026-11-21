@@ -7,6 +7,7 @@ entry link. Admin JSON endpoints live in clipshelf.admin_views.
 
 import hashlib
 import logging
+import queue
 import re
 import threading
 import time
@@ -125,24 +126,59 @@ def mail_url(url):
     return urlunsplit(("", "", parts.path, parts.query, parts.fragment))
 
 
+# A small fixed pool owns every off-response-path mail job. One bare thread
+# per accepted request gave SMTP latency an unbounded thread budget: each
+# send holds its thread for up to EMAIL_TIMEOUT, and nothing capped the
+# total across owners. The queue itself is unbounded on purpose — a full
+# bounded queue would either block the uniform 202 (a timing probe again)
+# or drop mail — and the per-owner invite throttle keeps the enqueue rate
+# bounded in practice.
+MAIL_WORKER_COUNT = 4
+
+_mail_jobs = queue.Queue()
+_mail_pool_lock = threading.Lock()
+_mail_pool_started = False
+
+
+def _mail_worker():
+    while True:
+        fn = _mail_jobs.get()
+        try:
+            close_old_connections()
+            fn()
+        except Exception:
+            logger.exception("async mail job failed")
+        finally:
+            close_old_connections()
+            _mail_jobs.task_done()
+
+
+def _start_mail_workers():
+    """Start the pool once per process; later calls see it running."""
+    global _mail_pool_started
+    with _mail_pool_lock:
+        if _mail_pool_started:
+            return
+        for _ in range(MAIL_WORKER_COUNT):
+            threading.Thread(
+                target=_mail_worker, daemon=True, name="clipshelf-mail"
+            ).start()
+        _mail_pool_started = True
+
+
 def deliver_async(fn):
-    """Run an email delivery off the response path.
+    """Queue an email delivery onto the bounded worker pool.
 
     The members endpoint answers every probe with the same fast uniform 202,
     so SMTP latency must never distinguish an existing account from an
-    unknown mailbox. A worker thread owns its own DB connection and opens
-    and drops it around the job; the request's transaction stays untouched.
-    Tests substitute an inline runner for determinism.
+    unknown mailbox: enqueueing is the response path's only work, and no
+    more than MAIL_WORKER_COUNT threads ever run jobs. A worker owns its
+    own DB connection and opens and drops it around each job; the request's
+    transaction stays untouched. Tests substitute an inline runner for
+    determinism.
     """
-
-    def _run():
-        close_old_connections()
-        try:
-            fn()
-        finally:
-            close_old_connections()
-
-    threading.Thread(target=_run, daemon=True).start()
+    _start_mail_workers()
+    _mail_jobs.put(fn)
 
 
 # One invitation email per collection and mailbox per cooldown: a resend

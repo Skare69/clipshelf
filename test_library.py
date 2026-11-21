@@ -9,6 +9,8 @@ import json
 import os
 import shutil
 import tempfile
+import threading
+import time
 import uuid
 from datetime import timedelta
 from unittest import mock
@@ -869,6 +871,52 @@ class CollectionMembershipTests(ApiTestCase):
         self.assertTrue(detail["members_truncated"])
         self.assertEqual(detail["member_count"], views.MAX_ROSTER + 1)
         self.assertTrue(detail["members"][0]["is_owner"])
+
+
+class MailDeliveryPoolTests(ApiTestCase):
+    """The real off-response-path mail pool under overload: more invitation
+    jobs than the worker bound never lift the thread count above the bound,
+    and every queued job still delivers."""
+
+    def test_overload_never_exceeds_the_worker_bound(self):
+        bound = accounts.MAIL_WORKER_COUNT
+        lock = threading.Lock()
+        state = {"live": 0, "peak": 0, "done": 0}
+        release = threading.Event()
+        total = bound * 2 + 1
+
+        def invitation_job():
+            with lock:
+                state["live"] += 1
+                state["peak"] = max(state["peak"], state["live"])
+            release.wait(10)
+            with lock:
+                state["live"] -= 1
+                state["done"] += 1
+
+        for _ in range(total):
+            accounts.deliver_async(invitation_job)
+        # Enqueueing never blocks, so the whole batch is queued before a
+        # worker picks the first job; all workers fill up and hold there.
+        for _ in range(500):
+            with lock:
+                if state["live"] == bound:
+                    break
+            time.sleep(0.01)
+        with lock:
+            self.assertEqual(state["live"], bound)
+        # The pool, not one thread per request, owns the job threads.
+        workers = [t for t in threading.enumerate() if t.name == "clipshelf-mail"]
+        self.assertLessEqual(len(workers), bound)
+        release.set()
+        for _ in range(500):
+            with lock:
+                if state["done"] == total:
+                    break
+            time.sleep(0.01)
+        with lock:
+            self.assertEqual(state["peak"], bound)
+            self.assertEqual(state["done"], total)
 
 
 class RemovalTests(ApiTestCase):
