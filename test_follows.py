@@ -94,7 +94,7 @@ class FollowMixin:
 
 class QueueBoundsTests(FollowMixin, TestCase):
     """The backfill cap bounds the first listing; the seen ledger never
-    double queues."""
+    double queues, and a failed capture never consumes the seen marker."""
 
     def _check(self, source, listing):
         with mock.patch.object(acquisition, "list_profile_posts",
@@ -163,6 +163,29 @@ class QueueBoundsTests(FollowMixin, TestCase):
         self.assertEqual(source.seen_posts.count(), seen_before)
         self.assertFalse(source.last_error)
         self.assertIsNotNone(source.next_check)
+
+    def test_failed_capture_does_not_consume_the_seen_marker(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        listing = posts("204", "203")
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               return_value=listing), \
+             mock.patch.object(services, "accept_capture",
+                               side_effect=RuntimeError("transient")):
+            with self.assertRaises(RuntimeError):
+                follows.check_source(source)
+        # The marker rolled back with the capture: nothing leaked from the
+        # failed cycle.
+        self.assertEqual(source.seen_posts.count(), 0)
+        self.assertEqual(Capture.objects.count(), 0)
+        # The next listing queues the posts the failed cycle dropped.
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               return_value=listing):
+            self.assertEqual(follows.check_source(source), "ok")
+        self.assertEqual(
+            {c.client_request_id
+             for c in Capture.objects.filter(follow=source)},
+            {crid_for(source, "204"), crid_for(source, "203")})
+        self.assertEqual(source.seen_posts.count(), 2)
 
 
 # -------------------------------------------------------- listing failure

@@ -1,10 +1,11 @@
 """Followed creator sources: URL validation, creation, and one check cycle.
 
-A follow lists its TikTok profile on a schedule, remembers every listed post
-in the SeenPost ledger, and queues only new posts through the ordinary
-capture path. The seen row insert is the queue gate: one transaction per
-post, and the unique constraint decides who wins a concurrent listing. The
-listing itself runs strictly outside any transaction.
+A follow lists its TikTok profile on a schedule, queues only new posts
+through the ordinary capture path, and records them in the SeenPost
+ledger. The ledger row is the queue gate: the unique constraint decides
+who wins a concurrent listing, and the row commits in the same
+transaction as its capture, so a failed capture never consumes the
+marker. The listing itself runs strictly outside any transaction.
 """
 import uuid
 import urllib.parse
@@ -112,24 +113,33 @@ def _check_source(source, say):
 
     queued = 0
     for post in posts:
-        try:
-            with transaction.atomic():
-                SeenPost.objects.create(source=source, post_id=post["id"],
-                                        post_url=post["url"][:MAX_URL_LENGTH])
-        except IntegrityError:
-            continue  # a concurrent listing won: the post is already handled
-        if post["id"] not in candidate_ids:
-            continue
-        post_url = post["url"]
-        normalized = lib.norm(post_url)
-        if not normalized:
-            continue  # malformed entry: seen, never queued
-        try:
-            services._require_url(normalized)
-        except ValidationError:
-            continue
-        crid = uuid.uuid5(uuid.NAMESPACE_URL, f"{source.id}:{post['id']}")
-        services.accept_capture(source.user, crid, post_url, None, follow=source)
+        with transaction.atomic():
+            try:
+                with transaction.atomic():
+                    SeenPost.objects.create(
+                        source=source, post_id=post["id"],
+                        post_url=post["url"][:MAX_URL_LENGTH])
+            except IntegrityError:
+                # A concurrent listing won: the post is already handled.
+                # The inner atomic is a savepoint, so the outer block stays
+                # usable.
+                continue
+            if post["id"] not in candidate_ids:
+                continue
+            post_url = post["url"]
+            normalized = lib.norm(post_url)
+            if not normalized:
+                continue  # malformed entry: seen, never queued
+            try:
+                services._require_url(normalized)
+            except ValidationError:
+                continue
+            crid = uuid.uuid5(uuid.NAMESPACE_URL, f"{source.id}:{post['id']}")
+            services.accept_capture(source.user, crid, post_url, None,
+                                    follow=source)
+        # The marker and the capture committed together: the post is queued.
+        # Any capture failure rolls both back and propagates: the next
+        # listing retries the post.
         queued += 1
 
     now = timezone.now()
