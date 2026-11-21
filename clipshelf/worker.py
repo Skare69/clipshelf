@@ -210,7 +210,8 @@ def _claim_sources(limit, in_flight=()):
     In-flight ids are excluded so one source never lists twice at once; the
     exclusive coordinator lock is the only claim, so no state flips here."""
     due = Q(next_check__isnull=True) | Q(next_check__lte=timezone.now())
-    qs = (models.FollowedSource.objects.filter(enabled=True).filter(due)
+    qs = (models.FollowedSource.objects
+          .filter(enabled=True, user__is_active=True).filter(due)
           .order_by("next_check", "created_at"))
     if in_flight:
         qs = qs.exclude(id__in=in_flight)

@@ -254,6 +254,23 @@ class WorkerSourceTests(FollowMixin, TestCase):
         self.assertEqual([s.id for s in worker._claim_sources(10, {due_now.id})],
                          [past.id])
 
+    def test_claim_sources_skips_disabled_users(self):
+        disabled = follows.create_follow(
+            self.alice, "https://www.tiktok.com/@a", "a")
+        active = follows.create_follow(
+            self.bob, "https://www.tiktok.com/@b", "b")
+        self.alice.is_active = False
+        self.alice.save(update_fields=["is_active"])
+
+        # The follow claim path enforces the same active-user gate as the
+        # job claim path: a disabled account stops listing outbound.
+        self.assertEqual([s.id for s in worker._claim_sources(10)], [active.id])
+
+        self.alice.is_active = True
+        self.alice.save(update_fields=["is_active"])
+        self.assertEqual([s.id for s in worker._claim_sources(10)],
+                         [disabled.id, active.id])
+
     def test_acquire_phase_stamps_follow_tag(self):
         source = follows.create_follow(self.alice, PROFILE, "recipes")
         follow_url = posts("104")[0]["url"]
