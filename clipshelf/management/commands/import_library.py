@@ -56,15 +56,15 @@ class Command(BaseCommand):
 
         counts = manifest.get("counts", {})
         if options["dry_run"]:
-            self.stdout.write(self.style.SUCCESS(
+            self.stdout.write(
                 f"dry run: digest={result['digest'][:16]} counts={counts} "
-                f"missing_media={counts.get('missing_media', 0)} (nothing imported)"))
+                f"missing_media={counts.get('missing_media', 0)} (nothing imported)")
         elif result["created"]:
-            self.stdout.write(self.style.SUCCESS(
+            self.stdout.write(
                 f"imported: digest={result['digest'][:16]} counts={counts} "
                 f"result={result['counts']} into personal collection "
-                f"{result['collection_id']} (interpret_cmd recorded, not activated)"))
+                f"{result['collection_id']} (interpret_cmd recorded, not activated)")
         else:
-            self.stdout.write(self.style.SUCCESS(
+            self.stdout.write(
                 f"unchanged: identical input already imported "
-                f"(digest={result['digest'][:16]}, counts={counts})"))
+                f"(digest={result['digest'][:16]}, counts={counts})")

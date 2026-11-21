@@ -48,4 +48,4 @@ class Command(BaseCommand):
             raise CommandError(f"rejected: {exc.message if hasattr(exc, 'message') else exc}")
         payload = services.receipt(capture)
         payload["created"] = created
-        self.stdout.write(self.style.SUCCESS(json.dumps(payload, indent=2, default=str)))
+        self.stdout.write(json.dumps(payload, indent=2, default=str))
