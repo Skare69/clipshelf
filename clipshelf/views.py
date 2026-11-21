@@ -513,8 +513,10 @@ def api_entries(request):
     # page: the client rail shows every category with its full count.
     cats = {}
     for item in filtered:
-        name = next(iter(item.get("cat") or ()), "") or "Other"
-        cats[name] = cats.get(name, 0) + 1
+        # The category filter matches any label of an entry, so each label's
+        # rail count must include the whole entry, not only its first label.
+        for name in (item.get("cat") or ()) or ["Other"]:
+            cats[name] = cats.get(name, 0) + 1
     return JsonResponse(
         {"entries": filtered[offset : offset + limit], "count": len(filtered), "cats": cats}
     )

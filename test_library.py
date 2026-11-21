@@ -1371,6 +1371,23 @@ class EntryApiTests(ApiTestCase):
         self.assertFalse(any("Zebra" in item["cat"] for item in payload["entries"]))
         self.assertEqual(payload["cats"], {"Other": 100, "Zebra": 50})
 
+    def test_cats_count_every_label_of_an_entry(self):
+        # An entry with two labels must count under both: the rail chip for
+        # each label filters on the whole cat list, so its count must match.
+        shared, _ = self._contribute(
+            self.alice, self.alice_personal, "https://example.com/two-labels")
+        Contribution.objects.filter(entry=shared, user=self.alice).update(
+            data={"categories": ["Python", "Django"]}
+        )
+        payload = self._login(self.alice).get("/api/entries").json()
+        self.assertEqual(payload["cats"], {"Python": 1, "Django": 1})
+        for label in ("Python", "Django"):
+            filtered = self._login(self.alice).get(
+                "/api/entries", {"cat": label}).json()
+            self.assertEqual(filtered["count"], payload["cats"][label])
+            self.assertEqual(
+                [item["id"] for item in filtered["entries"]], [str(shared.id)])
+
     def test_other_filter_matches_uncategorized_and_real_category(self):
         uncategorized, _ = self._contribute(
             self.alice, self.alice_personal, "https://example.com/uncategorized"
