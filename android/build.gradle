@@ -1,4 +1,4 @@
-// Pinned: AGP 8.7.3 requires Gradle >= 8.9 (wrapper pins 8.9) and JDK 17.
+// Pinned: AGP 9.5.2 requires Gradle >= 9.6; wrapper pins the latest stable 9.9.2 (lint AndroidGradlePluginVersion).
 plugins {
     id "com.android.application" version "9.5.2" apply false
 }
