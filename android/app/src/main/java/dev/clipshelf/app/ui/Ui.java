@@ -130,7 +130,7 @@ final class Ui {
         if (toolbar == null) {
             return;
         }
-        toolbar.setNavigationIcon(androidx.appcompat.R.drawable.abc_ic_ab_back_material);
+        toolbar.setNavigationIcon(R.drawable.ic_arrow_back);
         ((com.google.android.material.appbar.MaterialToolbar) toolbar)
                 .setNavigationIconTint(activity.getColor(R.color.ink));
         toolbar.setNavigationOnClickListener(
