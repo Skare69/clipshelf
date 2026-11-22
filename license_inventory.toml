@@ -38,7 +38,7 @@ fonts = ["OFL-1.1"]
 
 [python.entries]
 
-django            = { observed = "5.2.19",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
+django            = { observed = "6.1.3",   license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 django-allauth    = { observed = "65.22.1", license = "MIT",          meta = "MIT" }
 waitress          = { observed = "3.0.2",   license = "ZPL-2.1",      meta = "ZPL 2.1" }
 pillow            = { observed = "13.0.0",  license = "MIT-CMU",      meta = "MIT-CMU" }

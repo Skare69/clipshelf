@@ -52,7 +52,7 @@ are the source of record; every wheel ships its license text inside
 
 | Package | Observed | License | Notes |
 |---|---|---|---|
-| django | 5.2.19 | BSD-3-Clause | |
+| django | 6.1.3 | BSD-3-Clause | |
 | django-allauth | 65.22.1 | MIT | |
 | waitress | 3.0.2 | ZPL-2.1 | |
 | pillow | 13.0.0 | MIT-CMU | |
