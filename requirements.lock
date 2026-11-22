@@ -3,7 +3,8 @@
 # Regenerate: python scripts/lock_deps.py make
 # Policy: regenerate whenever requirements.txt changes or `check` fails.
 # Release age: 7+ days before the Date line; newer pins only via make --fresh.
-# Platforms covered: win_amd64, manylinux x86_64/aarch64. Python 3.13 (cp313/abi3).
+# Platforms covered: win_amd64 (3.13), manylinux x86_64/aarch64 (3.13 for CI,
+# 3.15 for the image base). Wheels: cp-specific or abi3.
 # Date: 2026-11-22
 
 annotated-types==0.8.0 \
@@ -14,7 +15,9 @@ argon2-cffi==25.1.0 \
     --hash=sha256:fdc8b074db390fccb6eb4a3604ae7231f219aa669a2652e0f20e16ba513d5741
 argon2-cffi-bindings==26.2.0 \
     --hash=sha256:2d475baecbcb506e40ab1cb05a84c9cc913a8950061a4045fd0ec0eb54aa7fa2 \
+    --hash=sha256:4fd4e255efdf1156415093db43270da540e3752b9496edf25f34bc64eb0eca60 \
     --hash=sha256:92d65a0831e78294e19d7297d101eaa871033825ad2aa7cb87af2f706062acd7 \
+    --hash=sha256:d1cf917a9917dafc5665d21745b9697d73a0678a82025f4d146976b3b4a0660f \
     --hash=sha256:d2d4ae065e7cce4b286d3eb7c59128bfd11f8e407863b88629e9d391b864a3df
 asgiref==3.13.0 \
     --hash=sha256:f9596a2434512686473d50f96ff6207fbba49ae1a785dfac614df4aeb085674d
@@ -22,15 +25,21 @@ certifi==2026.10.23 \
     --hash=sha256:e9b54de76e530bb6cf0ccd036787103acb58fd42ba930ea8bf948ddbaa2f61d1
 cffi==2.1.1 \
     --hash=sha256:1aa5645c30469b09530c4ebca77ebf8f17618293c58f8549cb1a543a50236e7d \
+    --hash=sha256:507a24c282e0f42f8ed737cf048572cbf580468da5555764a8331735e9c736b6 \
     --hash=sha256:a931079504ecc49efed7744c476a5c343a92fabf66dec2db95edb1b2fdc770e2 \
+    --hash=sha256:aeae0e330c9f6acd681f647d46cefd30c29f93e3392882e792e82080c9691399 \
     --hash=sha256:f16c709686a78c727bbbf059f92b0bf41c6fc60deec706d2dc19f529175a6125
 charset-normalizer==3.5.2 \
+    --hash=sha256:3df041de8887954562c9b261cba85ca0e9ded74048daf125f45edcfaa4832229 \
     --hash=sha256:7218e8f32b0956cfcd048fd42d9d5779809745ca1d86113ca56f66e7ae1549c4 \
     --hash=sha256:78456a747de8dc58360ffa581f30a002baf5aa28cb262536545e91f113ed7639 \
-    --hash=sha256:849df64e889b2e17230d58410a03dba311a65b163508fd33679b2b737d4b7858
+    --hash=sha256:849df64e889b2e17230d58410a03dba311a65b163508fd33679b2b737d4b7858 \
+    --hash=sha256:9409a8bf35cf78353942504b24a57de3d75b708997a1e4bd8db71ac8633ce364
 curl-cffi==0.17.0 \
+    --hash=sha256:2dac9c915a0ee7d7cc4285203d210816bb187c8deb5c20ee21e0613639c2a8bf \
     --hash=sha256:4c3993c7df155d622869b82a56adb018440587fd3faffeaf8d01cc016d2e1357 \
     --hash=sha256:aa91d26234516ddb9eb97310d5fe1705aa6f677f101d57ffdb76d5f75439506e \
+    --hash=sha256:ad88837e627896f794ab77c5d61245f5fbc0da1e86a39043404b94bef45e98ef \
     --hash=sha256:af0782d5e340b65fd76701630f0284a8f8243d77df5f2637efd09a4b009f4e24
 django==5.2.19 \
     --hash=sha256:5965d974a5218a2b68a11dd1276434707f23886525c23f0598eccedaf4f4ca00
@@ -50,13 +59,17 @@ packaging==26.3 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
 pillow==13.0.0 \
     --hash=sha256:19b66ca0a4d25cc0200b381ce824c7ea090db61427315e73cfb05dbf1b35c369 \
+    --hash=sha256:4f8db54177035a2b5f717f94475b74907e12a96dc74f6d487f3966b0a4694071 \
     --hash=sha256:5f56499c1a74d2b862beb0c33b8016f99d095858455df9d21583bbbc1c15b582 \
+    --hash=sha256:8f36aa77f74b14a2103622b196402c71330e4e7cf4122ee45c854e9a01e0eecf \
     --hash=sha256:9dda0788a9932776a75d8bcc020076edc308ce2508b51f6739a45e3158b3fc42
 pycparser==3.12 \
     --hash=sha256:a076f3f489b39b43ed13563a1dafe42447445bec2e294154ec5c57fcdda4c85e
 pydantic==2.14.3 \
     --hash=sha256:3f7b347782ab7e4cf4c798496ae3a82787d9f21ec12676a9c564355eeef8daa8
 pydantic-core==2.50.4 \
+    --hash=sha256:26cb012c4b8ca9f847bd0ac15978bd3d0f55b050bfbe6c47355edfc7e945029b \
+    --hash=sha256:49eb1241a969a5994db6880c18c012b6cbe2340343d8f529721571806583e500 \
     --hash=sha256:4c29b8f2d6417069bb1f257e6b9113f5d64dc2f554cc200ea90b4fe2c5cdb733 \
     --hash=sha256:a9ee990bf2cfbd81574c5d4f9f6c9d480a14b5b43d2c4f2ca13f4c6f48089394 \
     --hash=sha256:fb2bb5b557080da398b866408117d98fe9731a12334afd0cdff221b458cdc5dc

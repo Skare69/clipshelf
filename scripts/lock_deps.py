@@ -25,10 +25,16 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
-PLATFORM_SETS = [
-    ["win_amd64"],
-    ["manylinux2014_x86_64", "manylinux_2_28_x86_64"],
-    ["manylinux2014_aarch64", "manylinux_2_28_aarch64"],
+# CI resolves and tests on 3.13; the image base (Dockerfile) runs 3.15. The
+# lock must install with --require-hashes on every pair below: pip is
+# hash-validated per pair by `check`, and `collect_hashes` downloads wheels
+# per pair, so the shipped image always finds its cp315 linux wheels.
+PY_PLATFORM_SETS = [
+    ("3.13", ["win_amd64"]),
+    ("3.13", ["manylinux2014_x86_64", "manylinux_2_28_x86_64"]),
+    ("3.13", ["manylinux2014_aarch64", "manylinux_2_28_aarch64"]),
+    ("3.15", ["manylinux2014_x86_64", "manylinux_2_28_x86_64"]),
+    ("3.15", ["manylinux2014_aarch64", "manylinux_2_28_aarch64"]),
 ]
 
 # Release-age gate: a new upstream release enters the lock, and turns `check`
@@ -41,7 +47,8 @@ HEADER = """\
 # Regenerate: python scripts/lock_deps.py make
 # Policy: regenerate whenever requirements.txt changes or `check` fails.
 # Release age: 7+ days before the Date line; newer pins only via make --fresh.
-# Platforms covered: win_amd64, manylinux x86_64/aarch64. Python 3.13 (cp313/abi3).
+# Platforms covered: win_amd64 (3.13), manylinux x86_64/aarch64 (3.13 for CI,
+# 3.15 for the image base). Wheels: cp-specific or abi3.
 # Date: {date}
 """
 
@@ -206,10 +213,12 @@ def bump(old: str, new: str) -> str:
     return "change"  # numeric prefix equal: pre/post/dev suffix or 4th-segment move
 
 
-def plat_args(plats: list[str]) -> list[str]:
-    """pip flags that select wheels for Python 3.13 on one platform set."""
-    args = ["--only-binary=:all:", "--python-version", "3.13", "--implementation", "cp",
-            "--abi", "cp313", "--abi", "abi3", "--abi", "none"]
+def plat_args(python_version: str, plats: list[str]) -> list[str]:
+    """pip flags that select wheels for one python version on one platform set."""
+    args = ["--only-binary=:all:", "--python-version", python_version,
+            "--implementation", "cp",
+            "--abi", f"cp{python_version.replace('.', '')}",
+            "--abi", "abi3", "--abi", "none"]
     for p in plats:
         args += ["--platform", p]
     return args
@@ -226,13 +235,14 @@ def collect_hashes(python: str, pins: dict[str, str], tmp: Path) -> dict:
                          encoding="utf-8")
     hashes: dict[tuple[str, str], set] = {}
 
-    for plats in PLATFORM_SETS:
-        plat_dir = tmp / ("plat-" + "-".join(plats))
+    for py, plats in PY_PLATFORM_SETS:
+        plat_dir = tmp / (f"py{py}-" + "-".join(plats))
         cmd = [python, "-m", "pip", "download", "--no-deps",
-               "-r", str(pins_file), "-d", str(plat_dir)] + plat_args(plats)
+               "-r", str(pins_file), "-d", str(plat_dir)] + plat_args(py, plats)
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
-            sys.exit(f"wheel download failed for {plats}; lock not written:\n{r.stderr}")
+            sys.exit(f"wheel download failed for python {py} on {plats}; "
+                     f"lock not written:\n{r.stderr}")
         found = set()
         for f in plat_dir.iterdir():
             m = re.match(r"(.+)-([0-9][^-]*)-", f.name)
@@ -245,7 +255,7 @@ def collect_hashes(python: str, pins: dict[str, str], tmp: Path) -> dict:
             h = hashlib.sha256(f.read_bytes()).hexdigest()
             hashes.setdefault((n, v), set()).add(f"sha256:{h}")
         if missing := sorted(pins.keys() - found):
-            sys.exit(f"no wheel for {plats}: {missing}; lock not written")
+            sys.exit(f"no wheel for python {py} on {plats}: {missing}; lock not written")
     return hashes
 
 
@@ -336,16 +346,16 @@ def check(python: str, req: Path, lock: Path) -> int:
 
     # end-to-end validation: pip must accept the lock on every shipped platform,
     # not just this host (CI runs on x86_64; the image also ships arm64)
-    for plats in PLATFORM_SETS:
+    for py, plats in PY_PLATFORM_SETS:
         report = tmp / "plat-report.json"
         r = subprocess.run(
             [python, "-m", "pip", "install", "--dry-run", "--ignore-installed",
              "--require-hashes", "--no-deps", "--report", str(report),
-             "-r", str(lock)] + plat_args(plats),
+             "-r", str(lock)] + plat_args(py, plats),
             capture_output=True, text=True)
         if r.returncode != 0:
             print("DRIFT:")
-            print(f"  hash validation failed for {plats}")
+            print(f"  hash validation failed for python {py} on {plats}")
             for ln in r.stderr.splitlines()[-15:]:
                 print(f"  {ln}")
             return 1

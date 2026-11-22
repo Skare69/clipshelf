@@ -26,10 +26,13 @@ def fake_pip(broken_platform, mode):
         if broken and mode == "fail":
             return subprocess.CompletedProcess(cmd, 1, "", "ERROR: no matching distribution")
         tag = "-".join(p for i, p in enumerate(cmd) if cmd[i - 1] == "--platform")
+        py = cmd[cmd.index("--python-version") + 1]
+        cp = f"cp{py.replace('.', '')}"
         for n, v in PINS.items():
             if broken and n == "other-pkg":
                 continue
-            (dest / f"{n.replace('-', '_')}-{v}-cp313-cp313-{tag}.whl").write_bytes(tag.encode())
+            (dest / f"{n.replace('-', '_')}-{v}-{cp}-{cp}-{tag}.whl").write_bytes(
+                f"{py}:{tag}".encode())
         return subprocess.CompletedProcess(cmd, 0, "", "")
     return run
 
@@ -65,8 +68,8 @@ class MakeTests(unittest.TestCase):
             while start < len(lines) and lines[start].lstrip().startswith("--hash=sha256:"):
                 hashes.append(lines[start])
                 start += 1
-            # one distinct wheel hash per platform set
-            self.assertEqual(len(hashes), len(lock_deps.PLATFORM_SETS))
+            # one distinct wheel hash per (python, platform) set
+            self.assertEqual(len(hashes), len(lock_deps.PY_PLATFORM_SETS))
 
     def test_reports_pin_count_on_stdout(self):
         out = io.StringIO()
