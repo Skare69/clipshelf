@@ -23,6 +23,8 @@ import org.robolectric.RuntimeEnvironment;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 
+import com.google.android.material.bottomnavigation.BottomNavigationView;
+
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
@@ -53,11 +55,14 @@ import dev.clipshelf.app.Creds;
 import dev.clipshelf.app.R;
 
 /**
- * Settings adopts a new endpoint+token and revokes the old session, and
- * bottom nav returns to the existing LibraryActivity instance without
- * onCreate. Library therefore must re-read the session on every reload:
- * after an endpoint change, refresh must send the new token to the new
- * origin, never the revoked token to the old origin.
+ * Settings adopts a new endpoint+token and revokes the old session while
+ * LibraryActivity stays alive in the back stack ([Library, Settings]). The
+ * return has two shapes: the bottom-nav intent (CLEAR_TOP|SINGLE_TOP reuses
+ * the stopped instance, onNewIntent before onResume) and plain system Back
+ * (onRestart/onStart/onResume, no intent at all). Library must re-adopt the
+ * stored session on both: after an endpoint change, refresh and "Load more"
+ * must send the new token to the new origin, never the revoked token to the
+ * old origin.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
@@ -72,7 +77,11 @@ public class LibrarySessionReloadTest {
             + " \"default_collection_id\": \"c1\","
             + " \"collections\": [{\"id\": \"c1\", \"name\": \"Personal\","
             + " \"kind\": \"personal\", \"owner_id\": \"42\", \"can_manage\": true}]}";
-    private static final String ENTRIES_JSON = "{\"entries\": [], \"count\": 0}";
+    // One entry of 40: a loaded page leaves "Load more" visible, so the
+    // stale-session path (paging with the revoked token) is reachable.
+    private static final String ENTRIES_JSON = "{\"entries\": [{\"id\": \"e1\","
+            + " \"kind\": \"link\", \"url\": \"http://a.example/one\", \"title\": \"One\"}],"
+            + " \"count\": 40}";
 
     private Context ctx;
     private Origin originA;
@@ -111,11 +120,49 @@ public class LibrarySessionReloadTest {
                 originA.hits.isEmpty());
     }
 
-    /** Same swap, but bottom nav returns through onNewIntent (CLEAR_TOP|SINGLE_TOP
-     *  reuses this instance): the resumed Library must reload onto the new
-     *  session, never send the revoked token. */
+    /** Same swap, but the return goes through the real bottom-nav click in a
+     *  live SettingsActivity: Ui.bottomNav builds and starts the
+     *  CLEAR_TOP|SINGLE_TOP intent and finishes Settings, and the framework
+     *  reuses this stopped instance (onRestart, onNewIntent between onStart
+     *  and onResume). The resumed Library must reload onto the new session,
+     *  never send the revoked token. */
     @Test
     public void onNewIntentAfterEndpointChangeSendsTheNewSession() throws Exception {
+        Creds.save(ctx, profile(originA.url), TOKEN_A);
+        ActivityController<LibraryActivity> controller =
+                Robolectric.buildActivity(LibraryActivity.class).setup();
+        await(originA, "/api/me", TOKEN_A);
+        await(originA, "/api/entries", TOKEN_A);
+        originA.hits.clear();
+
+        Creds.save(ctx, profile(originB.url), TOKEN_B);
+        // Settings sits on top of the stopped Library while the stored
+        // session changes under it.
+        SettingsActivity settings = Robolectric.setupActivity(SettingsActivity.class);
+        ((BottomNavigationView) settings.findViewById(R.id.bottom_nav))
+                .setSelectedItemId(R.id.nav_library);
+        Intent returned = shadowOf(settings).getNextStartedActivity();
+        assertTrue("Settings must finish when the bottom nav returns to Library",
+                settings.isFinishing());
+        assertTrue("the bottom-nav return must reuse the existing instance",
+                (returned.getFlags() & Intent.FLAG_ACTIVITY_CLEAR_TOP) != 0
+                        && (returned.getFlags() & Intent.FLAG_ACTIVITY_SINGLE_TOP) != 0);
+        // The framework resumes the stopped instance, then delivers the
+        // re-delivered intent before onResume.
+        controller.pause().stop().restart().start().newIntent(returned).resume();
+
+        await(originB, "/api/entries", TOKEN_B);
+        assertTrue("the old origin must not be contacted after the change",
+                originA.hits.isEmpty());
+    }
+
+    /** System Back from Settings: no intent is delivered at all — the
+     *  framework only walks onRestart/onStart/onResume. The resumed Library
+     *  must adopt the session Settings stored, and "Load more" must page
+     *  with the new token against the new origin, never the revoked token
+     *  against the old one. */
+    @Test
+    public void backAfterEndpointChangeSendsTheNewSession() throws Exception {
         Creds.save(ctx, profile(originA.url), TOKEN_A);
         ActivityController<LibraryActivity> controller =
                 Robolectric.buildActivity(LibraryActivity.class).setup();
@@ -125,13 +172,17 @@ public class LibrarySessionReloadTest {
         originA.hits.clear();
 
         Creds.save(ctx, profile(originB.url), TOKEN_B);
-        // The intent Ui.bottomNav sends, delivered the way the framework
-        // delivers a CLEAR_TOP|SINGLE_TOP resume of the live instance.
-        controller.newIntent(new Intent(library, LibraryActivity.class)
-                .addFlags(Intent.FLAG_ACTIVITY_NO_ANIMATION
-                        | Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP));
+        // Back from Settings: exactly this walk, nothing else.
+        controller.pause().stop().restart().start().resume();
 
         await(originB, "/api/me", TOKEN_B);
+        await(originB, "/api/entries", TOKEN_B);
+        originA.hits.clear();
+        originB.hits.clear();
+
+        // The reloaded page (1 of 40) leaves "Load more" visible; paging must
+        // run with the adopted session, not a stale field.
+        library.findViewById(R.id.library_more).performClick();
         await(originB, "/api/entries", TOKEN_B);
         assertTrue("the old origin must not be contacted after the change",
                 originA.hits.isEmpty());

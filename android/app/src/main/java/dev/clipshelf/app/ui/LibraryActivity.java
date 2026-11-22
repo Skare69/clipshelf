@@ -103,12 +103,41 @@ public class LibraryActivity extends AppCompatActivity {
     }
 
     @Override
+    protected void onRestart() {
+        super.onRestart();
+        // System Back from Settings resumes this stopped instance through
+        // onRestart/onStart/onResume — no new intent, no onCreate. Settings
+        // can have adopted a new session and revoked the old one while we
+        // were stopped, so re-adopt the stored session before any later call
+        // (a revoked token must not survive the return).
+        adoptSession();
+    }
+
+    @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        // Bottom nav returns to this live instance with CLEAR_TOP|SINGLE_TOP,
-        // so onCreate never runs again: reload on every re-delivered intent to
-        // pick up the session Settings last stored (a revoked token must not
-        // survive the return).
+        // Bottom nav returns to this live instance with CLEAR_TOP|SINGLE_TOP.
+        adoptSession();
+    }
+
+    /**
+     * Re-reads the stored session and reloads only when the endpoint or the
+     * token changed. reload() re-reads the session and resets paging, so an
+     * unchanged session costs no requests; loadMore() keeps using the
+     * adopted field, never a stale token. Both return shapes (Back and the
+     * bottom-nav intent) land here, and whichever fires first adopts the
+     * session, so the second call is a no-op instead of a second reload.
+     */
+    private void adoptSession() {
+        Creds.Session now = Creds.session(this);
+        if (now == null) {
+            Ui.sessionExpired(this);
+            return;
+        }
+        if (now.profile.endpoint.equals(session.profile.endpoint)
+                && now.token.equals(session.token)) {
+            return;
+        }
         reload();
     }
 
