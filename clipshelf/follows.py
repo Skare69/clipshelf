@@ -78,10 +78,11 @@ def follow_json(source):
 
 
 def check_source(source, say=None):
-    """One listing cycle for one followed source. Listing failures write
-    last_error and move next_check out by the backoff; success marks every
-    listed post seen, queues the new candidates, and reschedules. Never
-    raises for a listing failure; a source deleted mid-check returns early."""
+    """One listing cycle for one followed source. Listing and capture
+    failures write last_error and move next_check out by the backoff; success
+    marks every listed post seen, queues the new candidates, and reschedules.
+    Never raises for a listing or capture failure; a source deleted mid-check
+    returns early."""
     try:
         return _check_source(source, say)
     except FollowedSource.DoesNotExist:
@@ -89,18 +90,27 @@ def check_source(source, say=None):
         return "missing"
 
 
+def _fail_cycle(source, say, exc, event):
+    """One failed cycle (listing or capture): last_error set, failures
+    counted, next_check moved out by the backoff, last_check untouched. The
+    write runs in its own transaction, so nothing from the failed cycle
+    leaks into it. A message-less exception still names itself, because an
+    empty last_error reads as healthy on the source row."""
+    message = str(exc)[:500] or type(exc).__name__
+    with transaction.atomic():
+        source.last_error = message
+        source.failures += 1
+        source.next_check = timezone.now() + Job.backoff(source.failures)
+        source.save(update_fields=["last_error", "failures", "next_check"])
+    if say:
+        say(f"follow {source.id}: {event} ({message})")
+
+
 def _check_source(source, say):
     try:
         posts = acquisition.list_profile_posts(source.profile_url)
     except acquisition.ListingError as exc:
-        message = str(exc)[:500]
-        with transaction.atomic():
-            source.last_error = message
-            source.failures += 1
-            source.next_check = timezone.now() + Job.backoff(source.failures)
-            source.save(update_fields=["last_error", "failures", "next_check"])
-        if say:
-            say(f"follow {source.id}: listing failed ({message})")
+        _fail_cycle(source, say, exc, "listing failed")
         return "error"
 
     settings = services.get_settings()
@@ -112,35 +122,43 @@ def _check_source(source, say):
     candidate_ids = {post["id"] for post in candidates}
 
     queued = 0
-    for post in posts:
-        with transaction.atomic():
-            try:
-                with transaction.atomic():
-                    SeenPost.objects.create(
-                        source=source, post_id=post["id"],
-                        post_url=post["url"][:MAX_URL_LENGTH])
-            except IntegrityError:
-                # A concurrent listing won: the post is already handled.
-                # The inner atomic is a savepoint, so the outer block stays
-                # usable.
-                continue
-            if post["id"] not in candidate_ids:
-                continue
-            post_url = post["url"]
-            normalized = lib.norm(post_url)
-            if not normalized:
-                continue  # malformed entry: seen, never queued
-            try:
-                services._require_url(normalized)
-            except ValidationError:
-                continue
-            crid = uuid.uuid5(uuid.NAMESPACE_URL, f"{source.id}:{post['id']}")
-            services.accept_capture(source.user, crid, post_url, None,
-                                    follow=source)
-        # The marker and the capture committed together: the post is queued.
-        # Any capture failure rolls both back and propagates: the next
-        # listing retries the post.
-        queued += 1
+    try:
+        for post in posts:
+            with transaction.atomic():
+                try:
+                    with transaction.atomic():
+                        SeenPost.objects.create(
+                            source=source, post_id=post["id"],
+                            post_url=post["url"][:MAX_URL_LENGTH])
+                except IntegrityError:
+                    # A concurrent listing won: the post is already handled.
+                    # The inner atomic is a savepoint, so the outer block
+                    # stays usable.
+                    continue
+                if post["id"] not in candidate_ids:
+                    continue
+                post_url = post["url"]
+                normalized = lib.norm(post_url)
+                if not normalized:
+                    continue  # malformed entry: seen, never queued
+                try:
+                    services._require_url(normalized)
+                except ValidationError:
+                    continue
+                crid = uuid.uuid5(uuid.NAMESPACE_URL,
+                                  f"{source.id}:{post['id']}")
+                services.accept_capture(source.user, crid, post_url, None,
+                                        follow=source)
+            # The marker and the capture committed together: the post is
+            # queued.
+            queued += 1
+    except Exception as exc:
+        # A capture failure rolls the marker back with its capture (nothing
+        # consumed) and takes the listing-failure path. Without the backoff
+        # write the source would stay due and the coordinator would re-list
+        # in a tight loop; the next scheduled listing retries the post.
+        _fail_cycle(source, say, exc, "capture failed")
+        return "error"
 
     now = timezone.now()
     with transaction.atomic():

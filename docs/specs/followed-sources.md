@@ -103,7 +103,11 @@ to 409).
    The capture lands in the user's default destination (existing
    `destination_for` fallback). `crid = uuid5(NAMESPACE_URL, f"{source.id}:{post_id}")`,
    so a replay never duplicates a capture. A post whose URL fails
-   `lib.norm`/`_require_url` is marked seen and skipped, never queued.
+   `lib.norm`/`_require_url` is marked seen and skipped, never queued. An
+   `accept_capture` failure rolls the post's marker and capture back and
+   takes the same failure path as a listing failure (see Error cases): the
+   check never raises for it, so the coordinator's schedule decides the
+   retry, not an exception.
 3. Success bookkeeping in one transaction: `last_check = now`, `last_error`
    cleared, `failures = 0`, `backfill_done = True`,
    `next_check = now + follow_poll_seconds`.
@@ -191,12 +195,21 @@ mutation path, tests), so the spec defers it.
   at the last success, nothing is marked seen, nothing queued, and
   `next_check` moves out by the existing backoff. A broken listing therefore
   shows as an error on the source row, never as "up to date".
+- Capture failure inside the check loop (`accept_capture` raising: conflict
+  or oversized validation, full or read-only disk, DB lock): the seen marker
+  and its capture roll back together (nothing consumed), `last_error` shows
+  the failure, `failures` counts it, and `next_check` moves out by the same
+  backoff as a listing failure. `last_check` stays at the last success. The
+  check returns "error" instead of raising, so a persistent failure lists at
+  most once per backoff window — never in a tight loop — and the source row
+  shows the error, never "up to date". `last_error` is never empty on a
+  failure: a message-less exception stores the exception class name.
 - Invalid profile URL or tag on create: 400, nothing stored.
 - Duplicate follow: 409, nothing stored.
 - A paused source is never listed and shows `Paused`; resume returns it to the
   normal schedule without changing `next_check`.
 - The worker never lets a source error kill the coordinator: `check_source`
-  catches listing failures and returns.
+  catches listing and capture failures and returns.
 
 ## Acceptance checks
 
@@ -215,7 +228,10 @@ Tests use a fake yt-dlp (mocked `subprocess.run` / listing function):
    show; a missing or naive `since` answers 400.
 7. The follow API: create, pause, resume, unfollow, duplicate 409, foreign
    follow 404.
-8. `sh scripts/test.sh` and `ruff check` exit 0.
+8. An always-failing capture path: `worker.main(once=True)` returns, the
+   listing runs at most twice, and the source row holds `failures == 1`, a
+   non-empty `last_error`, and a future `next_check`.
+9. `sh scripts/test.sh` and `ruff check` exit 0.
 
 Visible-UI proof: screenshots of the Followed sources section at desktop width
 and 375 px.

@@ -433,7 +433,8 @@ def _run_import(record, say=None):
 def _run_source(source, say=None):
     """One followed-source listing cycle with the coordinator guard: a source
     crash is logged and returns, never killing the loop (same policy as
-    _run_import). check_source itself handles every listing failure."""
+    _run_import). check_source itself handles every listing and capture
+    failure."""
     try:
         follows.check_source(source, say)
     except Exception as exc:

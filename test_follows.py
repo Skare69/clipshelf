@@ -4,6 +4,7 @@ API and the feed filters.
 
 Offline: the yt-dlp listing is a mock; no network and no real yt-dlp run.
 """
+import io
 import json
 import os
 import shutil
@@ -24,6 +25,7 @@ import django
 django.setup()
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
@@ -171,12 +173,17 @@ class QueueBoundsTests(FollowMixin, TestCase):
                                return_value=listing), \
              mock.patch.object(services, "accept_capture",
                                side_effect=RuntimeError("transient")):
-            with self.assertRaises(RuntimeError):
-                follows.check_source(source)
+            self.assertEqual(follows.check_source(source), "error")
+        source.refresh_from_db()
         # The marker rolled back with the capture: nothing leaked from the
-        # failed cycle.
+        # failed cycle, and the failure landed on the row instead of in the
+        # air — the backoff, not a raise, now schedules the retry.
         self.assertEqual(source.seen_posts.count(), 0)
         self.assertEqual(Capture.objects.count(), 0)
+        self.assertEqual(source.failures, 1)
+        self.assertEqual(source.last_error, "transient")
+        self.assertIsNone(source.last_check)  # a failure never moves it
+        self.assertGreater(source.next_check, timezone.now())
         # The next listing queues the posts the failed cycle dropped.
         with mock.patch.object(acquisition, "list_profile_posts",
                                return_value=listing):
@@ -186,6 +193,19 @@ class QueueBoundsTests(FollowMixin, TestCase):
              for c in Capture.objects.filter(follow=source)},
             {crid_for(source, "204"), crid_for(source, "203")})
         self.assertEqual(source.seen_posts.count(), 2)
+
+    def test_messageless_capture_failure_still_names_itself(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               return_value=posts("204")), \
+             mock.patch.object(services, "accept_capture",
+                               side_effect=RuntimeError()):
+            self.assertEqual(follows.check_source(source), "error")
+        source.refresh_from_db()
+        # An empty last_error reads as healthy on the source row, so a
+        # message-less exception stores the exception class name.
+        self.assertEqual(source.last_error, "RuntimeError")
+        self.assertEqual(source.failures, 1)
 
 
 # -------------------------------------------------------- listing failure
@@ -331,6 +351,46 @@ class WorkerSourceTests(FollowMixin, TestCase):
                          ["recipes", "misc"])
         self.assertEqual(Contribution.objects.get(job=plain_job).data["tags"],
                          ["misc", "recipes"])
+
+
+class WorkerOnceCaptureFailureTests(FollowMixin, TransactionTestCase):
+    """The scheduling half of a capture failure: a persistent failure must
+    leave the source backed off so the once-drain ends, instead of
+    re-listing the profile in a tight loop (CLIP-65 regression)."""
+
+    def test_once_drain_returns_and_backs_off_after_capture_failure(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        calls = []
+
+        def listing(url):
+            calls.append(url)
+            return posts("305")
+
+        def conflicting(*args, **kwargs):
+            raise ValidationError("capture rejected (conflict)",
+                                  code="conflict")
+
+        def run():
+            try:
+                with mock.patch.object(acquisition, "list_profile_posts",
+                                       side_effect=listing), \
+                     mock.patch.object(services, "accept_capture",
+                                       side_effect=conflicting):
+                    worker.main(once=True, stdout=io.StringIO())
+            finally:
+                connection.close()
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        thread.join(15)
+        # The once-drain ended: the backoff write, not a raised exception,
+        # is what stops the coordinator from claiming the source again.
+        self.assertFalse(thread.is_alive())
+        self.assertLessEqual(len(calls), 2)
+        source.refresh_from_db()
+        self.assertEqual(source.failures, 1)
+        self.assertIn("conflict", source.last_error)
+        self.assertGreater(source.next_check, timezone.now())
 
 
 # ------------------------------------------------------------- follow api
