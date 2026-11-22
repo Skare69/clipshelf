@@ -148,9 +148,6 @@ non_packaged = ["org.jetbrains.kotlinx:kotlinx-coroutines-bom",
 "com.google.guava:listenablefuture"                          = { observed = "1.0",  license = "Apache-2.0" }
 "org.jetbrains:annotations"                                  = { observed = "23.0.0",  license = "Apache-2.0" }
 "org.jetbrains.kotlin:kotlin-stdlib"                         = { observed = "2.2.10",  license = "Apache-2.0" }
-"org.jetbrains.kotlin:kotlin-stdlib-common"                  = { observed = "2.2.10",  license = "Apache-2.0" }
-"org.jetbrains.kotlin:kotlin-stdlib-jdk7"                    = { observed = "1.8.22",  license = "Apache-2.0" }
-"org.jetbrains.kotlin:kotlin-stdlib-jdk8"                    = { observed = "1.8.22",  license = "Apache-2.0" }
 "org.jetbrains.kotlinx:kotlinx-coroutines-android"           = { observed = "1.9.0",  license = "Apache-2.0" }
 "org.jetbrains.kotlinx:kotlinx-coroutines-core"              = { observed = "1.9.0",  license = "Apache-2.0" }
 "org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm"          = { observed = "1.9.0",  license = "Apache-2.0" }

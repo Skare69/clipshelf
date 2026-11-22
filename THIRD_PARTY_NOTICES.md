@@ -161,9 +161,6 @@ Apache-2.0.
 | com.google.guava:listenablefuture | 1.0 | Apache-2.0 | Google LLC (Guava extract; POM omits the license, parent `guava-parent` is Apache-2.0) |
 | org.jetbrains:annotations | 23.0.0 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlin:kotlin-stdlib | 2.2.10 | Apache-2.0 | JetBrains s.r.o. |
-| org.jetbrains.kotlin:kotlin-stdlib-common | 2.2.10 | Apache-2.0 | JetBrains s.r.o. |
-| org.jetbrains.kotlin:kotlin-stdlib-jdk7 | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
-| org.jetbrains.kotlin:kotlin-stdlib-jdk8 | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-android | 1.9.0 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-core | 1.9.0 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm | 1.9.0 | Apache-2.0 | JetBrains s.r.o. |
