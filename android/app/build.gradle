@@ -180,5 +180,5 @@ dependencies {
     // Real org.json for the JVM: android.jar ships a stub that throws
     // "not mocked" under local unit tests. Test classpath only — never
     // packaged into the APK, so the release license gate is unaffected.
-    testImplementation "org.json:json:20240303"
+    testImplementation "org.json:json:20260814"
 }
