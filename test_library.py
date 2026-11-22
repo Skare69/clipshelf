@@ -506,6 +506,67 @@ class CollectionMembershipTests(ApiTestCase):
             Membership.objects.filter(collection=shared, user=carol).exists()
         )
 
+    def test_member_reinvite_after_removal_inside_cooldown_mails(self):
+        """A re-invite inside the cooldown after removal mails again: the
+        burned, redeemed row must not count as the cooldown's live mail,
+        and the fresh link joins the removed member."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        self._invite(self.alice_client, shared, carol.email)
+        response = self._login(carol).get(self._invite_link(carol.email))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        response = self.alice_client.delete(
+            f"/api/collections/{shared.id}/members/{carol.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        # Re-invite minutes inside the 10-minute cooldown: the dead mailed
+        # row stays quiet no longer, or the owner's resend would mail
+        # nothing while the endpoint answers 202.
+        response = self._invite(self.alice_client, shared, carol.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(mail.outbox), 2)
+        response = self._login(carol).get(self._invite_link(carol.email))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+
+    def test_removal_before_queued_job_runs_sends_no_mail(self):
+        """A delivery job still queued when the member is removed finds its
+        row burned: it sends nothing instead of mailing a dead link."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        queued = []
+        with mock.patch.object(accounts, "deliver_async", queued.append):
+            response = self._invite(self.alice_client, shared, carol.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(queued), 1)  # the job waits in the pool queue
+        self.assertEqual(len(mail.outbox), 0)
+        # Removal burns the outstanding unmailed row while the job waits.
+        Membership.objects.create(collection=shared, user=carol)
+        response = self.alice_client.delete(
+            f"/api/collections/{shared.id}/members/{carol.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            CollectionInvitation.objects.filter(
+                collection=shared,
+                email=carol.email,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).exists()
+        )
+        queued[0]()
+        self.assertEqual(len(mail.outbox), 0)
+        self.assertTrue(
+            CollectionInvitation.objects.filter(
+                email=carol.email, mailed_at__isnull=True
+            ).exists()
+        )
+
     def test_member_redemption_loses_to_a_concurrent_removal(self):
         """A removal that burns the token between the redemption's liveness
         read and its consume write wins: no membership is created."""

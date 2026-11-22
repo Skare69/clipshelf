@@ -227,10 +227,22 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
         if Membership.objects.filter(collection_id=collection_id, user=target).exists():
             return  # already a member: nothing to invite
         now = timezone.now()
+        token_hash = invitation_token_hash(token)
+        # The queue delay can outlive the row: member removal burned it, or
+        # the invitee redeemed another link meanwhile. A dead link answers
+        # nobody, so a dead row sends nothing and stays unmailed.
+        if not CollectionInvitation.objects.filter(
+            token_hash=token_hash,
+            accepted_by__isnull=True,
+            expires_at__gt=now,
+        ).exists():
+            return
         if CollectionInvitation.objects.filter(
             collection_id=collection_id,
             email__iexact=email,
             mailed_at__gt=now - COLLECTION_INVITE_MAIL_COOLDOWN,
+            accepted_by__isnull=True,
+            expires_at__gt=now,
         ).exists():
             return  # this collection just mailed this mailbox: stay quiet,
             # the mailed token is untouched and stays the live invitation
@@ -244,14 +256,18 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
                 accepted_by__isnull=True,
                 mailed_at__isnull=True,
                 expires_at__gt=now,
-            ).exclude(token_hash=invitation_token_hash(token)).update(expires_at=now)
+            ).exclude(token_hash=token_hash).update(expires_at=now)
         try:
             django_send_mail(subject, body, None, [email])
         except Exception:
             logger.exception("collection invitation mail to %s failed", email)
             return  # the row stays unmailed: a resend retries, no cooldown
+        # The stamp still requires a live row: the send held the row for up
+        # to EMAIL_TIMEOUT, and removal may have burned it meanwhile.
         CollectionInvitation.objects.filter(
-            token_hash=invitation_token_hash(token)
+            token_hash=token_hash,
+            accepted_by__isnull=True,
+            expires_at__gt=timezone.now(),
         ).update(mailed_at=timezone.now())
 
     deliver_async(_job)
