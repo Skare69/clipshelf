@@ -42,8 +42,9 @@ is the machine-readable twin of this file; `check_licenses.py` enforces both.
 ## Python dependencies (server image)
 
 Ground truth: the hash-locked `requirements.lock`, which the image installs
-with `pip install --require-hashes -r requirements.lock` (CPython 3.13,
-linux). `Observed` = the installed (locked) version; `check_licenses.py` fails
+with `pip install --require-hashes -r requirements.lock` (CI gates the set on
+CPython 3.13; the image installs it on its CPython 3.15 base, linux).
+`Observed` = the installed (locked) version; `check_licenses.py` fails
 the build when a lock bump leaves it or `license_inventory.toml` behind. PyPI
 project pages
 are the source of record; every wheel ships its license text inside
@@ -192,7 +193,7 @@ license text is under "Full license texts".
 
 | Component | Version | License | Notes |
 |---|---|---|---|
-| python:3.13-slim base | pinned by digest (`sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81`, both Dockerfile stages) | PSF-2.0 (CPython) + Debian distro set | |
+| python:3.15-slim base | pinned by digest (`sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928`, both Dockerfile stages) | PSF-2.0 (CPython) + Debian distro set | |
 | pip (in base) | per base image | MIT | tooling, not an application dependency |
 | Debian packages: ca-certificates, ffmpeg (runtime image) | per Debian release | DFSG set; ffmpeg program build is **GPL-2.0-or-later** | license texts ship in-image at `/usr/share/doc/<pkg>/copyright`; sources on deb.debian.org |
 | Debian packages: ca-certificates, gcc, libc6-dev, make (build stage only) | per Debian release | DFSG set | compile the bundled SQLite; discarded in the multistage build, never shipped |

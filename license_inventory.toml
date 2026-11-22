@@ -2,8 +2,9 @@
 #
 # Ground truth sources:
 #   python  : importlib.metadata of the hash-locked install
-#             `pip install --require-hashes -r requirements.lock` (CI and the
-#             image install exactly this set; CPython 3.13, linux). `observed`
+#             `pip install --require-hashes -r requirements.lock` (CI gates
+#             this set on CPython 3.13; the image installs it on its pinned
+#             CPython 3.15 base, linux). `observed`
 #             is gate-checked against the installed (locked) version — every
 #             lock bump must update it here and the row in
 #             THIRD_PARTY_NOTICES.md (`scripts/lock_deps.py check` keeps the
@@ -158,7 +159,7 @@ non_packaged = ["org.jetbrains.kotlinx:kotlinx-coroutines-bom",
 # text for every package inside the image at /usr/share/doc/<pkg>/copyright,
 # with sources on deb.debian.org. The gate checks the pins below, not each
 # package's license.
-base = "python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81"
+base = "python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928"
 # Multistage build: the compiler set lives in the discarded sqlite-build stage;
 # only the runtime set ships.
 apt_build_stage = ["ca-certificates", "gcc", "libc6-dev", "make"]

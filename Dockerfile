@@ -5,8 +5,8 @@
 # Multistage: the first stage compiles the pinned SQLite with the WAL-reset fix
 # (>= 3.51.3, per https://www.sqlite.org/wal.html); its compilers and headers
 # are discarded and only the shared library ships.
-# Both stages pin python:3.13-slim by manifest-list digest (linux/amd64 + arm64);
-# re-pin deliberately after review: docker buildx imagetools inspect python:3.13-slim
+# Both stages pin python:3.15-slim by manifest-list digest (linux/amd64 + arm64);
+# re-pin deliberately after review: docker buildx imagetools inspect python:3.15-slim
 ARG SQLITE_VERSION=3.53.1
 
 # ---- SQLite build stage: gcc/make/libc6-dev live here and are thrown away ----
