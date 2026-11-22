@@ -10,7 +10,7 @@
 ARG SQLITE_VERSION=3.53.1
 
 # ---- SQLite build stage: gcc/make/libc6-dev live here and are thrown away ----
-FROM python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81 AS sqlite-build
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928 AS sqlite-build
 ARG SQLITE_TARBALL=sqlite-autoconf-3530100.tar.gz
 ARG SQLITE_URL=https://sqlite.org/2026/sqlite-autoconf-3530100.tar.gz
 ARG SQLITE_SHA256=83e6b2020a034e9a7ad4a72feea59e1ad52f162e09cbd26735a3ffb98359fc4f
@@ -50,7 +50,7 @@ RUN set -eux; \
 # loader path below.
 
 # ---- Runtime stage: same pinned base, no compilers, only the built shared library ---
-FROM python:3.13-slim@sha256:bb2988715db2cf7ace7b53f38f3cffbef7c7046a656bee66245eb0ed386e2e81
+FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 ARG SQLITE_VERSION
 
 # ffmpeg is the only OS package the worker needs (fixed version within the Debian
