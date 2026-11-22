@@ -160,14 +160,17 @@ Apache-2.0.
 | com.google.errorprone:error_prone_annotations | 2.15.0 | Apache-2.0 | Google LLC |
 | com.google.guava:listenablefuture | 1.0 | Apache-2.0 | Google LLC (Guava extract; POM omits the license, parent `guava-parent` is Apache-2.0) |
 | org.jetbrains:annotations | 23.0.0 | Apache-2.0 | JetBrains s.r.o. |
-| org.jetbrains.kotlin:kotlin-stdlib | 2.1.20 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib | 2.2.10 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib-common | 2.2.10 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib-jdk7 | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
+| org.jetbrains.kotlin:kotlin-stdlib-jdk8 | 1.8.22 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-android | 1.9.0 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-core | 1.9.0 | Apache-2.0 | JetBrains s.r.o. |
 | org.jetbrains.kotlinx:kotlinx-coroutines-core-jvm | 1.9.0 | Apache-2.0 | JetBrains s.r.o. |
 | org.jspecify:jspecify | 1.0.0 | Apache-2.0 | The JSpecify authors |
 
 `kotlinx-coroutines-bom` and `kotlin-bom` are Gradle platforms (metadata
-only) and are not packaged. The Gradle wrapper, Gradle 8.9, and AGP 8.7.3 are Apache-2.0 build
+only) and are not packaged. The Gradle wrapper, Gradle 9.9.2, and AGP 9.5.2 are Apache-2.0 build
 tooling; they are not shipped in the APK.
 
 ## Bundled fonts
