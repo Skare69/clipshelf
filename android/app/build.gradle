@@ -169,14 +169,14 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 dependencies {
-    implementation "androidx.work:work-runtime:2.9.1"
-    implementation "com.google.android.material:material:1.13.0"
-    implementation "androidx.appcompat:appcompat:1.7.0"
+    implementation "androidx.work:work-runtime:2.12.0"
+    implementation "com.google.android.material:material:1.14.0"
+    implementation "androidx.appcompat:appcompat:1.8.0"
     testImplementation "junit:junit:4.13.2"
-    testImplementation "org.robolectric:robolectric:4.14.1"
+    testImplementation "org.robolectric:robolectric:4.18"
     // MainActivity's signed-in branch enqueues WorkManager work; the test
     // initializer absorbs it. Test classpath only — never in the APK.
-    testImplementation "androidx.work:work-testing:2.9.1"
+    testImplementation "androidx.work:work-testing:2.12.0"
     // Real org.json for the JVM: android.jar ships a stub that throws
     // "not mocked" under local unit tests. Test classpath only — never
     // packaged into the APK, so the release license gate is unaffected.
