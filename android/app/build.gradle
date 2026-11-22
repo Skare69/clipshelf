@@ -13,13 +13,11 @@ def releaseVersion = {
     def name = providers.gradleProperty('versionName').orElse('').get()
     if (!name) {
         try {
-            def out = new ByteArrayOutputStream()
-            project.exec {
+            // providers.exec: Project.exec went away in Gradle 9. A non-zero
+            // exit (no git, no tag) throws and lands in the catch below.
+            name = providers.exec {
                 commandLine 'git', 'describe', '--tags', '--abbrev=0'
-                standardOutput = out
-                ignoreExitValue = true
-            }
-            name = out.toString().trim()
+            }.standardOutput.asText.get().trim()
         } catch (Exception ignored) {
             // no git on PATH — handled by the loud failure below
         }
@@ -34,10 +32,30 @@ def releaseVersion = {
 }()
 
 // THIRD_PARTY_NOTICES.md ships in the APK assets (notices policy item 4).
-def noticesAssetDir = layout.buildDirectory.dir("generated/thirdPartyNotices")
-tasks.register("copyThirdPartyNotices", Copy) {
-    from(rootProject.file("../THIRD_PARTY_NOTICES.md"))
-    into noticesAssetDir
+// A task class with an @OutputDirectory property: AGP 9 wires generated asset
+// dirs only through addGeneratedSourceDirectory(taskProvider, output accessor).
+abstract class CopyThirdPartyNotices extends DefaultTask {
+    @InputFile
+    abstract RegularFileProperty getNoticesFile()
+
+    @OutputDirectory
+    abstract DirectoryProperty getOutputDir()
+
+    @Inject
+    abstract FileSystemOperations getFs()
+
+    @TaskAction
+    void run() {
+        fs.copy { spec ->
+            spec.from noticesFile
+            spec.into outputDir
+        }
+    }
+}
+
+def copyThirdPartyNotices = tasks.register("copyThirdPartyNotices", CopyThirdPartyNotices) {
+    noticesFile = rootProject.file("../THIRD_PARTY_NOTICES.md")
+    outputDir = layout.buildDirectory.dir("generated/thirdPartyNotices")
 }
 
 android {
@@ -80,11 +98,8 @@ android {
         buildConfig true
     }
 
-    sourceSets {
-        main {
-            assets.srcDir noticesAssetDir
-        }
-    }
+    // sourceSets.assets.srcDir(provider) is gone in AGP 9: generated dirs go
+    // through the Variant API instead (see androidComponents block below).
 
     testOptions {
         unitTests {
@@ -116,7 +131,13 @@ android {
     }
 }
 
-tasks.named("preBuild") { dependsOn copyThirdPartyNotices }
+// AGP 9: generated asset dirs are registered per variant through the Variant
+// API; the task dependency to copyThirdPartyNotices is carried by the wiring.
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(copyThirdPartyNotices) { it.outputDir }
+    }
+}
 
 // One configuration per version: Gradle version-conflict resolution would
 // otherwise collapse the two android-all modules to the highest version and
