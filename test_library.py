@@ -22,8 +22,8 @@ from django.core.cache import cache
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.core.mail.backends.base import BaseEmailBackend
 from django.http import Http404
-from django.db import IntegrityError, transaction
-from django.test import Client, TestCase, override_settings
+from django.db import IntegrityError, connection, transaction
+from django.test import Client, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from allauth.account.models import EmailAddress
 
@@ -978,6 +978,119 @@ class MailDeliveryPoolTests(ApiTestCase):
         with lock:
             self.assertEqual(state["peak"], bound)
             self.assertEqual(state["done"], total)
+
+
+class ConcurrentInvitationMailTests(TransactionTestCase):
+    """Two invitation jobs for one mailbox that run at once must decide in
+    one serialized transaction: one mail goes out and exactly one token
+    stays redeemable, so the invitee never holds two dead links.
+
+    TransactionTestCase, not TestCase: the jobs run on their own threads
+    with their own connections, so the request-written invitation rows must
+    be committed before the jobs read them."""
+
+    def setUp(self):
+        tmp = tempfile.mkdtemp(prefix="clipshelf-concurrent-invite-test-")
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        override = override_settings(DATA_DIR=tmp)
+        override.enable()
+        self.addCleanup(override.disable)
+        # The owner-keyed invite throttle counts in the process-local cache.
+        cache.clear()
+        self.alice = self._user("alice@example.com")
+        self.carol = self._user("carol@example.com")
+        self.alice_client = self._login(self.alice)
+
+    def _user(self, email):
+        user = User.objects.create_user(
+            username=email, email=email, password=PASSWORD
+        )
+        # api_auth requires a verified mailbox; unverified accounts stay locked out.
+        EmailAddress.objects.create(
+            user=user, email=email, verified=True, primary=True
+        )
+        return user
+
+    def _login(self, user):
+        client = Client()
+        client.force_login(user)
+        return client
+
+    def test_concurrent_jobs_mail_one_redeemable_token(self):
+        shared = Collection.objects.create(
+            name="Team finds", kind="shared", owner=self.alice
+        )
+        # Queue both jobs without running them, so both invitation rows are
+        # committed before either job starts: the race under test is between
+        # the two jobs, not between a job and the second request's write.
+        jobs = []
+        barrier = threading.Barrier(2, timeout=10)
+        real_send = accounts.django_send_mail
+
+        def gated_send(*args, **kwargs):
+            try:
+                barrier.wait()  # hold both senders inside SMTP at once
+            except threading.BrokenBarrierError:
+                pass  # the serialized decision keeps the second job quiet
+            return real_send(*args, **kwargs)
+
+        with mock.patch.object(accounts, "deliver_async", jobs.append):
+            for _ in range(2):
+                response = self.alice_client.post(
+                    f"/api/collections/{shared.id}/members",
+                    data=json.dumps({"email": self.carol.email}),
+                    content_type="application/json",
+                )
+                self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(jobs), 2)
+
+        results, failures = [], []
+
+        def run_job(job):
+            try:
+                with mock.patch.object(accounts, "django_send_mail", gated_send):
+                    job()
+                results.append("ok")
+            except Exception as exc:  # surfaced below, never hidden
+                failures.append(exc)
+            finally:
+                connection.close()
+
+        threads = [threading.Thread(target=run_job, args=(job,)) for job in jobs]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(60)
+        for thread in threads:
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(failures, [])
+        self.assertEqual(sorted(results), ["ok", "ok"])
+        # One email only: the loser of the serialized decision stays quiet
+        # inside the cooldown instead of mailing a second, doomed link.
+        self.assertEqual(
+            [message.to for message in mail.outbox], [[self.carol.email]]
+        )
+        # Exactly one live token remains, and it is the mailed one: the
+        # pre-fix race expired both rows after mailing both.
+        live = CollectionInvitation.objects.filter(
+            collection=shared,
+            email=self.carol.email,
+            accepted_by__isnull=True,
+            expires_at__gt=timezone.now(),
+        )
+        self.assertEqual(live.count(), 1)
+        self.assertIsNotNone(live.first().mailed_at)
+        # The surviving link redeems end to end.
+        url = next(
+            line.strip()
+            for line in mail.outbox[0].body.splitlines()
+            if "/collections/invitations/" in line
+        )
+        response = self._login(self.carol).get(urlsplit(url).path)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(collection=shared, user=self.carol).exists()
+        )
 
 
 class RemovalTests(ApiTestCase):
