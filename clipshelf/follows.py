@@ -26,8 +26,12 @@ DUPLICATE = "duplicate follow"
 
 def validate_profile_url(url):
     """Canonical TikTok profile URL, or ValueError. Only tiktok.com hosts
-    (lib.is_tiktok) whose path is exactly /@handle count; the canonical form
-    pins the host, drops the query and lowercases the handle, so every www,
+    (lib.is_tiktok) whose path is exactly /@handle count, and only handles
+    norm would leave alone: norm strips whole-URL whitespace and trailing
+    punctuation before it splits the path, so a fragment-shielded tail
+    ("…/@a. .#f") survives one norm but not a re-validation, and such a
+    canonical form could never come back as itself. The canonical form pins
+    the host, drops the query and lowercases the handle, so every www,
     bare-domain and case spelling of one profile is one follow. Uniqueness
     uses the returned form."""
     if not isinstance(url, str):
@@ -36,7 +40,8 @@ def validate_profile_url(url):
     if not normalized or not lib.is_tiktok(normalized):
         raise ValueError("only tiktok.com profile URLs are supported")
     parts = urllib.parse.urlsplit(normalized)
-    if not re.fullmatch(r"/@[^/@]+", parts.path):
+    if (not re.fullmatch(r"/@[^/@]+", parts.path)
+            or parts.path[-1].isspace() or parts.path[-1] in ".,;!"):
         raise ValueError("URL must point at a profile page (/@handle)")
     return urllib.parse.urlunsplit(
         ("https", "www.tiktok.com", parts.path.lower(), "", ""))

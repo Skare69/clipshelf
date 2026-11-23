@@ -475,12 +475,15 @@ _PROFILE_SHAPE = re.compile(r"^/@[^/@]+$")
 
 def _ref_profile(url):
     """Independent restatement of the spec: tiktok.com host only, and the
-    normed path exactly /@handle; the canonical form or None."""
+    normed path exactly /@handle whose last character norm keeps — trailing
+    whitespace or punctuation would not survive a re-validation. The
+    canonical form or None."""
     normalized = lib.norm(url) if isinstance(url, str) else None
     if not normalized or not lib.is_tiktok(normalized):
         return None
     path = urlsplit(normalized).path
-    if not _PROFILE_SHAPE.match(path):
+    if (not _PROFILE_SHAPE.match(path) or path[-1].isspace()
+            or path[-1] in ".,;!"):
         return None
     return f"https://www.tiktok.com{path.lower()}"
 
@@ -519,6 +522,42 @@ def prop_profile_url(rng):
             raise AssertionError(f"non-ValueError for {url!r}: {exc!r}")
         if got != expect:
             raise AssertionError(f"expected {expect!r} for {url!r}, got {got!r}")
+
+
+def prop_profile_url_fixed_point(rng):
+    """validate_profile_url raises ValueError or returns a fixed point that
+    matches the canonical profile form, so one profile is always one follow."""
+    canon = re.compile(r"^https://www\.tiktok\.com/@[^/@]+$")
+    corpus = [
+        "https://www.tiktok.com/@creator",
+        "https://www.tiktok.com/@user. .#frag",  # shipped unstable canonical
+        "https://www.tiktok.com/@", "https://www.tiktok.com/@a@b",
+        "https://www.tiktok.com/@user/video/123", "https://example.com/@user",
+        "", "not a url", "@creator", None, 123,
+    ]
+    tail_chars = ["a", "9", ".", "_", " ", "\u200b", "é", "!", ";"]
+    suffixes = ["", "?q=1", "#frag", "/", "/video/1"]
+    for _ in range(RUNS):
+        corpus.append("https://www.tiktok.com/@user" + rng.choice(tail_chars)
+                      * rng.randint(0, 3) + rng.choice(suffixes))
+    bad = []
+    for url in corpus:
+        try:
+            canonical = follows.validate_profile_url(url)
+        except ValueError:
+            continue
+        if not canon.match(canonical):
+            bad.append(("non-canonical return", repr(url)[:60], canonical))
+            continue
+        try:
+            again = follows.validate_profile_url(canonical)
+        except ValueError:
+            bad.append(("revalidation rejected canonical",
+                        repr(url)[:60], canonical))
+            continue
+        if again != canonical:
+            bad.append(("not a fixed point", repr(url)[:60], canonical))
+    assert not bad, f"({len(bad)} violations) {bad[:3]}"
 
 
 # ------------------------------------------------- 8. acquisition.list_profile_posts
@@ -679,6 +718,7 @@ PROPERTIES = [
     ("validated", prop_validated),
     ("validate_url", prop_validate_url),
     ("profile_url", prop_profile_url),
+    ("profile_url_fixed_point", prop_profile_url_fixed_point),
     ("list_profile_posts", prop_list_profile_posts),
     ("feed", prop_feed),
 ]
