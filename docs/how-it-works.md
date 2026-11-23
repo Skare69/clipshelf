@@ -155,9 +155,13 @@ stateDiagram-v2
     queued --> running: worker claims, mark_running
     running --> retry: attempt failed, fail with backoff
     retry --> running: retry_at due, claimed again
+    running --> queued: access paused, Job.defer
     running --> done: findings published, store_findings
-    running --> blocked: guardrail block or deterministic refusal
+    running --> blocked: guardrail block, refusal, or pause at attempt cap
+    queued --> blocked: collection access revoked, api_collection_member
+    retry --> blocked: collection access revoked, api_collection_member
     blocked --> queued: operator retry, Job.requeue
+    blocked --> running: config error cleared, worker claims again
     done --> queued: operator retry, Job.requeue
     done --> [*]
 ```
@@ -165,7 +169,10 @@ stateDiagram-v2
 - **queued** — written by `services.accept_capture` (`clipshelf/services.py`); claimable when `retry_at` is due (`clipshelf/worker.py` `_claimable_jobs`)
 - **running** — set by `Job.mark_running` under `select_for_update` (`clipshelf/models.py`), so two workers never take one job
 - **retry** — `Job.fail` schedules backoff `min(30 * 2^(attempts-1), 3600)` seconds, at most `MAX_ATTEMPTS = 5`
-- **blocked** — terminal scheduled state via `Job.mark_blocked`: screening guard rail (`interpretation.GuardrailBlocked`), deterministic acquisition refusal, or attempts exhausted
+- **running → queued** — collection or account access loss pauses the job: `_process_job` calls `Job.defer` (`clipshelf/worker.py`); each pause cycle spends one attempt, and `Job.defer` blocks at the cap (`clipshelf/models.py`)
+- **blocked** — resting state via `Job.mark_blocked`; `retry_at` clears, so no retry is pending: screening guard rail (`interpretation.GuardrailBlocked`), deterministic acquisition refusal, attempts exhausted, or member revocation
+- **blocked → running** — auto-resume: the worker claims a `blocked` job with error `llm-not-configured` again when the LLM is configured (`clipshelf/worker.py` `_claimable_jobs`)
+- **queued/retry → blocked** — member removal blocks the member's pending jobs with `collection access revoked` in the same request (`clipshelf/views.py` `api_collection_member`)
 - **done** — terminal success via `Job.mark_done`; a terminal-host URL ends `done` with interpretation `blocked` and stays metadata only
 - **operator retry** — `POST /api/jobs/<id>/retry` → `views.api_job_retry` → `Job.requeue` (`clipshelf/views.py`, `clipshelf/models.py`)
 
