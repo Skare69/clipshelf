@@ -7,6 +7,7 @@ Real database, real views, real authorization — no mocks.
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import tempfile
 import threading
@@ -671,6 +672,241 @@ class CollectionMembershipTests(ApiTestCase):
         self.assertEqual(response.status_code, 400)
         self.assertEqual(CollectionInvitation.objects.count(), 0)
         self.assertEqual(len(mail.outbox), 0)
+
+    def _admin_client(self):
+        admin = self._user("root@example.com")
+        admin.is_app_admin = True
+        admin.save(update_fields=["is_app_admin"])
+        return self._login(admin)
+
+    def _admin_post(self, client, url, body):
+        return client.post(
+            url,
+            data=json.dumps({**body, "reauth_password": PASSWORD}),
+            content_type="application/json",
+        )
+
+    def _revoke(self, client, collection, email):
+        return client.delete(
+            f"/api/collections/{collection.id}/invitations",
+            data=json.dumps({"email": email}),
+            content_type="application/json",
+        )
+
+    def test_owner_revocation_kills_outstanding_links(self):
+        """The owner can withdraw an unredeemed invitation: the burned link
+        admits nobody, the answer never reveals whether a live invitation
+        existed, and only the owner may revoke."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        self._invite(self.alice_client, shared, carol.email)
+        link = self._invite_link(carol.email)
+        # An address with no live invitation answers exactly like one with:
+        # revocation is no account oracle.
+        response = self._revoke(self.alice_client, shared, "nobody@example.com")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "revoked": {
+                    "email": "nobody@example.com",
+                    "collection_id": str(shared.id),
+                }
+            },
+        )
+        # Case-insensitive on the probed mailbox, like the invite itself.
+        response = self._revoke(self.alice_client, shared, carol.email.upper())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "revoked": {
+                    "email": carol.email,
+                    "collection_id": str(shared.id),
+                }
+            },
+        )
+        self.assertFalse(
+            CollectionInvitation.objects.filter(
+                collection=shared,
+                email__iexact=carol.email,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).exists()
+        )
+        # The mailed link no longer admits; no membership materializes.
+        response = self._login(carol).get(link)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        # Only the owner manages members; a member gets the same 403 as
+        # everywhere else.
+        Membership.objects.create(collection=shared, user=self.bob)
+        response = self._revoke(self.bob_client, shared, carol.email)
+        self.assertEqual(response.status_code, 403)
+
+    def test_admin_disable_kills_the_owner_mailed_links(self):
+        """An admin disabling an owner expires the owner's live
+        invitations: the mailed links admit nobody, and re-enabling does
+        not resurrect them."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        self._invite(self.alice_client, shared, carol.email)
+        link = self._invite_link(carol.email)
+        admin_client = self._admin_client()
+        response = self._admin_post(
+            admin_client,
+            f"/api/admin/users/{self.alice.pk}/status",
+            {"active": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.alice.refresh_from_db()
+        self.assertFalse(self.alice.is_active)
+        self.assertFalse(
+            CollectionInvitation.objects.filter(
+                collection__owner=self.alice,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).exists()
+        )
+        response = self._login(carol).get(link)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        # Re-enabling never revives an expired invitation.
+        response = self._admin_post(
+            admin_client,
+            f"/api/admin/users/{self.alice.pk}/status",
+            {"active": True},
+        )
+        self.assertEqual(response.status_code, 200)
+        response = self._login(carol).get(link)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+
+    def test_admin_disable_silences_queued_invitation_mail(self):
+        """A delivery job still queued when the owner is disabled finds its
+        row expired: nothing is mailed under the disabled owner's name."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        queued = []
+        with mock.patch.object(accounts, "deliver_async", queued.append):
+            response = self._invite(self.alice_client, shared, carol.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(len(mail.outbox), 0)
+        admin_client = self._admin_client()
+        response = self._admin_post(
+            admin_client,
+            f"/api/admin/users/{self.alice.pk}/status",
+            {"active": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        queued[0]()
+        self.assertEqual(len(mail.outbox), 0)
+        # The job never reserved the row: it stays unmailed and dead.
+        self.assertTrue(
+            CollectionInvitation.objects.filter(
+                email=carol.email, mailed_at__isnull=True
+            ).exists()
+        )
+
+    def test_transfer_kills_the_old_owner_links(self):
+        """Transferring a collection to a member expires the old owner's
+        outstanding invitations: queued jobs send nothing, the old mailed
+        link admits nobody, a row the disable left live is burned by the
+        transfer, and even a live wrong-creator row is dead on redemption —
+        while the new owner's own invitation works end to end."""
+        shared = self._shared()
+        carol = self._user("carol@example.com")
+        Membership.objects.create(collection=shared, user=self.bob)
+        admin_client = self._admin_client()
+        self._invite(self.alice_client, shared, carol.email)
+        old_link = self._link_from(0)
+        # A second delivery still queued when the disable lands.
+        CollectionInvitation.objects.update(
+            mailed_at=timezone.now() - timedelta(minutes=11)
+        )
+        queued = []
+        with mock.patch.object(accounts, "deliver_async", queued.append):
+            response = self._invite(self.alice_client, shared, carol.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(len(mail.outbox), 1)
+        # Only a disabled owner's collection transfers.
+        response = self._admin_post(
+            admin_client,
+            f"/api/admin/users/{self.alice.pk}/status",
+            {"active": False},
+        )
+        self.assertEqual(response.status_code, 200)
+        # A row the disable somehow left live and unaccepted: the transfer
+        # must burn it.
+        pre_transfer_token = secrets.token_urlsafe(32)
+        CollectionInvitation.objects.create(
+            collection=shared,
+            email=carol.email,
+            token_hash=accounts.invitation_token_hash(pre_transfer_token),
+            created_by=self.alice,
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        response = self._admin_post(
+            admin_client,
+            f"/api/admin/collections/{shared.id}/transfer",
+            {"owner_id": str(self.bob.pk)},
+        )
+        self.assertEqual(response.status_code, 200)
+        shared.refresh_from_db()
+        self.assertEqual(shared.owner, self.bob)
+        self.assertFalse(
+            CollectionInvitation.objects.filter(
+                collection=shared,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).exists()
+        )
+        # The queued job mails nothing after the disable and transfer.
+        queued[0]()
+        self.assertEqual(len(mail.outbox), 1)
+        # The old mailed link no longer admits.
+        response = self._login(carol).get(old_link)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        # The second guard: a row that stays live past the transfer still
+        # cannot admit, because its creator is no longer the collection's
+        # active owner.
+        stale_token = secrets.token_urlsafe(32)
+        CollectionInvitation.objects.create(
+            collection=shared,
+            email=carol.email,
+            token_hash=accounts.invitation_token_hash(stale_token),
+            created_by=self.alice,
+            expires_at=timezone.now() + timedelta(hours=1),
+        )
+        response = self._login(carol).get(f"/collections/invitations/{stale_token}")
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
+        # The new owner's own invitation works end to end: the mail goes
+        # out and the link admits.
+        CollectionInvitation.objects.update(
+            mailed_at=timezone.now() - timedelta(minutes=11)
+        )
+        response = self._invite(self.bob_client, shared, carol.email)
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(len(mail.outbox), 2)
+        response = self._login(carol).get(self._invite_link(carol.email))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(
+            Membership.objects.filter(collection=shared, user=carol).exists()
+        )
 
     def test_member_invite_accept_remove_and_permissions(self):
         shared = self._shared()

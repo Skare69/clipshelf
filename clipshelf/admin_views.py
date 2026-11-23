@@ -35,7 +35,7 @@ from clipshelf.accounts import (
 )
 from clipshelf.api import ApiError, json_body, json_error
 from clipshelf import judgment
-from clipshelf.models import Collection, Invitation, Membership
+from clipshelf.models import Collection, CollectionInvitation, Invitation, Membership
 from clipshelf.services import get_settings, screening_key
 
 _USER = get_user_model()
@@ -159,6 +159,15 @@ def user_status(request, user, user_id):
             target.is_active = False
             target.session_version = F("session_version") + 1
             target.save(update_fields=["is_active", "session_version"])
+            # A disabled owner can no longer stand behind an invitation:
+            # every live unaccepted member invitation in the collections
+            # they own expires now, so queued jobs send nothing under their
+            # name and outstanding links admit nobody.
+            CollectionInvitation.objects.filter(
+                collection__owner_id=target.pk,
+                accepted_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).update(expires_at=timezone.now())
         elif active and not target.is_active:
             target.is_active = True
             target.save(update_fields=["is_active"])
@@ -298,6 +307,14 @@ def collection_transfer(request, user, collection_id):
         Membership.objects.filter(collection=collection, user=recipient).delete()
         collection.owner = recipient
         collection.save(update_fields=["owner"])
+        # The new owner never approved the old owner's outstanding
+        # invitations: every live unaccepted one expires, so none mails
+        # under the old owner's name or admits after the transfer.
+        CollectionInvitation.objects.filter(
+            collection=collection,
+            accepted_by__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).update(expires_at=timezone.now())
     return JsonResponse(
         {
             "collection": {

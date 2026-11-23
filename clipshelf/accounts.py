@@ -21,6 +21,7 @@ from django.contrib.auth import get_user as django_get_user
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.mail import send_mail as django_send_mail
 from django.db import close_old_connections, transaction
+from django.db.models import F
 from django.http import (
     Http404,
     JsonResponse,
@@ -244,6 +245,11 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
                 token_hash=mine,
                 accepted_by__isnull=True,
                 expires_at__gt=now,
+                # The owner decides who may be invited: a token whose
+                # creator is no longer the collection's owner, or whose
+                # creator an admin disabled, mails nothing.
+                created_by=F("collection__owner"),
+                created_by__is_active=True,
             ).exists():
                 return
             # The cooldown counts only live rows: a redeemed or burned
@@ -272,6 +278,8 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
                 mailed_at__isnull=True,
                 accepted_by__isnull=True,
                 expires_at__gt=now,
+                created_by=F("collection__owner"),
+                created_by__is_active=True,
             ).update(mailed_at=now):
                 return  # own row accepted, expired or superseded: nothing
                 # live left to mail
@@ -383,6 +391,12 @@ def collection_invite_view(request, token):
         token_hash=invitation_token_hash(token),
         accepted_by__isnull=True,
         expires_at__gt=timezone.now(),
+        # A live token belongs to a living collection: only the current
+        # owner's invitations admit, and only while the owner stays active.
+        # An admin disable or transfer that lands between this read and the
+        # consume below is re-checked in the same WHERE clause there.
+        created_by=F("collection__owner"),
+        created_by__is_active=True,
     ).first()
     if invitation is not None and not request.user.is_authenticated:
         return redirect(
@@ -405,6 +419,8 @@ def collection_invite_view(request, token):
                     pk=invitation.pk,
                     accepted_by__isnull=True,
                     expires_at__gt=timezone.now(),
+                    created_by=F("collection__owner"),
+                    created_by__is_active=True,
                 ).update(accepted_by=request.user, accepted_at=timezone.now())
                 == 1
             )

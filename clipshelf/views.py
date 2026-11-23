@@ -393,6 +393,39 @@ def api_collection_members(request, collection_id):
 
 @api
 @require_http_methods(["DELETE"])
+def api_collection_invitations(request, collection_id):
+    """Owner revokes the outstanding invitations for one address.
+
+    Every live, unaccepted token for (collection, email) expires, so mailed
+    links stop admitting and queued delivery jobs find a dead row and send
+    nothing. The answer is the same whether or not a live invitation
+    existed: revocation is never an account-existence oracle.
+    """
+    user = request.user
+    collection = _accessible_collection(user, collection_id)
+    if collection.kind != "shared":
+        raise ApiError(403, detail="personal collections have no members")
+    if collection.owner_id != user.id:
+        raise ApiError(403, detail="only the owner manages members")
+    body = json_body(request)
+    email = str(body.get("email") or "").strip().lower()
+    try:
+        validate_email(email)
+    except ValidationError:
+        raise ApiError(400, detail="a valid email address is required")
+    CollectionInvitation.objects.filter(
+        collection=collection,
+        email__iexact=email,
+        accepted_by__isnull=True,
+        expires_at__gt=timezone.now(),
+    ).update(expires_at=timezone.now())
+    return JsonResponse(
+        {"revoked": {"email": email, "collection_id": str(collection.id)}}
+    )
+
+
+@api
+@require_http_methods(["DELETE"])
 def api_collection_member(request, collection_id, user_id):
     user = request.user
     collection = _accessible_collection(user, collection_id)

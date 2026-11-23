@@ -21,6 +21,10 @@ urlpatterns = [
         "api/collections/<uuid:collection_id>/members/<uuid:user_id>",
         views.api_collection_member,
     ),
+    path(
+        "api/collections/<uuid:collection_id>/invitations",
+        views.api_collection_invitations,
+    ),
     path("api/settings", views.api_settings),
     path("api/entries", views.api_entries),
     path("api/entries/<uuid:entry_id>", views.api_entry),
