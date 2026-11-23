@@ -33,6 +33,11 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
+# pip's vendored packaging parses version ranges: pip is present in every
+# interpreter that can run this script (each subcommand shells out to
+# `python -m pip`).
+from pip._vendor.packaging.specifiers import InvalidSpecifier, SpecifierSet
+
 # CI resolves on 3.13 and tests on 3.13 and 3.15; the image base (Dockerfile)
 # runs 3.15. The lock must install with --require-hashes on every pair below:
 # pip is hash-validated per pair by `check`, and `collect_hashes` downloads
@@ -204,13 +209,15 @@ def read_pins(lock: Path) -> dict[str, str]:
     return pins
 
 
-def req_names(req: Path, problems: list[str] | None = None) -> list[str]:
-    """Canonical names requirements.txt asks for; blank lines, comments and
-    option lines (leading -) are skipped, and every remaining line must parse
-    as name[extras]<specs>[;marker] (fullmatch, shaped like _floor_free's
-    regex) or become an `unparseable requirement line` problem in `problems`.
+def req_specs(req: Path, problems: list[str] | None = None) -> dict[str, str]:
+    """{canonical name: specifier string} that requirements.txt asks for; an
+    empty string when a line names a package without a version range. Blank
+    lines, comments and option lines (leading -) are skipped, and every
+    remaining line must parse as name[extras]<specs>[;marker] (fullmatch,
+    shaped like _floor_free's regex) or become an `unparseable requirement
+    line` problem in `problems`. A repeated name ANDs its ranges with ','.
     Deterministic: reads only the file, never the package index."""
-    names: list[str] = []
+    specs: dict[str, str] = {}
     for line in req.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or stripped.startswith("-"):
@@ -218,10 +225,14 @@ def req_names(req: Path, problems: list[str] | None = None) -> list[str]:
         m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_.-]*(?:\[[^\]]*\])?)\s*([^;@]*?)\s*(;.*)?",
                          stripped)
         if m:
-            names.append(canon(re.sub(r"\[[^\]]*\]", "", m.group(1))))
+            n = canon(re.sub(r"\[[^\]]*\]", "", m.group(1)))
+            if m.group(2) and n in specs:
+                specs[n] = f"{specs[n]},{m.group(2)}"
+            else:
+                specs.setdefault(n, m.group(2))
         elif problems is not None:
             problems.append(f"unparseable requirement line: {stripped}")
-    return names
+    return specs
 
 
 def bump(old: str, new: str) -> str:
@@ -372,17 +383,29 @@ def drift(python: str, req: Path, lock: Path) -> int:
 def check(python: str, req: Path, lock: Path) -> int:
     """Deterministic merge gate: never resolves against the package index, so
     a patch shipped upstream after the merge cannot fail it. Fails on a
-    requirement the lock does not pin, an unparseable requirement line, a pin
-    without a hash, and per-platform hash validation (including a pin pip
-    would install yanked on a shipped platform). Use `drift` for the live
-    report of what moved."""
+    requirement the lock does not pin, a locked version outside its
+    requirement's version range, an unparseable requirement line or
+    specifier, a pin without a hash, and per-platform hash validation
+    (including a pin pip would install yanked on a shipped platform). Use
+    `drift` for the live report of what moved."""
     tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-check-"))
     lock_pins = read_pins(lock)
 
     problems: list[str] = []
-    names = req_names(req, problems)
-    for n in sorted(set(names) - set(lock_pins)):
+    specs = req_specs(req, problems)
+    for n in sorted(set(specs) - set(lock_pins)):
         problems.append(f"missing from lock: {n}")
+    for n in sorted(set(specs) & set(lock_pins)):
+        if not specs[n]:
+            continue
+        try:
+            satisfies = SpecifierSet(specs[n]).contains(lock_pins[n])
+        except InvalidSpecifier:
+            problems.append(f"invalid specifier: {n} {specs[n]}")
+            continue
+        if not satisfies:
+            problems.append(f"outside range: {n}=={lock_pins[n]} "
+                            f"does not satisfy {specs[n]}")
     # every lock pin must carry at least one hash
     text = lock.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(text):

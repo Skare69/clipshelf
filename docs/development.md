@@ -128,7 +128,10 @@ so the audited set is the shipped set:
   that timeline on a fake index at release ages 6 days 23 hours and 7 days
   1 hour. Only the non-blocking `drift` report moves with the clock. CI runs
   `check` as the blocking gate. It fails when `requirements.txt` names a package the lock
-  does not pin, when a lock pin carries no hash, or when a shipped platform
+  does not pin, when a locked version does not satisfy that requirement's
+  version range (so a security floor raised in `requirements.txt` fails CI
+  until a `make` run regenerates the lock), when a lock pin carries no hash, or when a
+  shipped platform
   (Windows, linux/amd64, linux/arm64) lacks a wheel matching the lock's
   hashes; pip reports a yanked pin during that validation, and a yanked pin
   fails the check too (pip installs yanked files under exact pins and

@@ -183,6 +183,29 @@ class CheckTests(unittest.TestCase):
         self.assertIn("unparseable requirement line: "
                       "demo @ https://example.invalid/demo.tar.gz", out)
 
+    def test_lock_version_outside_range_fails(self):
+        # the shipped pin must satisfy the whole range, upper bound included
+        code, out, _ = self.check(req_text="demo>=0.9,<1.0\n")
+        self.assertEqual(code, 1)
+        self.assertIn("DRIFT:", out)
+        self.assertIn("outside range: demo==1.0 does not satisfy >=0.9,<1.0", out)
+
+    def test_raised_floor_above_lock_fails(self):
+        # a security floor raised above the shipped pin must fail CI until a
+        # make run regenerates the lock (CLIP-116: the name-only gate kept
+        # shipping it)
+        code, out, _ = self.check(req_text="demo>=1.1\n")
+        self.assertEqual(code, 1)
+        self.assertIn("DRIFT:", out)
+        self.assertIn("outside range: demo==1.0 does not satisfy >=1.1", out)
+
+    def test_invalid_specifier_fails(self):
+        # a typo'd range is a gate problem, not a traceback
+        code, out, _ = self.check(req_text="demo>=banana\n")
+        self.assertEqual(code, 1)
+        self.assertIn("DRIFT:", out)
+        self.assertIn("invalid specifier: demo >=banana", out)
+
     def test_pin_without_hash_fails(self):
         code, out, _ = self.check(req_text="demo>=0.9\n",
                                   lock_text="demo==1.0\n")
