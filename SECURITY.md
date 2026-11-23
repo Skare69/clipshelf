@@ -6,7 +6,7 @@ Security fixes go to the latest release only.
 
 | Version | Supported |
 |---|---|
-| Latest release (v0.11.x) | Yes |
+| Latest release | Yes |
 | Older releases | No |
 
 ## How to report a vulnerability
