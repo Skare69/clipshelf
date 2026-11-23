@@ -33,7 +33,7 @@ applicable again and this record must be revised.
 | Python mutation testing | Applicable, tooling on main | `mutate.py` (from `ott/27f2220b`) runs locally; it is not a CI gate |
 | Dependency license inventory + allowlist | Applicable, enforced | `ci.yml` runs `check_licenses.py` against `license_inventory.toml` in both jobs (green 2026-10-03: python 31 pins, android 30 artifacts); the tables below are the observed snapshot behind it |
 | Bun/JS vulnerability + license audit | Not applicable | No manifest exists (see stack inventory) |
-| Gradle vulnerability audit | No first-party scanner; licenses enforced | `ci.yml` android job resolves `releaseRuntimeClasspath` and gates it through `check_licenses.py android`; exact pins in `build.gradle`, wrapper pins Gradle 8.9 and AGP 8.7.3; Gradle-artifact vulnerability scanning remains a gap |
+| Gradle vulnerability audit | No first-party scanner; licenses enforced | `ci.yml` android job resolves `releaseRuntimeClasspath` and gates it through `check_licenses.py android`; exact pins in `build.gradle`, wrapper pins Gradle 9.9.2 and AGP 9.5.2; Gradle-artifact vulnerability scanning remains a gap |
 | Docker image / OS-package audit | Pins enforced; no OS-package vulnerability scan | `ci.yml` python job runs `python check_licenses.py`, whose default run includes the image check: the Dockerfile base image, apt stage sets, and SQLite ARGs must match `license_inventory.toml`, and the Dockerfile must COPY `THIRD_PARTY_NOTICES.md`. It reads the Dockerfile, not a built image. `docker-publish.yml` (v* tag or manual dispatch only) builds the amd64 image and fails when its installed Python set differs from `requirements.lock`. Debian-package vulnerability scanning remains a gap |
 
 ## Observed license inventory (snapshot 2026-10-02)
@@ -99,8 +99,8 @@ Direct: `androidx.work:work-runtime:2.9.1`. Every POM in the resolved tree
 declares "The Apache Software License, Version 2.0" except
 `com.google.guava:listenablefuture:1.0`, whose POM carries no
 `<licenses>` block at all (its upstream source is Apache-2.0); that gap is
-tracked in the enforced inventory. Build-time and test-scoped tooling — Gradle wrapper 8.9,
-AGP 8.7.3, JDK 17, junit (`testImplementation`) — is not shipped and stays out
+tracked in the enforced inventory. Build-time and test-scoped tooling — Gradle wrapper 9.9.2,
+AGP 9.5.2, JDK 17, junit (`testImplementation`) — is not shipped and stays out
 of this inventory.
 
 | Group | Artifacts |
