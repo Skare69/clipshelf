@@ -2,10 +2,17 @@
 
 Stdlib seeded fuzz loop — no new dependencies. Fixed seed, 150 runs per
 property; the review-found counterexamples run first as explicit examples.
-Offline: DNS is faked, no database is touched. Each property states one rule
+Offline: DNS is faked, and the feed property talks to a throwaway in-memory
+test database, never the real one. Each property states one rule
 that must hold for every input (idempotence, confinement, 4xx-never-500,
 parser agreement, reference agreement); a failure prints the seed and input.
+
+Reviews rerun the suite with a random seed and far more runs, without
+editing this file:
+  CLIPSHELF_PROPERTY_SEED=<random> CLIPSHELF_PROPERTY_RUNS=15000 \
+      python3 test_properties.py
 """
+import contextlib
 import io
 import ipaddress
 import json
@@ -27,13 +34,33 @@ import django
 
 django.setup()
 
+from allauth.account.models import EmailAddress
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.test import Client
+from django.test import runner as test_runner
+from django.test import utils as test_utils
 
-from clipshelf import follows, imports, interpretation, lib, models, network
+from clipshelf import acquisition, follows, imports, interpretation
+from clipshelf import lib, models, network, services
 from clipshelf.api import ApiError, json_body
 
-SEED = 20261014
-RUNS = 150
+
+def _env_int(name, default):
+    """Optional integer override for the review runs; bad values stop now."""
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise SystemExit(f"{name} must be an integer, not {raw!r}")
+
+
+SEED = _env_int("CLIPSHELF_PROPERTY_SEED", 20261014)
+RUNS = _env_int("CLIPSHELF_PROPERTY_RUNS", 150)
+if RUNS < 1:
+    raise SystemExit("CLIPSHELF_PROPERTY_RUNS must be at least 1")
 MAX_BODY_BYTES = 64 * 1024
 
 # chars that render as blank space but count as letters; combining marks and
@@ -494,6 +521,152 @@ def prop_profile_url(rng):
             raise AssertionError(f"expected {expect!r} for {url!r}, got {got!r}")
 
 
+# ------------------------------------------------- 8. acquisition.list_profile_posts
+
+def prop_list_profile_posts(rng):
+    """Any extractor stdout raises only ListingError, or yields posts whose
+    ids are at most 64 characters and whose URLs are http(s)."""
+    url = "https://www.tiktok.com/@creator"
+    corpus = [
+        b'{"entries": [{"id": "7101",'
+        b' "url": "https://www.tiktok.com/@c/video/7101"}]}',
+        b'{"entries": []}', b'{"entries": {}}', b'[]', b'null', b'{}',
+        b'not json', b'', b'\xff\xfe{"entries": []}',
+        b'{"entries": [{"id": "' + b"9" * 300 + b'", "url": "https://x/y"}]}',
+        b'{"entries": [{"id": 7102, "url": 7102}]}',
+        b'{"entries": [{"id": "7103", "url": "ftp://x/y"},'
+        b' {"id": "7104", "url": "https://x"}]}',
+        b'{"entries": ["nope", null, 3]}',
+        b'{"entries": [{"id": "7105", "webpage_url": "https://x/y"}]}',
+    ]
+    for _ in range(RUNS):
+        corpus.append(json.dumps(rand_json(rng)).encode("utf-8"))
+    holder = {}
+    saved = (acquisition._run_listing, network.extractor_egress)
+
+    def fake_run(argv):
+        return 0, holder["stdout"], ""
+
+    def fake_egress():
+        return contextlib.nullcontext("http://127.0.0.1:0")
+
+    bad = []
+    try:
+        acquisition._run_listing = fake_run
+        network.extractor_egress = fake_egress
+        for stdout in corpus:
+            holder["stdout"] = stdout
+            try:
+                posts = acquisition.list_profile_posts(url)
+            except acquisition.ListingError:
+                continue
+            except Exception as exc:
+                bad.append(("unexpected exception", stdout[:60],
+                            type(exc).__name__))
+                continue
+            for post in posts:
+                if not (isinstance(post["id"], str) and post["id"]
+                        and len(post["id"]) <= 64):
+                    bad.append(("bad id", stdout[:60], repr(post["id"])[:60]))
+                if not post["url"].startswith(("http://", "https://")):
+                    bad.append(("non-http url", stdout[:60],
+                                repr(post["url"])[:60]))
+    finally:
+        acquisition._run_listing, network.extractor_egress = saved
+    assert not bad, f"({len(bad)} violations) {bad[:3]}"
+
+
+# ------------------------------------------------------- 9. /api/feed queries
+
+ISO_OK = [
+    "2026-01-15T10:30:00+00:00", "2026-01-15T10:30:00Z",
+    "2026-01-15T10:30:00.123456+02:00", "2026-06-01T00:00:00-08:00",
+]
+SINCE_BAD = [
+    "2026-02-30T00:00:00+00:00",   # the shipped 500 counterexample
+    "0000-00-00T00:00:00+00:00", "2026-13-45T09:99:99+00:00",
+    "not-a-date", "", "  ", "2026-01-15", "10:30:00",
+    "2026-01-15T10:30:00",                          # naive: no UTC offset
+    "x" * 300, "２０２６-01-15T00:00:00+00:00",
+    "2026-01-15T10:30:00+00:00' --", "2026-01-15T10:30:00+99:99",
+]
+LIMIT_SAMPLES = ["", "abc", "0", "-1", "100", "501",
+                 "99999999999999999999999", " 42 ", "+7", "1_0", "1.5",
+                 "١٢", "１２", "None", "500e0"]
+TAG_SAMPLES = ["", " music ", "MUSIC", "café", "<script>", "\u3164",
+               "a" * 300, "music\u0301", "x; drop table", "♪"]
+
+_feed_state = {}
+
+
+def _feed_client():
+    """One authenticated client on a throwaway in-memory test database."""
+    if "client" not in _feed_state:
+        test_utils.setup_test_environment()
+        db_runner = test_runner.DiscoverRunner(interactive=False, verbosity=0)
+        db_runner.setup_databases()
+        email = "properties@example.com"
+        user = get_user_model().objects.create_user(
+            username=email, email=email, password="property-pass-1234")
+        EmailAddress.objects.create(user=user, email=email,
+                                    verified=True, primary=True)
+        services.personal_collection(user)
+        client = Client()
+        client.force_login(user)
+        _feed_state["client"] = client
+    return _feed_state["client"]
+
+
+def rand_since(rng):
+    """ISO-shaped values that are often calendar-invalid, plus pure garbage."""
+    if rng.random() < 0.5:
+        return rng.choice(ISO_OK + SINCE_BAD)
+    return (f"2026-{rng.randint(0, 99):02d}-{rng.randint(0, 99):02d}"
+            f"T{rng.randint(0, 99):02d}:{rng.randint(0, 99):02d}"
+            f":{rng.randint(0, 99):02d}"
+            f"+{rng.choice(['00', '05', '13', '99'])}"
+            f":{rng.choice(['00', '30', '99'])}")
+
+
+def prop_feed(rng):
+    """/api/feed answers 200 or 400 for any query values — never 500."""
+    client = _feed_client()
+    corpus = [
+        {"since": "2026-02-30T00:00:00+00:00"},  # shipped 500 counterexample
+        {}, {}, {"since": "2026-01-15T10:30:00+00:00"},
+        {"since": "2026-01-15T10:30:00+00:00", "limit": "10",
+         "tag": " music "},
+    ]
+    for _ in range(RUNS):
+        query = {}
+        if rng.random() < 0.9:
+            query["since"] = rand_since(rng)
+        if rng.random() < 0.7:
+            query["limit"] = rng.choice(
+                LIMIT_SAMPLES + [str(rng.randint(-5, 700))])
+        if rng.random() < 0.7:
+            query["tag"] = rng.choice(TAG_SAMPLES)
+        corpus.append(query)
+    bad = []
+    for query in corpus:
+        try:
+            response = client.get("/api/feed", query)
+        except Exception as exc:
+            # DEBUG mode re-raises view crashes; a crash is never a 4xx.
+            bad.append(("view raised", query, type(exc).__name__))
+            continue
+        if response.status_code not in (200, 400):
+            bad.append(("status", response.status_code, query,
+                        response.content[:120]))
+            continue
+        if response.status_code == 200:
+            payload = json.loads(response.content)
+            if not (isinstance(payload.get("entries"), list)
+                    and isinstance(payload.get("count"), int)):
+                bad.append(("body shape", query))
+    assert not bad, f"({len(bad)} violations) {bad[:3]}"
+
+
 # --------------------------------------------------------------------- harness
 
 PROPERTIES = [
@@ -506,10 +679,13 @@ PROPERTIES = [
     ("validated", prop_validated),
     ("validate_url", prop_validate_url),
     ("profile_url", prop_profile_url),
+    ("list_profile_posts", prop_list_profile_posts),
+    ("feed", prop_feed),
 ]
 
 
 def main():
+    print(f"seed {SEED}, {RUNS} runs per property")
     failures = []
     for name, fn in PROPERTIES:
         rng = random.Random(SEED)
