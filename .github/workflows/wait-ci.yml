@@ -6,7 +6,9 @@ name: wait-ci
 # anyway (v0.10.0 release-review finding). Fail closed: hold until the tagged
 # commit's ci.yml run (license, lock, audit and test gates, python+android)
 # finishes green; any other conclusion, a gh api error, or a 90-minute wait
-# fails the job. Needs only the Actions API, no checkout.
+# fails the job. Only the push run on main counts: a pull_request run with the
+# same head sha tests a different merge tree and never satisfies the gate
+# (CLIP-108). Needs only the Actions API, no checkout.
 
 on:
   workflow_call:
@@ -23,7 +25,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          url="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=1"
+          url="repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=1"
           for i in $(seq 1 90); do
             info=$(gh api "$url" \
               --jq '.workflow_runs[0] | if . then "\(.status) \(.conclusion // "")" else "" end')
