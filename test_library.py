@@ -290,6 +290,68 @@ class PrivacyTests(ApiTestCase):
         self.assertEqual(response.status_code, 404)
 
 
+class ContributorEmailPrivacyTests(ApiTestCase):
+    """Contributor addresses travel only to the owner and to the
+    contributor's own row: a member reading an entry another member added
+    must not collect that member's email. The collection roster went
+    owner-only for the same reason."""
+
+    def _shared(self):
+        self.carol = self._user("carol@example.com")
+        shared = Collection.objects.create(
+            name="Shared", kind="shared", owner=self.alice
+        )
+        Membership.objects.create(collection=shared, user=self.bob)
+        Membership.objects.create(collection=shared, user=self.carol)
+        # One entry, three contributions: carol added it, bob and the
+        # owner joined in.
+        entry, _ = self._contribute(self.carol, shared)
+        self._contribute(self.bob, shared)
+        self._contribute(self.alice, shared)
+        return shared, entry
+
+    def test_member_listing_hides_other_contributors_email(self):
+        shared, _ = self._shared()
+        payload = self._login(self.bob).get(
+            "/api/entries", {"collection_id": str(shared.id)}
+        ).json()
+        self.assertEqual(payload["count"], 1)
+        body = json.dumps(payload)
+        self.assertNotIn("carol@example.com", body)
+        self.assertNotIn("alice@example.com", body)
+        rows = {c["id"]: c for c in payload["entries"][0]["contributors"]}
+        self.assertEqual(rows[str(self.bob.id)]["email"], "bob@example.com")
+        self.assertTrue(rows[str(self.bob.id)]["is_self"])
+        self.assertNotIn("email", rows[str(self.carol.id)])
+        self.assertFalse(rows[str(self.carol.id)]["is_self"])
+
+    def test_member_detail_and_feed_hide_other_contributors_email(self):
+        shared, entry = self._shared()
+        bob = self._login(self.bob)
+        detail = bob.get(f"/api/entries/{entry.id}").json()
+        self.assertNotIn("carol@example.com", json.dumps(detail))
+        self.assertNotIn("alice@example.com", json.dumps(detail))
+        since = (timezone.now() - timedelta(hours=1)).isoformat()
+        feed = bob.get("/api/feed", {"since": since}).json()
+        self.assertEqual(feed["count"], 1)
+        self.assertNotIn("carol@example.com", json.dumps(feed))
+        self.assertNotIn("alice@example.com", json.dumps(feed))
+        self.assertIn("bob@example.com", json.dumps(feed))
+
+    def test_owner_still_sees_all_contributor_emails(self):
+        shared, _ = self._shared()
+        payload = self._login(self.alice).get(
+            "/api/entries", {"collection_id": str(shared.id)}
+        ).json()
+        body = json.dumps(payload)
+        self.assertIn("carol@example.com", body)
+        self.assertIn("bob@example.com", body)
+        self.assertIn("alice@example.com", body)
+        rows = {c["id"]: c for c in payload["entries"][0]["contributors"]}
+        self.assertTrue(rows[str(self.alice.id)]["is_self"])
+        self.assertEqual(rows[str(self.carol.id)]["email"], "carol@example.com")
+
+
 class CollectionMembershipTests(ApiTestCase):
     def setUp(self):
         super().setUp()

@@ -487,7 +487,11 @@ def _stored_list(value):
 
 def serialize_entry(entry, user):
     """Flat API entry merged from the contributions REMAINING in this
-    collection. Private data of removed contributions never appears."""
+    collection. Private data of removed contributions never appears.
+    Contributor email addresses go only to the collection owner and to the
+    contributor's own row — membership is by invited email, so exposing
+    them to members would publish addresses the caller never met (the same
+    posture as the owner-only collection roster)."""
     contributions = entry.contributions.select_related("user").annotate(
         has_findings=Q(job__isnull=False) & ~Q(job__findings={}),
     ).order_by("created_at", "id")
@@ -528,7 +532,16 @@ def serialize_entry(entry, user):
             sources.append({"url": url, "title": _str(item.get("title")) if isinstance(item, dict) else ""})
         if contribution.user_id == user.id:
             user_contributed = True
-        contributors.append({"id": str(contribution.user_id), "email": contribution.user.email})
+        # Same posture as the owner-only roster: an address is visible to
+        # the collection owner and to its own contributor, never to other
+        # members. Other rows carry id and is_self only.
+        contributor = {
+            "id": str(contribution.user_id),
+            "is_self": contribution.user_id == user.id,
+        }
+        if contributor["is_self"] or entry.collection.owner_id == user.id:
+            contributor["email"] = contribution.user.email
+        contributors.append(contributor)
     return {
         "id": str(entry.id),
         "kind": entry.kind,

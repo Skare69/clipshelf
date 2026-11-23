@@ -50,11 +50,24 @@ function tagList(tags, max) {
       "aria-label": `Show items tagged ${t}` }, t)),
     tags.length > shown.length ? el("span", { class: "tag more", text: `+${tags.length - shown.length}` }) : null);
 }
+function contribLabels(e) {
+  // The API hides other members' addresses; rows without an email that are
+  // not the caller's stay anonymous and collapse into one count.
+  const cs = e.contributors || [];
+  const out = cs.some(c => c.is_self) ? ["you"] : [];
+  const others = cs.filter(c => !c.is_self);
+  out.push(...new Set(others.map(c => c.email).filter(Boolean)));
+  const anon = others.filter(c => !c.email).length;
+  if (anon) out.push(plural(anon, "member", "members"));
+  return out;
+}
 function byLine(e) {
-  const mail = (e.contributors || []).map(c => c.email).filter(Boolean);
+  const cs = e.contributors || [];
+  const labels = contribLabels(e);
+  const mail = cs.map(c => c.email).filter(Boolean);
   const me = S.me?.user?.email;
-  if (!mail.length || (!colShared() && mail.every(m => m === me))) return null;
-  return el("p", { class: "by", text: "Added by " + mail.join(", ") });
+  if (!labels.length || (!colShared() && mail.every(m => m === me))) return null;
+  return el("p", { class: "by", text: "Added by " + labels.join(", ") });
 }
 
 /* ---------- library ---------- */
@@ -448,7 +461,7 @@ async function openDetail(id) {
   const e = j.entry || {}, prompt = e.kind === "prompt";
   $("#detHead").textContent = e.title || (prompt ? "Untitled prompt" : e.url ? shortHost(e.url) : "Entry");
   const url = safeUrl(e.url), cat = note(e);
-  const contrib = (e.contributors || []).map(c => c.email).filter(Boolean);
+  const contrib = contribLabels(e);
   let remove = null;
   if (e.can_remove) {
     remove = el("button", { class: "btn small", type: "button" }, "Remove from collection");
