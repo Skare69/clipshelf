@@ -142,7 +142,7 @@ const S = {
   vt: localStorage.getItem("clipshelf.view") === "list" ? "list" : "grid",
   entries: [], count: 0, total: 0, offset: 0, limit: 100, capsLoaded: false,
   cats: new Map(), tags: new Set(),
-  captures: [], capFilter: "all", capTimer: null, libTimer: null,
+  captures: [], capCount: null, capFilter: "all", capTimer: null, libTimer: null,
   inboxActive: 0, seq: 0
 };
 const catsFresh = () => { S.cats = new Map(); S.tags = new Set(); };
@@ -231,7 +231,7 @@ function onAuthLoss() {
   if (redirecting) return;
   redirecting = true;
   clearInterval(S.capTimer); clearTimeout(S.libTimer); clearTimeout(bannerTimer);
-  S.me = null; S.entries = []; S.captures = []; catsFresh();
+  S.me = null; S.entries = []; S.captures = []; S.capCount = null; catsFresh();
   location.assign("/accounts/login/?next=/");
 }
 

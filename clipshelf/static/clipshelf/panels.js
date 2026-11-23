@@ -337,6 +337,7 @@ async function loadCaptures() {
     const j = await api("/api/captures?collection_id=" + S.col);
     if (S.view !== "inbox") return;
     S.captures = j.captures || [];
+    S.capCount = typeof j.count === "number" ? j.count : null;
     S.capsLoaded = true;
     setInboxCount(S.captures);
     renderInbox();
@@ -358,6 +359,7 @@ function pollCaptures() {
       if (sig === last) return;  // nothing moved: keep the DOM, focus, and selection
       last = sig;
       S.captures = caps;
+      S.capCount = typeof j.count === "number" ? j.count : null;
       setInboxCount(caps);
       renderInbox();
     } catch {}
@@ -389,9 +391,10 @@ function keepFocus(fn) {
 }
 function renderInbox() {
   const all = S.captures, act = all.filter(captureActive).length, bad = all.filter(captureBad).length;
-  inSum.replaceChildren(plural(all.length, "capture", "captures"),
+  const total = S.capCount ?? all.length;
+  inSum.replaceChildren(plural(total, "capture", "captures"),
     act ? ` · ${act} in progress` : "", bad ? el("span", { class: "need", text: ` · ${bad} need you` }) : "");
-  const n = { all: all.length, active: act, attention: bad };
+  const n = { all: total, active: act, attention: bad };
   for (const b of inSeg.children) b.textContent = `${IN_NAMES[b.dataset.v]} ${n[b.dataset.v]}`;
   let caps = all;
   if (S.capFilter === "active") caps = caps.filter(captureActive);

@@ -190,12 +190,15 @@ def accept_capture(user, client_request_id, text, collection_id, follow=None):
     return capture, True
 
 
-def receipt(capture):
-    """JSON-safe immutable receipt for an accepted capture."""
+def receipt(capture, settings_row=None):
+    """JSON-safe immutable receipt for an accepted capture; settings_row may
+    be passed in to avoid a per-call read."""
     return {
         "id": str(capture.id),
         "client_request_id": str(capture.client_request_id),
-        "instance_id": str(get_settings().instance_id),
+        "instance_id": str(
+            (settings_row if settings_row is not None else get_settings()).instance_id
+        ),
         "user_id": str(capture.user_id),
         "requested_collection_id": (
             str(capture.requested_collection_id) if capture.requested_collection_id else None

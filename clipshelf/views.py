@@ -177,13 +177,12 @@ def _job_json(job, user=None):
     }
 
 
-def _capture_json(capture):
-    jobs = Job.objects.filter(capture=capture)
+def _capture_json(capture, settings_row=None):
     return {
         "id": str(capture.id),
-        "receipt": services.receipt(capture),
+        "receipt": services.receipt(capture, settings_row),
         "text": capture.raw_text[:500],
-        "jobs": [_job_json(j) for j in jobs],
+        "jobs": [_job_json(j) for j in capture.jobs.all()],
     }
 
 
@@ -656,12 +655,32 @@ def _check_identity(body, user):
 def api_captures(request):
     user = request.user
     if request.method == "GET":
-        captures = Capture.objects.filter(user=user).order_by("-received_at")
+        try:
+            offset = max(0, int(request.GET.get("offset", "0")))
+            limit = int(request.GET.get("limit", str(DEFAULT_PAGE)))
+        except ValueError:
+            raise ApiError(400, detail="offset and limit must be integers")
+        if limit <= 0:
+            raise ApiError(400, detail="limit must be positive")
+        limit = min(limit, MAX_PAGE)
+        captures = (
+            Capture.objects.filter(user=user)
+            .order_by("-received_at")
+            .prefetch_related("jobs")
+        )
         collection_id = request.GET.get("collection_id")
         if collection_id:
             collection = _accessible_collection(user, collection_id)
             captures = captures.filter(collection=collection)
-        return JsonResponse({"captures": [_capture_json(c) for c in captures]})
+        # One settings row read per request, not one per capture.
+        settings_row = services.get_settings()
+        return JsonResponse({
+            "captures": [
+                _capture_json(c, settings_row)
+                for c in captures[offset : offset + limit]
+            ],
+            "count": captures.count(),
+        })
 
     body = json_body(request)
     request_id = _uuid_or_400(body.get("client_request_id"), "client_request_id")

@@ -1676,6 +1676,41 @@ class CaptureTests(ApiTestCase):
         )
         self.assertEqual(response.status_code, 404)
 
+    def test_captures_listing_is_paged_and_constant_query(self):
+        col = self.alice_personal
+        caps = Capture.objects.bulk_create(
+            Capture(
+                user=self.alice, client_request_id=uuid.uuid4(),
+                raw_text=f"capture {i}", collection=col, request_hash="h" * 64,
+            )
+            for i in range(300)
+        )
+        Job.objects.bulk_create(
+            Job(capture=c, collection=col, url=f"https://example.com/{i}")
+            for i, c in enumerate(caps)
+        )
+        alice = self._login(self.alice)
+        # Pre-warm: the setup middleware's user-exists probe is a one-way
+        # module latch, so the first request in a fresh process pays it once.
+        alice.get("/api/captures")
+        # Session, user, verified email, settings row, page, jobs prefetch, count.
+        with self.assertNumQueries(7):
+            listing = alice.get("/api/captures").json()
+        self.assertLessEqual(len(listing["captures"]), views.DEFAULT_PAGE)
+        self.assertEqual(listing["count"], 300)
+        seen = []
+        for offset in range(0, 300, views.DEFAULT_PAGE):
+            page = alice.get(
+                "/api/captures", {"limit": views.DEFAULT_PAGE, "offset": offset}
+            ).json()
+            self.assertEqual(page["count"], 300)
+            seen.extend(c["id"] for c in page["captures"])
+        self.assertEqual(len(seen), 300)
+        self.assertEqual(len(set(seen)), 300)
+        small = alice.get("/api/captures", {"limit": 5}).json()
+        self.assertEqual(len(small["captures"]), 5)
+        self.assertEqual(small["count"], 300)
+
     def test_inbox_returns_a_bounded_raw_text_preview(self):
         alice = self._login(self.alice)
         text = "https://example.com/widget " + "x" * 600
