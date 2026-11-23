@@ -6,9 +6,9 @@
 <h1>Set up Clipshelf</h1>
 <p>Create the administrator account for this server.</p>
 
-{% if errors %}
-<ul class="messages" role="alert" id="setup-errors">
-  {% for error in errors %}<li class="msg msg-error">{{ error }}</li>{% endfor %}
+{% if errors.form %}
+<ul class="messages" role="alert" id="form-errors">
+  {% for error in errors.form %}<li class="msg msg-error">{{ error }}</li>{% endfor %}
 </ul>
 {% endif %}
 
@@ -18,18 +18,35 @@
     <label for="id_email">Email</label>
     <input type="email" name="email" id="id_email" autocomplete="email"
            required value="{{ email }}"
-           {% if errors %}aria-describedby="setup-errors"{% endif %}>
+           {% if errors.email %}aria-invalid="true" aria-describedby="email-errors"{% endif %}>
   </p>
+  {% if errors.email %}
+  <ul class="messages" role="alert" id="email-errors">
+    {% for error in errors.email %}<li class="msg msg-error">{{ error }}</li>{% endfor %}
+  </ul>
+  {% endif %}
   <p>
     <label for="id_password1">Password</label>
     <input type="password" name="password1" id="id_password1"
-           autocomplete="new-password" required>
+           autocomplete="new-password" required
+           {% if errors.password1 %}aria-invalid="true" aria-describedby="password1-errors"{% endif %}>
   </p>
+  {% if errors.password1 %}
+  <ul class="messages" role="alert" id="password1-errors">
+    {% for error in errors.password1 %}<li class="msg msg-error">{{ error }}</li>{% endfor %}
+  </ul>
+  {% endif %}
   <p>
     <label for="id_password2">Confirm password</label>
     <input type="password" name="password2" id="id_password2"
-           autocomplete="new-password" required>
+           autocomplete="new-password" required
+           {% if errors.password2 %}aria-invalid="true" aria-describedby="password2-errors"{% endif %}>
   </p>
+  {% if errors.password2 %}
+  <ul class="messages" role="alert" id="password2-errors">
+    {% for error in errors.password2 %}<li class="msg msg-error">{{ error }}</li>{% endfor %}
+  </ul>
+  {% endif %}
   <button type="submit">Create administrator</button>
 </form>
 {% endblock %}

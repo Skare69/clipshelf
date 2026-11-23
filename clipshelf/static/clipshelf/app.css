@@ -378,6 +378,8 @@ details.imp .hint{margin-top:12px}
 .acct-card form label:has(input[type=radio]){display:flex;align-items:center;gap:8px;
   font-size:var(--t2);font-weight:500}
 .acct-card ul{padding-left:20px}
+/* .messages lists (flash + setup error states) align with the form controls */
+.acct-card ul.messages{padding-left:0}
 .acct-card ul.errorlist{list-style:none;margin:6px 0 0;padding:8px 12px;border-radius:var(--r-ctl);
   background:var(--err-soft);color:var(--err);font-size:var(--t2);font-weight:600}
 .fld{margin:0 0 16px}

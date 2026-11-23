@@ -51,7 +51,10 @@ def setup_view(request):
     if not needs_setup():
         return redirect(settings.LOGIN_URL)
 
-    errors = []
+    # Per-field errors, so each input can link its own messages via
+    # aria-describedby instead of pointing every error at the Email field.
+    # "form" holds request-level problems that belong to no single input.
+    errors = {"form": [], "email": [], "password1": [], "password2": []}
     if request.method == "POST":
         email = request.POST.get("email", "").strip()
         password1 = request.POST.get("password1", "")
@@ -59,18 +62,18 @@ def setup_view(request):
         try:
             EmailValidator()(email)
         except ValidationError:
-            errors.append("Enter a valid email address.")
+            errors["email"].append("Enter a valid email address.")
         if password1 != password2:
-            errors.append("Passwords do not match.")
-        if not errors:
+            errors["password2"].append("Passwords do not match.")
+        if not any(errors.values()):
             try:
                 # user carries the email so UserAttributeSimilarityValidator
                 # rejects a password equal or similar to it, matching the
                 # allauth signup path.
                 validate_password(password1, user=User(email=email))
             except ValidationError as exc:
-                errors.extend(exc.messages)
-        if not errors:
+                errors["password1"].extend(exc.messages)
+        if not any(errors.values()):
             with transaction.atomic():
                 # ponytail: exists() re-check inside the transaction guards a
                 # concurrent second POST; SQLite serializes writers.
@@ -116,13 +119,18 @@ def csrf_failure(request, reason="", template_name="403_csrf.html"):
         "clipshelf/setup.html",
         {
             "email": "",
-            "errors": [
-                "Setup could not verify this request: the browser's Origin "
-                "does not match this server's address (CSRF check). Reach the "
-                "server directly, or set CLIPSHELF_ORIGIN to the address shown "
-                "in the browser (for example CLIPSHELF_ORIGIN=https://nas.example), "
-                "restart, and reload this page."
-            ],
+            "errors": {
+                "form": [
+                    "Setup could not verify this request: the browser's Origin "
+                    "does not match this server's address (CSRF check). Reach the "
+                    "server directly, or set CLIPSHELF_ORIGIN to the address shown "
+                    "in the browser (for example CLIPSHELF_ORIGIN=https://nas.example), "
+                    "restart, and reload this page."
+                ],
+                "email": [],
+                "password1": [],
+                "password2": [],
+            },
         },
         status=403,
     )
