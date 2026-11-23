@@ -189,8 +189,11 @@ public class LibraryActivity extends AppCompatActivity {
             }
             collections = me.collections;
             defaultCollectionId = me.defaultCollectionId;
-            // First load opens the default collection; later loads keep the choice.
-            if (collectionId == null) {
+            // First load opens the default collection; later loads keep the
+            // choice — unless the stored id is not in the fresh list, which
+            // happens when the session switched to another server or account
+            // (the old id answers HTTP 404 there, leaving the list empty).
+            if (collectionId == null || !hasCollection(collectionId)) {
                 collectionId = defaultCollectionId != null && hasCollection(defaultCollectionId)
                         ? defaultCollectionId
                         : (collections.isEmpty() ? null : collections.get(0).id);

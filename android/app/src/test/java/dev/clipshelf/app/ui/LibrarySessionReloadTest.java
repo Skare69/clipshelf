@@ -77,6 +77,14 @@ public class LibrarySessionReloadTest {
             + " \"default_collection_id\": \"c1\","
             + " \"collections\": [{\"id\": \"c1\", \"name\": \"Personal\","
             + " \"kind\": \"personal\", \"owner_id\": \"42\", \"can_manage\": true}]}";
+    // The switched-to account holds only "c2": a stored "c1" is not in the
+    // fresh collections list and the server answers it with HTTP 404
+    // (views.py: collection not accessible), so Library must re-pick.
+    private static final String ME_JSON_C2 = "{\"instance_id\": \"" + INSTANCE_ID + "\","
+            + " \"user\": {\"id\": \"42\", \"email\": \"user@example.com\"},"
+            + " \"default_collection_id\": \"c2\","
+            + " \"collections\": [{\"id\": \"c2\", \"name\": \"Work\","
+            + " \"kind\": \"personal\", \"owner_id\": \"42\", \"can_manage\": true}]}";
     // One entry of 40: a loaded page leaves "Load more" visible, so the
     // stale-session path (paging with the revoked token) is reachable.
     private static final String ENTRIES_JSON = "{\"entries\": [{\"id\": \"e1\","
@@ -184,6 +192,33 @@ public class LibrarySessionReloadTest {
         // run with the adopted session, not a stale field.
         library.findViewById(R.id.library_more).performClick();
         await(originB, "/api/entries", TOKEN_B);
+        assertTrue("the old origin must not be contacted after the change",
+                originA.hits.isEmpty());
+    }
+
+    /** Switch to an endpoint whose account holds only collection "c2":
+     *  the stored id "c1" is not in the new me payload, so reload must fall
+     *  back to the new default before paging. The old id answers HTTP 404
+     *  ("collection not accessible"), which leaves the list empty and in
+     *  error until the user picks a collection by hand. */
+    @Test
+    public void endpointChangeToDifferentCollectionLoadsTheNewDefault() throws Exception {
+        Creds.save(ctx, profile(originA.url), TOKEN_A);
+        LibraryActivity library = Robolectric.setupActivity(LibraryActivity.class);
+        await(originA, "/api/me", TOKEN_A);
+        await(originA, "/api/entries", TOKEN_A);
+        originA.hits.clear();
+
+        Creds.save(ctx, profile(originB.url), TOKEN_B);
+        originB.meJson = ME_JSON_C2;
+        Toolbar toolbar = library.findViewById(R.id.toolbar);
+        toolbar.getMenu().performIdentifierAction(R.id.menu_refresh, 0);
+
+        await(originB, "/api/me", TOKEN_B);
+        await(originB, "/api/entries", TOKEN_B);
+        String query = queryOf(originB, "/api/entries", TOKEN_B);
+        assertTrue("entries must load collection c2 after the switch, saw query: " + query,
+                query != null && query.contains("collection_id=c2"));
         assertTrue("the old origin must not be contacted after the change",
                 originA.hits.isEmpty());
     }
@@ -354,11 +389,14 @@ public class LibrarySessionReloadTest {
         }
     }
 
-    /** {path, X-Session-Token} per request the origin received. */
+    /** {path, X-Session-Token, query} per request the origin received. */
     private static final class Origin {
         private final HttpServer server;
         final String url;
         final List<String[]> hits = Collections.synchronizedList(new ArrayList<>());
+        // Body served for /api/me; a test swaps it before the switched-to
+        // origin receives its first request.
+        String meJson = ME_JSON;
 
         Origin() throws IOException {
             server = HttpServer.create(
@@ -368,8 +406,9 @@ public class LibrarySessionReloadTest {
             url = "http://127.0.0.1:" + server.getAddress().getPort();
             server.createContext("/", ex -> {
                 hits.add(new String[]{ex.getRequestURI().getPath(),
-                        ex.getRequestHeaders().getFirst("X-Session-Token")});
-                String body = "/api/me".equals(ex.getRequestURI().getPath()) ? ME_JSON : ENTRIES_JSON;
+                        ex.getRequestHeaders().getFirst("X-Session-Token"),
+                        ex.getRequestURI().getRawQuery()});
+                String body = "/api/me".equals(ex.getRequestURI().getPath()) ? meJson : ENTRIES_JSON;
                 byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
                 ex.getResponseHeaders().set("Content-Type", "application/json");
                 ex.sendResponseHeaders(200, bytes.length);
@@ -413,5 +452,17 @@ public class LibrarySessionReloadTest {
             }
         }
         return false;
+    }
+
+    /** Query of the first hit for path with the token, null when absent. */
+    private static String queryOf(Origin origin, String path, String token) {
+        synchronized (origin.hits) {
+            for (String[] hit : origin.hits) {
+                if (path.equals(hit[0]) && token.equals(hit[1])) {
+                    return hit[2];
+                }
+            }
+        }
+        return null;
     }
 }
