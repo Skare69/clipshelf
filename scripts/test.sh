@@ -8,8 +8,10 @@ cd "$(dirname "$0")/.."
 : "${CLIPSHELF_DATA_DIR:?set CLIPSHELF_DATA_DIR to a throwaway dir, never ./data}"
 PY=${PY:-python3}
 $PY clipshelf.py check
-$PY clipshelf.py migrate
-$PY clipshelf.py test --verbosity 1
+# --noinput: a leftover test-db.sqlite3 must never hang the run on Django's
+# "delete the test database?" prompt (CLIP-104 merge-turn incident).
+$PY clipshelf.py migrate --noinput
+$PY clipshelf.py test --noinput --verbosity 1
 $PY test_clipshelf.py
 $PY test_sources.py
 $PY test_follows.py
