@@ -33,6 +33,7 @@ Usage:
 import argparse
 import ast
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -70,8 +71,16 @@ SUITE_CMDS = [
     [sys.executable, "test_sources.py"],
     [sys.executable, "test_properties.py"],
 ]
-# suite baseline ~13s; 120s absorbs pathological mutants without stalling runs
-DEFAULT_TIMEOUT = 120
+# Full Django suite measured 109.6s (coverage pass), 138.8s (host busy with
+# Gradle, v0.11.0 review) and 196.3s (verified run, 2026-11-23): the old
+# "~13s" was stale by 10x, and a fixed 120s ceiling failed the baseline there
+# ("baseline suite fails (exit None)"). Without --timeout the harness measures
+# the clean baseline and derives the per-command timeout from it (see
+# derived_timeout); --timeout applies one fixed ceiling to every command
+# instead.
+BASELINE_TIMEOUT = 900  # ceiling for the baseline measurement itself (no --timeout)
+MUTANT_TIMEOUT_FACTOR = 3  # derived per-command timeout = max(this x baseline, floor)
+DEFAULT_TIMEOUT = 120  # floor: absorbs pathological mutants when the suite is fast
 # Coverage wrapper, committed next to this harness; copied into the run dir.
 COVER_SCRIPT = "mutate_cover.py"
 # Selected invocations run in this order: run_units stops at the first
@@ -86,8 +95,9 @@ CHEAP_FIRST = (0, 1, 3, 2)
 # rebase drift were pinned by tests (0 timeouts; a non-zero suite exit always
 # kills, so noise only raises scores). Re-measured unchanged (110/116 =
 # 94.8%, the same six behavioral equivalents) with per-line test selection on
-# 2026-11-04: import-time-line mutants run whole suite commands, so on a
-# loaded machine one command can cross DEFAULT_TIMEOUT and read as a kill.
+# 2026-11-04: import-time-line mutants run whole suite commands, so machine
+# load can stretch one command past the timeout. Since 2026-11-23 a timeout
+# counts like a survivor, not a kill, so load can only lower the score.
 # The six remaining survivors are
 # behaviorally equivalent: the "" hostname fallback at clipshelf/lib.py:89,
 # the screened-init flag (its value only matters past positive steer
@@ -157,6 +167,14 @@ def mutant_sources(tree, sites):
         copy = deepcopy(tree)
         apply(list(ast.walk(copy))[index])
         yield (index, label), ast.unparse(copy)
+
+
+def derived_timeout(baseline_s):
+    """Per-command timeout derived from the measured baseline suite time:
+    MUTANT_TIMEOUT_FACTOR x baseline absorbs import-time mutants (they run
+    whole suite commands) on a loaded host; DEFAULT_TIMEOUT floors it so a
+    fast suite still bounds a hung mutant command."""
+    return max(DEFAULT_TIMEOUT, math.ceil(MUTANT_TIMEOUT_FACTOR * baseline_s))
 
 
 def run_suite(ws, env, cmd, timeout):
@@ -372,7 +390,7 @@ def score_run(target_files, ws, temp_root, timeout, max_mutants, log,
     every mutant runs the full suite)."""
     if cover is None:
         cover = [None] * len(SUITE_CMDS)
-    total = killed = 0
+    total = killed = timeouts = 0
     survived = []
     nocovs = []
     baseline_text = {}
@@ -408,18 +426,21 @@ def score_run(target_files, ws, temp_root, timeout, max_mutants, log,
         if nocov:
             status = "NO_COVERAGE"  # counts like a survivor for the score
             nocovs.append((rel, lineno, label, baseline_text[rel]))
+        elif code is None:
+            status = "TIMEOUT"  # inconclusive: counts like a survivor, never a kill
+            timeouts += 1
+        elif code == 0:
+            status = "SURVIVED"
+            survived.append((rel, lineno, label, baseline_text[rel]))
         else:
-            status = "SURVIVED" if code == 0 else ("TIMEOUT" if code is None else "KILLED")
-            if code == 0:
-                survived.append((rel, lineno, label, baseline_text[rel]))
-            else:
-                if out:
-                    log(f"  mutant diagnostics:\n{out}")
-                killed += 1
+            status = "KILLED"
+            if out:
+                log(f"  mutant diagnostics:\n{out}")
+            killed += 1
         # The Ottr board parses this line from a stdout tail: keep its format.
         log(f"[{n}/{len(mutants)}] {rel}:{lineno} {label} {status} {dt:.1f}s"
             f" ({len(survived)} survived)")
-    return total, killed, survived, nocovs
+    return total, killed, survived, nocovs, timeouts
 
 
 def report_survivors(survived, log):
@@ -505,20 +526,35 @@ def run(args, log=print):
     env["CLIPSHELF_DEBUG"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"  # see score_run: stale pyc skews scores
     log(f"baseline: {SUITE_CMDS}")
-    code, out = run_suites(ws, env, args.timeout)
+    baseline_start = time.monotonic()
+    code, out = run_suites(ws, env,
+                           args.timeout if args.timeout is not None else BASELINE_TIMEOUT)
+    baseline_s = time.monotonic() - baseline_start
     if code != 0:
         log(f"baseline suite fails (exit {code}); mutation scores are meaningless:\n{out}")
+        if code is None and args.timeout is None:
+            log(f"the clean suite crossed the {BASELINE_TIMEOUT}s baseline ceiling; "
+                f"pass --timeout to raise it")
         return 2
-    cover = coverage_pass(ws, targets, temp_root, args.timeout, log)
+    timeout = args.timeout if args.timeout is not None else derived_timeout(baseline_s)
+    if args.timeout is None:
+        log(f"baseline suite: {baseline_s:.1f}s; per-command timeout: {timeout}s "
+            f"({MUTANT_TIMEOUT_FACTOR}x measured baseline, floor {DEFAULT_TIMEOUT}s)")
+    else:
+        log(f"baseline suite: {baseline_s:.1f}s; per-command timeout: {timeout}s (--timeout)")
+    cover = coverage_pass(ws, targets, temp_root, timeout, log)
     missing = [i for i, data in enumerate(cover) if data is None]
     if missing:
         log(f"no coverage data for command(s) {missing}; static map fallback")
     static = importing_cmds(ws, targets, SUITE_CMDS)
-    total, killed, survived, nocovs = score_run(targets, ws, temp_root,
-                                                args.timeout, args.max_mutants,
-                                                log, cover=cover, static=static)
+    total, killed, survived, nocovs, timeouts = score_run(targets, ws, temp_root,
+                                                          timeout, args.max_mutants,
+                                                          log, cover=cover, static=static)
     score = 100.0 * killed / total if total else 0.0
     log(f"\nscore: {killed}/{total} killed = {score:.1f}% (gate: >= {args.fail_under}%)")
+    if timeouts:
+        log(f"timeouts: {timeouts} inconclusive (counted like survivors, not kills; "
+            f"rerun on a quiet host or with a higher --timeout)")
     report_survivors(survived, log)
     report_nocov(nocovs, log)
     log(f"kept (not deleted): {temp_root}")
@@ -539,6 +575,8 @@ def self_check():
     assert not any("str->" in label for label in labels), labels  # no docstring noise
     picked = sample(list(range(950)), 116)
     assert len(picked) == 116 and picked[:2] == [0, 8] and picked[-1] == 941, picked
+    assert derived_timeout(13.0) == 120  # fast suite: the floor applies
+    assert derived_timeout(138.8) == 417  # the v0.11.0 review's busy-host baseline
 
     report_source = "def sample():\n    return 1  # original formatting\n"
 
@@ -548,7 +586,7 @@ def self_check():
     real_run_suite = run_suite
     try:
         run_suite = lambda *args: (0, "")
-        _, _, survived, _ = score_run(["report.py"], ws, ws, 60, 1, lambda _msg: None)
+        _, _, survived, _, _ = score_run(["report.py"], ws, ws, 60, 1, lambda _msg: None)
     finally:
         run_suite = real_run_suite
     report_lines = []
@@ -607,6 +645,24 @@ def self_check():
          "import sys; print('stderr diagnostic', file=sys.stderr); sys.exit(1)"], 60)
     assert code == 1 and "stderr diagnostic" in out, out
 
+    # a timeout is inconclusive, never a kill: it counts like a survivor so a
+    # loaded host can only lower the score, never raise it.
+    timeout_progress = []
+
+    def timeout_run_suite(_ws, _env, _cmd, _timeout):
+        return (None, "")
+
+    try:
+        run_suite = timeout_run_suite
+        total, killed, survived, nocovs, timeouts = score_run(
+            ["module.py"], ws, ws, 60, 0, timeout_progress.append)
+    finally:
+        run_suite = real_run_suite
+    assert (total, killed, len(survived), len(nocovs), timeouts) == (3, 0, 0, 0, 3), \
+        (total, killed, survived, nocovs, timeouts)
+    assert all(line.split()[3] == "TIMEOUT"
+               for line in timeout_progress if line.startswith("[")), timeout_progress
+
     # per-mutant selection: a line's covering cases only; import-time lines
     # run the whole command; an unreached line is NO_COVERAGE and counts
     # like a survivor; a static-map hit runs one command; a map miss runs
@@ -636,12 +692,12 @@ def self_check():
 
     try:
         run_suite = fake
-        total, killed, survived, nocovs = score_run(["mod2.py"], sel, sel, 60, 0,
-                                                    sel_log.append, cover=cover)
+        total, killed, survived, nocovs, timeouts = score_run(["mod2.py"], sel, sel, 60, 0,
+                                                              sel_log.append, cover=cover)
     finally:
         run_suite = real_run_suite
-    assert (total, killed, len(survived), len(nocovs)) == (10, 0, 9, 1), \
-        (total, killed, survived, nocovs)
+    assert (total, killed, len(survived), len(nocovs), timeouts) == (10, 0, 9, 1, 0), \
+        (total, killed, survived, nocovs, timeouts)
     assert nocovs[0][1] == 9 and nocovs[0][2] == "0->1", nocovs  # DEAD = 0: unreached
     django_full = [sys.executable, "clipshelf.py", "test", "--verbosity", "0"]
     both = [sys.executable, "clipshelf.py", "test", "test_mod2.T.test_big",
@@ -667,7 +723,7 @@ def self_check():
                            cover=[None] * len(SUITE_CMDS), static={0})
     finally:
         run_suite = real_run_suite
-    assert result == (10, 0, result[2], []), result  # no NO_COVERAGE: map hit
+    assert result == (10, 0, result[2], [], 0), result  # no NO_COVERAGE: map hit
     assert len(calls) == 10 and all(cmd == SUITE_CMDS[0] for cmd in calls), calls[:2]
 
     calls.clear()
@@ -676,7 +732,7 @@ def self_check():
         result = score_run(["mod2.py"], sel, sel, 60, 0, lambda _m: None)
     finally:
         run_suite = real_run_suite
-    assert result == (10, 0, result[2], []), result
+    assert result == (10, 0, result[2], [], 0), result
     # map miss: full suite, cheapest command first
     assert calls[:4] == [list(SUITE_CMDS[i]) for i in CHEAP_FIRST], calls[:4]
     assert len(calls) == 10 * len(SUITE_CMDS), len(calls)
@@ -776,6 +832,12 @@ def self_check():
         logs = []
         assert run(args, logs.append) != 0, logs
         assert any("outside the repo" in line for line in logs), logs
+        args = argparse.Namespace(diff=None, targets=[str(source)], timeout=None,
+                                  max_mutants=0, fail_under=0)
+        logs = []
+        assert run(args, logs.append) == 0, logs  # timeout=None: derived from the baseline
+        assert any("baseline suite" in line and "per-command timeout" in line
+                   for line in logs), logs
     finally:
         run_suite, REPO, TEMP_ROOT = real
     assert (source.read_bytes(), outside.read_bytes()) == original
@@ -794,7 +856,9 @@ def main():
     parser.add_argument("--targets", nargs="+", metavar="FILE", help="modules to mutate")
     parser.add_argument("--diff", metavar="REF", help="mutate only in-scope modules changed vs REF")
     parser.add_argument("--max-mutants", type=int, default=0, help="evenly sample this many sites")
-    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="seconds per mutant run")
+    parser.add_argument("--timeout", type=int, default=None,
+                        help="seconds per command; default derives from the measured "
+                             "suite baseline (3x baseline, floor 120)")
     parser.add_argument("--fail-under", type=float, default=DEFAULT_FAIL_UNDER,
                         help="exit 1 below this mutation score percent")
     args = parser.parse_args()
