@@ -3,9 +3,9 @@
 # Regenerate: python scripts/lock_deps.py make
 # Policy: regenerate whenever requirements.txt changes or `check` fails.
 # Release age: 7+ days before the Date line; newer pins only via make --fresh.
-# Platforms covered: win_amd64 (3.13), manylinux x86_64/aarch64 (3.13 for CI,
-# 3.15 for the image base). Wheels: cp-specific or abi3.
-# Date: 2026-11-22
+# Platforms covered: win_amd64 (3.13), manylinux x86_64/aarch64 (3.13 and
+# 3.15; CI tests both, the image base pins 3.15). Wheels: cp-specific or abi3.
+# Date: 2026-11-23
 
 annotated-types==0.8.0 \
     --hash=sha256:f072f4d804ea359e4eaf198b1af7a8b0943881a87f31bb764f8bf219bb9419e0
@@ -49,10 +49,10 @@ gallery-dl==1.32.20 \
     --hash=sha256:e09729c8f24f788ac64a663268603377fbf51d4b97818d49e2150c5d78067709
 h11==0.16.0 \
     --hash=sha256:63cf8bbe7522de3bf65932fda1d9c2772064ffb3dae62d55932da54b31cb6c86
-httpcore2==2.16.0 \
-    --hash=sha256:5c4358319f2602d984ad93182c9fee5160f22e9da7babdda870a5e7c4e2dc34f
-httpx2==2.16.0 \
-    --hash=sha256:fd2c5d7909e8d86fe92d53020c310ca0e4e431b838c207c5754b9bbf0308d49a
+httpcore2==2.16.1 \
+    --hash=sha256:11f097034886b99d6f5829dde0a0f3bc0169c38935474ce1333bb10b3e4a0093
+httpx2==2.16.1 \
+    --hash=sha256:29e8566f8ab355075e7590643e04756361fcdb7d5f2be4d9cb959bde7d33d215
 idna==3.20 \
     --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
 packaging==26.3 \
