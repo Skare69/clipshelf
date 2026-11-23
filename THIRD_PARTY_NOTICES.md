@@ -72,12 +72,12 @@ are the source of record; every wheel ships its license text inside
 | cffi | 2.1.1 | MIT-0 | |
 | pycparser | 3.12 | BSD-3-Clause | |
 | argon2-cffi-bindings | 26.2.0 | MIT | |
-| httpx2 | 2.16.0 | BSD-3-Clause | |
+| httpx2 | 2.16.1 | BSD-3-Clause | |
 | pydantic | 2.14.3 | MIT | |
 | pydantic-core | 2.50.4 | MIT | |
 | tenacity | 9.2.1 | Apache-2.0 | |
 | typing-extensions | 4.16.0 | PSF-2.0 | |
-| httpcore2 | 2.16.0 | BSD-3-Clause | |
+| httpcore2 | 2.16.1 | BSD-3-Clause | |
 | h11 | 0.16.0 | MIT | |
 | anyio | 4.16.0 | MIT | |
 | annotated-types | 0.8.0 | MIT | |
