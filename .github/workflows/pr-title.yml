@@ -13,10 +13,12 @@ jobs:
           TITLE: ${{ github.event.pull_request.title }}
           AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
-          # dependabot titles are "Bump x from y to z"; dependency PRs merge as
-          # "chore(deps): ..." squash commits, so their titles are exempt here.
-          case "$AUTHOR" in *dependabot*) exit 0;; esac
-          if ! printf '%s\n' "$TITLE" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?!?: [a-zA-Z]'; then
-            echo "::error::PR title must follow Conventional Commits: type(scope)?: title (e.g. 'feat: add arm64 workers'). Got: $TITLE"
+          # Dependabot titles are "Bump x from y to z" and fit no allowed type,
+          # so the exact bot account stays exempt from this check.
+          if [ "$AUTHOR" = "dependabot[bot]" ]; then
+            exit 0
+          fi
+          if ! printf '%s\n' "$TITLE" | grep -Eq '^(feat|fix|refactor|docs|test): [a-zA-Z]'; then
+            echo "::error::PR title must follow the project commit rules: feat|fix|refactor|docs|test, then ': title', lowercase, no scope (e.g. 'feat: add arm64 workers'). Got: $TITLE"
             exit 1
           fi

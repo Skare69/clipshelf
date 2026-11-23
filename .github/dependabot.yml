@@ -13,8 +13,7 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: chore
-      include: scope
+      prefix: fix
     groups:
       minor-and-patch:
         applies-to: version-updates
@@ -29,8 +28,7 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: chore
-      include: scope
+      prefix: fix
     groups:
       minor-and-patch:
         applies-to: version-updates
@@ -45,8 +43,7 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: chore
-      include: scope
+      prefix: fix
 
   - package-ecosystem: gradle
     directories:
@@ -57,8 +54,7 @@ updates:
     cooldown:
       default-days: 7
     commit-message:
-      prefix: chore
-      include: scope
+      prefix: fix
     groups:
       minor-and-patch:
         applies-to: version-updates
