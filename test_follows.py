@@ -435,6 +435,9 @@ class FollowApiTests(FollowMixin, TestCase):
         for payload in (
             {"url": "https://example.com/@user", "tag": "x"},
             {"url": "https://www.tiktok.com/@user/video/123", "tag": "x"},
+            {"url": "https://www.tiktok.com/@", "tag": "x"},
+            {"url": "https://www.tiktok.com/discover/@foo", "tag": "x"},
+            {"url": "https://www.tiktok.com/@@", "tag": "x"},
             {"url": PROFILE, "tag": ""},
             {"url": PROFILE, "tag": "x" * 101},
             {},
@@ -442,6 +445,14 @@ class FollowApiTests(FollowMixin, TestCase):
             response = self._post_json(client, "/api/follows", payload)
             self.assertEqual(response.status_code, 400, payload)
         self.assertEqual(FollowedSource.objects.count(), 0)
+
+    def test_create_accepts_trailing_slash_profile(self):
+        client = self._login(self.alice)
+        response = self._post_json(client, "/api/follows", {
+            "url": "https://tiktok.com/@Bob/", "tag": "dances"})
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["follow"]["profile_url"],
+                         "https://www.tiktok.com/@bob")
 
     def test_pause_resume_and_unfollow(self):
         source = follows.create_follow(self.alice, PROFILE, "recipes")

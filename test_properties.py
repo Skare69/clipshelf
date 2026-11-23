@@ -11,6 +11,7 @@ import ipaddress
 import json
 import os
 import random
+import re
 import socket
 import sys
 import tempfile
@@ -28,7 +29,7 @@ django.setup()
 
 from django.core.exceptions import ValidationError
 
-from clipshelf import imports, interpretation, lib, models, network
+from clipshelf import follows, imports, interpretation, lib, models, network
 from clipshelf.api import ApiError, json_body
 
 SEED = 20261014
@@ -440,6 +441,59 @@ def prop_validate_url(rng):
     assert not bad, f"({len(bad)} violations) {bad[:3]}"
 
 
+# --------------------------------------- 8. follows.validate_profile_url
+
+_PROFILE_SHAPE = re.compile(r"^/@[^/@]+$")
+
+
+def _ref_profile(url):
+    """Independent restatement of the spec: tiktok.com host only, and the
+    normed path exactly /@handle; the canonical form or None."""
+    normalized = lib.norm(url) if isinstance(url, str) else None
+    if not normalized or not lib.is_tiktok(normalized):
+        return None
+    path = urlsplit(normalized).path
+    if not _PROFILE_SHAPE.match(path):
+        return None
+    return f"https://www.tiktok.com{path.lower()}"
+
+
+def prop_profile_url(rng):
+    """validate_profile_url agrees with the spec restatement: only ValueError,
+    and any returned form is the canonical /@handle URL for that input."""
+    corpus = [
+        "https://www.tiktok.com/@creator", "https://tiktok.com/@User?utm=x",
+        "https://m.tiktok.com/@USER", "https://www.tiktok.com/@user/",
+        "https://www.tiktok.com/@", "https://www.tiktok.com/@/",
+        "https://www.tiktok.com/@", "https://www.tiktok.com/discover/@foo",
+        "https://www.tiktok.com/@user/video/123", "https://vm.tiktok.com/@x",
+        "https://evil-tiktok.com/@user", "https://tiktok.com.evil.com/@user",
+        "https://example.com/@user", "gopher://tiktok.com/@user",
+        "https://User:pw@tiktok.com/@user", "not a url", "", None, 7,
+    ]
+    hosts = ["www.tiktok.com", "tiktok.com", "m.tiktok.com",
+             "evil-tiktok.com", "example.com", ""]
+    paths = ["/@user", "/@USER", "/@", "/@@", "/@/", "/@user/video/1",
+             "/discover/@foo", "/@foo/", "/@a.b_c-d", "/video/123",
+             "/", "", "/@héllo"]
+    alphabet = "abcABC019:/?#[]@!$&'()*+,;=-._~%é\t <>\"\\|"
+    for url in corpus + [
+        *(f"https://{rng.choice(hosts)}{rng.choice(paths)}"
+          for _ in range(RUNS)),
+        *("".join(rng.choice(alphabet) for _ in range(rng.randint(0, 60)))
+          for _ in range(RUNS)),
+    ]:
+        expect = _ref_profile(url)
+        try:
+            got = follows.validate_profile_url(url)
+        except ValueError:
+            got = None
+        except Exception as exc:
+            raise AssertionError(f"non-ValueError for {url!r}: {exc!r}")
+        if got != expect:
+            raise AssertionError(f"expected {expect!r} for {url!r}, got {got!r}")
+
+
 # --------------------------------------------------------------------- harness
 
 PROPERTIES = [
@@ -451,6 +505,7 @@ PROPERTIES = [
     ("public_ip", prop_public_ip),
     ("validated", prop_validated),
     ("validate_url", prop_validate_url),
+    ("profile_url", prop_profile_url),
 ]
 
 

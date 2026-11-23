@@ -7,6 +7,7 @@ who wins a concurrent listing, and the row commits in the same
 transaction as its capture, so a failed capture never consumes the
 marker. The listing itself runs strictly outside any transaction.
 """
+import re
 import uuid
 import urllib.parse
 from datetime import timedelta
@@ -35,14 +36,10 @@ def validate_profile_url(url):
     if not normalized or not lib.is_tiktok(normalized):
         raise ValueError("only tiktok.com profile URLs are supported")
     parts = urllib.parse.urlsplit(normalized)
-    marker = parts.path.find("/@")
-    if marker < 0:
+    if not re.fullmatch(r"/@[^/@]+", parts.path):
         raise ValueError("URL must point at a profile page (/@handle)")
-    segments = parts.path[marker:].lstrip("/").split("/")
-    if len(segments) != 1:
-        raise ValueError("URL must point at a profile page, not one post")
     return urllib.parse.urlunsplit(
-        ("https", "www.tiktok.com", f"/{segments[0].lower()}", "", ""))
+        ("https", "www.tiktok.com", parts.path.lower(), "", ""))
 
 
 def create_follow(user, url, tag, full=False):
