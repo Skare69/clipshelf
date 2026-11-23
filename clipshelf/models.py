@@ -612,9 +612,11 @@ class ImportRecord(models.Model):
 
     def update_manifest(self, updates):
         """Merge and save manifest fields under a row lock, so concurrent
-        updates never lose fields. The claim path is the one exception:
-        `worker._claim_imports` writes `status` directly on rows it already
-        holds `select_for_update` locks on.
+        updates never lose fields. Two paths write `manifest` directly and
+        bypass this merge: `worker._claim_imports` sets `status` on rows it
+        already holds `select_for_update` locks on, and the `import_library`
+        command replaces the whole manifest right after its own import
+        created the record.
 
         Callers own the decision (which fields, which status); this owns the
         read-modify-write. The status strings live in Status; every writer
