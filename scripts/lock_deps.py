@@ -25,10 +25,10 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import NamedTuple
 
-# CI resolves and tests on 3.13; the image base (Dockerfile) runs 3.15. The
-# lock must install with --require-hashes on every pair below: pip is
-# hash-validated per pair by `check`, and `collect_hashes` downloads wheels
-# per pair, so the shipped image always finds its cp315 linux wheels.
+# CI resolves on 3.13 and tests on 3.13 and 3.15; the image base (Dockerfile)
+# runs 3.15. The lock must install with --require-hashes on every pair below:
+# pip is hash-validated per pair by `check`, and `collect_hashes` downloads
+# wheels per pair, so the shipped image always finds its cp315 linux wheels.
 PY_PLATFORM_SETS = [
     ("3.13", ["win_amd64"]),
     ("3.13", ["manylinux2014_x86_64", "manylinux_2_28_x86_64"]),
@@ -47,8 +47,8 @@ HEADER = """\
 # Regenerate: python scripts/lock_deps.py make
 # Policy: regenerate whenever requirements.txt changes or `check` fails.
 # Release age: 7+ days before the Date line; newer pins only via make --fresh.
-# Platforms covered: win_amd64 (3.13), manylinux x86_64/aarch64 (3.13 for CI,
-# 3.15 for the image base). Wheels: cp-specific or abi3.
+# Platforms covered: win_amd64 (3.13), manylinux x86_64/aarch64 (3.13 and
+# 3.15; CI tests both, the image base pins 3.15). Wheels: cp-specific or abi3.
 # Date: {date}
 """
 

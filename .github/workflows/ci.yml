@@ -17,11 +17,19 @@ jobs:
     env:
       CLIPSHELF_DATA_DIR: /tmp/clipshelf-data
       CLIPSHELF_DEBUG: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.13 is the lock-resolution interpreter; 3.15 is the pinned Dockerfile
+        # image base (see Dockerfile and scripts/lock_deps.py PY_PLATFORM_SETS).
+        # The suite must be green on the interpreter that ships before a tag
+        # can build and publish the image.
+        python-version: ["3.13", "3.15"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
-          python-version: "3.13"
+          python-version: "${{ matrix.python-version }}"
           cache: pip
           cache-dependency-path: requirements.lock
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
