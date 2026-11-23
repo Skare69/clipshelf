@@ -823,7 +823,11 @@ def api_feed(request):
     raw_since = request.GET.get("since")
     if not raw_since:
         raise ApiError(400, detail="since is required")
-    since = parse_datetime(raw_since)
+    try:
+        since = parse_datetime(raw_since)
+    except ValueError:
+        # Well-formed pattern, impossible date (Feb 30, month 13): bad request.
+        since = None
     if since is None or timezone.is_naive(since):
         raise ApiError(400, detail="since must be an ISO datetime with a UTC offset")
     tag = (request.GET.get("tag") or "").strip().lower()

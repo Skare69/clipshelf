@@ -582,6 +582,14 @@ class FeedApiTests(FollowMixin, TestCase):
         data = self._feed(client, {"since": aware, "limit": "99999"}).json()
         self.assertEqual(data["count"], 2)
 
+    def test_feed_since_rejects_impossible_dates(self):
+        # A well-formed but impossible date (Feb 30) makes parse_datetime
+        # raise ValueError; the feed must answer 400 like any other bad since.
+        client = self._login(self.alice)
+        response = self._feed(client, {"since": "2026-02-30T00:00:00+00:00"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("detail", response.json())
+
 
 if __name__ == "__main__":
     from django.conf import settings
