@@ -115,7 +115,6 @@ button{font:inherit;color:inherit;cursor:pointer}
 .ver{margin-top:auto;padding:12px 12px 0;border-top:1px solid var(--hair);font-size:var(--t1);color:var(--ink2)}
 .ver a{color:inherit;font-weight:700;text-decoration:none}
 .shell>main{min-width:0;padding:28px 32px 96px}
-#main:focus{outline:0}
 
 /* ---------- view header ---------- */
 .vhead{display:flex;flex-direction:column;gap:16px;margin-bottom:24px}
