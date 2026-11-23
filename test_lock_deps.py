@@ -206,6 +206,19 @@ class CheckTests(unittest.TestCase):
         self.assertIn("DRIFT:", out)
         self.assertIn("invalid specifier: demo >=banana", out)
 
+    def test_inline_comment_in_requirement_passes(self):
+        # pip's requirement-file reader strips a comment that whitespace
+        # precedes; the gate must judge the same line pip accepts
+        code, out, _ = self.check(req_text="demo>=0.9  # supported series\n")
+        self.assertEqual(code, 0)
+        self.assertIn("ok: 2 pins cover requirements.txt", out)
+
+    def test_parenthesized_range_passes(self):
+        # PEP 508 lets parens wrap the whole version range
+        code, out, _ = self.check(req_text="demo (>=0.9)\n")
+        self.assertEqual(code, 0)
+        self.assertIn("ok: 2 pins cover requirements.txt", out)
+
     def test_pin_without_hash_fails(self):
         code, out, _ = self.check(req_text="demo>=0.9\n",
                                   lock_text="demo==1.0\n")

@@ -215,21 +215,27 @@ def req_specs(req: Path, problems: list[str] | None = None) -> dict[str, str]:
     lines, comments and option lines (leading -) are skipped, and every
     remaining line must parse as name[extras]<specs>[;marker] (fullmatch,
     shaped like _floor_free's regex) or become an `unparseable requirement
-    line` problem in `problems`. A repeated name ANDs its ranges with ','.
+    line` problem in `problems`. An inline comment (whitespace before '#') is
+    stripped, and a parenthesized range is unwrapped, as pip's requirement
+    file reader accepts both. A repeated name ANDs its ranges with ','.
     Deterministic: reads only the file, never the package index."""
     specs: dict[str, str] = {}
     for line in req.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or stripped.startswith("-"):
             continue
+        stripped = re.sub(r"\s+#.*$", "", stripped)
         m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_.-]*(?:\[[^\]]*\])?)\s*([^;@]*?)\s*(;.*)?",
                          stripped)
         if m:
             n = canon(re.sub(r"\[[^\]]*\]", "", m.group(1)))
-            if m.group(2) and n in specs:
-                specs[n] = f"{specs[n]},{m.group(2)}"
+            spec = m.group(2)
+            if spec.startswith("(") and spec.endswith(")"):
+                spec = spec[1:-1].strip()
+            if spec and n in specs:
+                specs[n] = f"{specs[n]},{spec}"
             else:
-                specs.setdefault(n, m.group(2))
+                specs.setdefault(n, spec)
         elif problems is not None:
             problems.append(f"unparseable requirement line: {stripped}")
     return specs
