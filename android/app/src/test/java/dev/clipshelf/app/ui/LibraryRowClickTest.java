@@ -46,6 +46,8 @@ public class LibraryRowClickTest {
 
     private static final String PROVIDER = "FakeAndroidKeyStore";
 
+    private org.robolectric.android.controller.ActivityController<LibraryActivity> controller;
+
     @Before
     public void setUp() throws Exception {
         // Robolectric has no AndroidKeyStore; the fixed-key stand-in lets
@@ -71,14 +73,21 @@ public class LibraryRowClickTest {
 
     @After
     public void tearDown() throws Exception {
+        // Destroy arms Async.goUi's drop guard: the dead-endpoint reload
+        // outcome (posted to a looper this test never idles) must not fire a
+        // Toast in the next test's Robolectric environment (CI NPE in
+        // ShadowToast.show, 2026-11-23).
+        if (controller != null) {
+            controller.destroy();
+        }
         Security.removeProvider(PROVIDER);
     }
 
     /** A tap on the label row (outside the buttons) starts EntryActivity. */
     @Test
     public void tappingTheRowOpensTheEntry() throws Exception {
-        LibraryActivity activity =
-                Robolectric.buildActivity(LibraryActivity.class).setup().get();
+        controller = Robolectric.buildActivity(LibraryActivity.class).setup();
+        LibraryActivity activity = controller.get();
         ListView list = activity.findViewById(R.id.library_list);
         ListAdapter adapter = list.getAdapter();
 

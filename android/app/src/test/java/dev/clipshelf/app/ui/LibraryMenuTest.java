@@ -6,6 +6,7 @@ import android.content.Context;
 
 import androidx.appcompat.widget.Toolbar;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -30,6 +31,8 @@ import dev.clipshelf.app.R;
 @Config(sdk = 34)
 public class LibraryMenuTest {
 
+    private org.robolectric.android.controller.ActivityController<LibraryActivity> controller;
+
     @Before
     public void setUp() {
         // Robolectric has no AndroidKeyStore: reuse the fixed-key stand-in so
@@ -52,8 +55,19 @@ public class LibraryMenuTest {
 
     @Test
     public void menuHoldsExactlyOneCopyOfEachLibraryItem() {
-        LibraryActivity activity = Robolectric.buildActivity(LibraryActivity.class).setup().get();
-        Toolbar toolbar = activity.findViewById(R.id.toolbar);
+        controller = Robolectric.buildActivity(LibraryActivity.class).setup();
+        Toolbar toolbar = controller.get().findViewById(R.id.toolbar);
         assertEquals(3, toolbar.getMenu().size());
+    }
+
+    @After
+    public void tearDown() {
+        // The dead-endpoint reload outcome is posted to a looper this test
+        // never idles; destroying arms Async.goUi's drop guard so it cannot
+        // fire a Toast in the next test's Robolectric environment (CI NPE in
+        // ShadowToast.show, 2026-11-23).
+        if (controller != null) {
+            controller.destroy();
+        }
     }
 }
