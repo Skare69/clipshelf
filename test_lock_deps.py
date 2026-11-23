@@ -2,10 +2,12 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -260,6 +262,86 @@ class DriftTests(unittest.TestCase):
                                lock_text=self.DJANGO_LOCK)
         self.assertEqual(code, 0)
         self.assertIn("warning: extra in lock: tzdata", out)
+
+
+class AgeGateReplayTests(unittest.TestCase):
+    """CLIP-102 replay: httpcore2/httpx2 2.16.1 crossed the 7-day age gate
+    between a green local run (08:23 UTC) and a red CI run (08:53 UTC). On a
+    fake release index under a fixed clock, `check` keeps one verdict on both
+    sides of the crossing; only the non-blocking `drift` report moves."""
+    UPLOAD = datetime(2026, 11, 16, 8, 40, tzinfo=timezone.utc)
+    # name -> [(version, upload time)]; 2.16.1 is the newest release, so no
+    # newer release exists when it crosses the gate
+    RELEASES = [("2.16.0", datetime(2026, 10, 1, tzinfo=timezone.utc)), ("2.16.1", UPLOAD)]
+    INDEX = {"httpcore2": RELEASES, "httpx2": RELEASES}
+    REQ = "httpcore2>=2.16\nhttpx2>=2.16\n"
+    LOCK = ("httpcore2==2.16.0 \\\n    --hash=sha256:aaaa\n"
+            "httpx2==2.16.0 \\\n    --hash=sha256:bbbb\n")
+
+    def fake_pip(self, cmd, **kwargs):
+        """`pip install --dry-run` against INDEX: honors --uploaded-prior-to,
+        -c exact pins, and --no-deps installs of the lock's exact pins."""
+        if "--no-deps" in cmd:  # check: installs the exact lock pins
+            self.assertNotIn("--uploaded-prior-to", cmd)
+            pins = lock_deps.read_pins(Path(cmd[cmd.index("-r") + 1]))
+        else:
+            cutoff = None
+            if "--uploaded-prior-to" in cmd:
+                cutoff = datetime.strptime(cmd[cmd.index("--uploaded-prior-to") + 1],
+                                           "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+            held = {}
+            if "-c" in cmd:
+                for line in Path(cmd[cmd.index("-c") + 1]).read_text(encoding="utf-8").split():
+                    n, v = line.split("==")
+                    held[n] = v
+            pins = {}
+            for line in Path(cmd[cmd.index("-r") + 1]).read_text(encoding="utf-8").splitlines():
+                n = lock_deps.canon(re.match(r"[A-Za-z0-9_.-]+", line).group())
+                ok = [v for v, up in self.INDEX[n] if cutoff is None or up < cutoff]
+                pins[n] = held.get(n, ok[-1])
+        for n, v in pins.items():
+            self.assertIn(v, [v2 for v2, _ in self.INDEX[n]], f"{n}=={v} not on the index")
+        Path(cmd[cmd.index("--report") + 1]).write_text(json.dumps({"install": [
+            {"is_yanked": False, "metadata": {"name": n, "version": v}}
+            for n, v in pins.items()]}), encoding="utf-8")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def run_at(self, age, command):
+        now = self.UPLOAD + age
+
+        class FixedClock(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return now
+
+        with tempfile.TemporaryDirectory() as d:
+            req = Path(d) / "requirements.txt"
+            req.write_text(self.REQ, encoding="utf-8")
+            lock = Path(d) / "requirements.lock"
+            lock.write_text(self.LOCK, encoding="utf-8")
+            out = io.StringIO()
+            with patch.object(lock_deps, "datetime", FixedClock), \
+                    patch.object(lock_deps.subprocess, "run", side_effect=self.fake_pip), \
+                    contextlib.redirect_stdout(out):
+                code = getattr(lock_deps, command)("python", req, lock)
+            return code, out.getvalue()
+
+    BEFORE = timedelta(days=6, hours=23)  # local green run: newest release not yet gated in
+    AFTER = timedelta(days=7, hours=1)    # CI run: the same release now past the gate
+
+    def test_check_verdict_does_not_flip_across_the_gate(self):
+        before = self.run_at(self.BEFORE, "check")
+        after = self.run_at(self.AFTER, "check")
+        self.assertEqual(before, (0, "ok: 2 pins cover requirements.txt\n"))
+        self.assertEqual(after, before)
+
+    def test_only_drift_reports_the_crossing(self):
+        # the clock-dependent comparison lives in the non-blocking drift report
+        self.assertEqual(self.run_at(self.BEFORE, "drift")[0], 0)
+        code, out = self.run_at(self.AFTER, "drift")
+        self.assertEqual(code, 1)
+        self.assertIn("changed: httpcore2 lock=2.16.0 current=2.16.1", out)
+        self.assertIn("changed: httpx2 lock=2.16.0 current=2.16.1", out)
 
 
 if __name__ == "__main__":

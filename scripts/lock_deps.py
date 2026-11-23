@@ -6,9 +6,12 @@ Usage:
   python scripts/lock_deps.py check [requirements.txt] [requirements.lock]
   python scripts/lock_deps.py drift [requirements.txt] [requirements.lock]
 
-`check` is deterministic. It never resolves against the package index, so a
-patch released after the merge cannot fail it. `drift` re-resolves against
-the index and reports what moved from the lock.
+`check` is deterministic. It never resolves against the package index and
+never reads the clock or a release age, so a patch released after the merge
+cannot fail it, and a release that crosses the MIN_RELEASE_AGE gate between a
+local run and CI cannot change its verdict. `drift` re-resolves against the
+index (age-gated) and reports what moved from the lock; it is a non-blocking
+daily report, so the clock moves only its verdict.
 make and drift resolve only releases uploaded at least MIN_RELEASE_AGE ago
 (pip >= 26.0);
 the age-gated pass resolves a copy of requirements.txt without lower bounds
@@ -429,17 +432,18 @@ def check(python: str, req: Path, lock: Path) -> int:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    mk = sub.add_parser("make")
+    mk = sub.add_parser("make", help="regenerate the lock from releases at least 7 days old")
     mk.add_argument("req", nargs="?", default="requirements.txt")
     mk.add_argument("-o", "--out", default="requirements.lock")
     mk.add_argument("--fresh", nargs="+", metavar="NAME",
                     help="admit the newest release of NAME now, for a security fix")
-    ck = sub.add_parser("check")
+    ck = sub.add_parser("check", help="blocking gate: clock- and index-independent verdict")
     ck.add_argument("req", nargs="?", default="requirements.txt")
     ck.add_argument("lock", nargs="?", default="requirements.lock")
-    df = sub.add_parser("drift")
+    df = sub.add_parser("drift", help="non-blocking report: age-gated live re-resolution")
     df.add_argument("req", nargs="?", default="requirements.txt")
     df.add_argument("lock", nargs="?", default="requirements.lock")
     args = ap.parse_args()

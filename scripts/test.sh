@@ -15,6 +15,8 @@ $PY clipshelf.py test --noinput --verbosity 1
 $PY test_clipshelf.py
 $PY test_sources.py
 $PY test_follows.py
+# Lock gate: check is clock-independent (CLIP-102 age-gate replay on a fake index).
+$PY test_lock_deps.py
 # Property checks: the trust-boundary parsers under a seeded stdlib fuzz loop.
 $PY test_properties.py
 # Publish-tag regression: docker-publish derives tags from the validated

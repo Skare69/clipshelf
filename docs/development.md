@@ -121,8 +121,13 @@ so the audited set is the shipped set:
 - `python scripts/lock_deps.py check` is deterministic: it resolves nothing
   against the live package index, so a commit's CI result cannot change when
   an upstream package ships a new release after the merge (the v0.12.0
-  release shipped no image or APK for exactly that reason). CI runs it as a
-  blocking gate. It fails when `requirements.txt` names a package the lock
+  release shipped no image or APK for exactly that reason). It also never
+  reads the clock or a release age, so a release that crosses the 7-day age
+  gate between a green local run and the CI run cannot flip its verdict (the
+  CLIP-102 and CLIP-104 red mains on 2026-11-23); `test_lock_deps.py` replays
+  that timeline on a fake index at release ages 6 days 23 hours and 7 days
+  1 hour. Only the non-blocking `drift` report moves with the clock. CI runs
+  it as a blocking gate. It fails when `requirements.txt` names a package the lock
   does not pin, when a lock pin carries no hash, or when a shipped platform
   (Windows, linux/amd64, linux/arm64) lacks a wheel matching the lock's
   hashes; pip reports a yanked pin during that validation, and a yanked pin
