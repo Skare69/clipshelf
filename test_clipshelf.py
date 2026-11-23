@@ -137,7 +137,7 @@ def _lock_check_regressions():
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
-    def run_case(current_pins, extra=None, lock_text=None, pip_run=None):
+    def run_case(current_pins, extra=None, lock_text=None, pip_run=None, fn=None):
         with tempfile.TemporaryDirectory(prefix="clipshelf-lockcheck-") as td:
             tmp = Path(td)
             req = tmp / "requirements.txt"
@@ -167,10 +167,11 @@ def _lock_check_regressions():
                     gated=dict(current_pins))), \
                  mock.patch.object(ld.subprocess, "run", fake_run), \
                  contextlib.redirect_stdout(io.StringIO()) as out:
-                return ld.check(sys.executable, req, lock), out.getvalue()
+                return (fn or ld.check)(sys.executable, req, lock), out.getvalue()
 
-    # a lock pin missing from the current resolution must fail the check;
-    # typesafe-sdk's real closure pins (per requirements.lock) are absent
+    # lock-only pins do not fail the deterministic check (it only requires
+    # that every requirement in requirements.txt is pinned and hashed);
+    # drift reports them; typesafe-sdk's real closure pins are lock-only
     typesafe_closure = {
         "typesafe-sdk": "0.7.2",
         "annotated-types": "0.8.0",
@@ -181,13 +182,14 @@ def _lock_check_regressions():
         "pydantic-core": "2.46.5",
         "typing-inspection": "0.4.4",
     }
-    assert run_case(dict(BASE), typesafe_closure)[0] != 0
+    assert run_case(dict(BASE), typesafe_closure)[0] == 0
+    assert run_case(dict(BASE), typesafe_closure, fn=ld.drift)[0] != 0
     # the only tolerated absence is Django's win32-only tzdata marker dep
     assert run_case(dict(BASE), {"tzdata": "2024.1"})[0] == 0
     # Django itself stays present in both scenarios (it is in BASE currents)
 
-    # a current pin absent from the lock fails the check with its message
-    rc, out = run_case({**BASE, "newdep": "9.9"})
+    # a pin the resolution picked up but the lock lacks fails drift with its message
+    rc, out = run_case({**BASE, "newdep": "9.9"}, fn=ld.drift)
     assert rc != 0
     assert "missing from lock: newdep==9.9" in out
 
@@ -301,7 +303,7 @@ def _lock_gate_regressions():
                 mock.patch.object(ld.subprocess, "run", return_value=ok_run):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                rc = ld.check("python", req, lock)
+                rc = ld.drift("python", req, lock)
         assert rc == 1
         assert "changed: foo lock=2.0 current=1.0" in out.getvalue()
         assert "yanked: foo==2.0" in out.getvalue()

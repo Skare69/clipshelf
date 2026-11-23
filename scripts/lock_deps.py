@@ -4,15 +4,21 @@
 Usage:
   python scripts/lock_deps.py make [requirements.txt] [-o requirements.lock] [--fresh NAME ...]
   python scripts/lock_deps.py check [requirements.txt] [requirements.lock]
+  python scripts/lock_deps.py drift [requirements.txt] [requirements.lock]
 
-Both resolve only releases uploaded at least MIN_RELEASE_AGE ago (pip >= 26.0);
+`check` is deterministic. It never resolves against the package index, so a
+patch released after the merge cannot fail it. `drift` re-resolves against
+the index and reports what moved from the lock.
+make and drift resolve only releases uploaded at least MIN_RELEASE_AGE ago
+(pip >= 26.0);
 the age-gated pass resolves a copy of requirements.txt without lower bounds
 (exact pins kept as upper bounds), so a floor raised to a release younger
 than that keeps working via `make --fresh NAME`.
 A newer pin already in the lock stays, so the gate never reverts a security
 bump; `make --fresh NAME` admits the newest release of NAME at once (it exits
 naming the held pins to add when the fresh name does not move). Yanked pins
-are never held or shipped: `check` and `make` fail on them.
+are never held or shipped: `make` and `drift` fail on them, and `check` fails
+on them when pip's per-platform install report flags one.
 """
 import argparse
 import hashlib
@@ -37,7 +43,7 @@ PY_PLATFORM_SETS = [
     ("3.15", ["manylinux2014_aarch64", "manylinux_2_28_aarch64"]),
 ]
 
-# Release-age gate: a new upstream release enters the lock, and turns `check`
+# Release-age gate: a new upstream release enters the lock, and turns `drift`
 # red, only once it is a week old.
 MIN_RELEASE_AGE = timedelta(days=7)
 
@@ -196,6 +202,26 @@ def read_pins(lock: Path) -> dict[str, str]:
     return pins
 
 
+def req_names(req: Path, problems: list[str] | None = None) -> list[str]:
+    """Canonical names requirements.txt asks for; blank lines, comments and
+    option lines (leading -) are skipped, and every remaining line must parse
+    as name[extras]<specs>[;marker] (fullmatch, shaped like _floor_free's
+    regex) or become an `unparseable requirement line` problem in `problems`.
+    Deterministic: reads only the file, never the package index."""
+    names: list[str] = []
+    for line in req.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("-"):
+            continue
+        m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9_.-]*(?:\[[^\]]*\])?)\s*([^;@]*?)\s*(;.*)?",
+                         stripped)
+        if m:
+            names.append(canon(re.sub(r"\[[^\]]*\]", "", m.group(1))))
+        elif problems is not None:
+            problems.append(f"unparseable requirement line: {stripped}")
+    return names
+
+
 def bump(old: str, new: str) -> str:
     """'major'/'minor'/'patch' from the first three numeric parts, else 'change'."""
     try:
@@ -293,8 +319,12 @@ def make(python: str, req: Path, out: Path, fresh: list[str] | None = None) -> N
         print(f"  {n}=={v}: {len(hashes[(n, v)])} hash(es)")
 
 
-def check(python: str, req: Path, lock: Path) -> int:
-    tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-check-"))
+def drift(python: str, req: Path, lock: Path) -> int:
+    """Live drift report: re-resolve requirements.txt against the package
+    index and report what moved from the lock (yanked pins, extras, missing
+    pins, version moves). Non-blocking: the merge gates on the deterministic
+    `check`, not on this report."""
+    tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-drift-"))
     lock_pins = read_pins(lock)
     res = resolve(python, req, tmp, lock_pins)
     current = res.pins
@@ -322,6 +352,35 @@ def check(python: str, req: Path, lock: Path) -> int:
         elif cur != lk:
             problems.append(f"changed: {n} lock={lk} current={cur}")
             changed.append((n, lk, cur))
+
+    if problems:
+        print("DRIFT:")
+        for p in problems:
+            print(f"  {p}")
+        # only version moves yield a subject; yanked drift has none to compute
+        if changed:
+            moves = ", ".join(f"{n} {lk}->{cur} {bump(lk, cur)}" for n, lk, cur in changed)
+            print(f"suggested subject: fix: refresh the dependency lock ({moves})")
+        return 1
+    for w in warnings:
+        print(f"warning: {w}")
+    return 0
+
+
+def check(python: str, req: Path, lock: Path) -> int:
+    """Deterministic merge gate: never resolves against the package index, so
+    a patch shipped upstream after the merge cannot fail it. Fails on a
+    requirement the lock does not pin, an unparseable requirement line, a pin
+    without a hash, and per-platform hash validation (including a pin pip
+    would install yanked on a shipped platform). Use `drift` for the live
+    report of what moved."""
+    tmp = Path(tempfile.mkdtemp(prefix="clipshelf-lockgen-check-"))
+    lock_pins = read_pins(lock)
+
+    problems: list[str] = []
+    names = req_names(req, problems)
+    for n in sorted(set(names) - set(lock_pins)):
+        problems.append(f"missing from lock: {n}")
     # every lock pin must carry at least one hash
     text = lock.read_text(encoding="utf-8").splitlines()
     for i, line in enumerate(text):
@@ -336,13 +395,7 @@ def check(python: str, req: Path, lock: Path) -> int:
         print("DRIFT:")
         for p in problems:
             print(f"  {p}")
-        # only version moves yield a subject; yanked/no-hash drift has none to compute
-        if changed:
-            moves = ", ".join(f"{n} {lk}->{cur} {bump(lk, cur)}" for n, lk, cur in changed)
-            print(f"suggested subject: fix: refresh the dependency lock ({moves})")
         return 1
-    for w in warnings:
-        print(f"warning: {w}")
 
     # end-to-end validation: pip must accept the lock on every shipped platform,
     # not just this host (CI runs on x86_64; the image also ships arm64)
@@ -371,7 +424,7 @@ def check(python: str, req: Path, lock: Path) -> int:
                       f"(pip installs yanked files under exact pins; "
                       f"pip-audit ignores yank status)")
                 return 1
-    print(f"ok: {len(current)} pins match current resolution")
+    print(f"ok: {len(lock_pins)} pins cover requirements.txt")
     return 0
 
 
@@ -386,11 +439,16 @@ def main() -> None:
     ck = sub.add_parser("check")
     ck.add_argument("req", nargs="?", default="requirements.txt")
     ck.add_argument("lock", nargs="?", default="requirements.lock")
+    df = sub.add_parser("drift")
+    df.add_argument("req", nargs="?", default="requirements.txt")
+    df.add_argument("lock", nargs="?", default="requirements.lock")
     args = ap.parse_args()
 
     python = sys.executable
     if args.cmd == "make":
         make(python, Path(args.req), Path(args.out), args.fresh)
+    elif args.cmd == "drift":
+        sys.exit(drift(python, Path(args.req), Path(args.lock)))
     else:
         sys.exit(check(python, Path(args.req), Path(args.lock)))
 

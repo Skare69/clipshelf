@@ -38,7 +38,11 @@ jobs:
       # Hash-locked install: CI tests and audits exactly the resolution the
       # published image ships (requirements.lock covers the full closure).
       - run: pip install --require-hashes -r requirements.lock
-      - name: Fail when requirements.txt drifts from the lock
+      # Deterministic lock gate: no live index resolution, so a commit's CI
+      # result cannot change when upstream ships a release after the merge
+      # (the v0.12.0 release shipped no image or APK for exactly that reason).
+      # Live drift is reported daily by the scheduled lock-drift workflow.
+      - name: Fail when the lock does not cover requirements.txt
         run: python scripts/lock_deps.py check
       # License gate runs on the exact shipped set, before any tooling
       # (ruff/pip-audit) pollutes the env. See license_inventory.toml.

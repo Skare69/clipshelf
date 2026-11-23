@@ -118,25 +118,33 @@ local setup in this file install one hash-locked resolution of it — `requireme
 with per-platform wheel hashes for Windows development and linux/amd64 + arm64 —
 so the audited set is the shipped set:
 
-- `python scripts/lock_deps.py check` fails when `requirements.txt` would
-  resolve differently from the lock (CI runs this gate): a changed pin, a
-  missing pin, an extra pin in the lock that is unrelated to the current
-  resolution, or a yanked pin (pip installs yanked files under exact pins and
-  pip-audit ignores yank status, so they must never ship). When the drift is
-  changed pins, check also prints a ready-to-use conventional commit subject
+- `python scripts/lock_deps.py check` is deterministic: it resolves nothing
+  against the live package index, so a commit's CI result cannot change when
+  an upstream package ships a new release after the merge (the v0.12.0
+  release shipped no image or APK for exactly that reason). CI runs it as a
+  blocking gate. It fails when `requirements.txt` names a package the lock
+  does not pin, when a lock pin carries no hash, or when a shipped platform
+  (Windows, linux/amd64, linux/arm64) lacks a wheel matching the lock's
+  hashes; pip reports a yanked pin during that validation, and a yanked pin
+  fails the check too (pip installs yanked files under exact pins and
+  pip-audit ignores yank status, so they must never ship).
+- `python scripts/lock_deps.py drift` re-resolves `requirements.txt` against
+  the live index and reports the drift: pins that would change, a pin the
+  resolution dropped, an extra pin unrelated to the resolution, and a yanked
+  pin. When pins changed it prints a ready-to-use conventional commit subject
   computed from those pins, with bump classes major, minor, patch, or change.
-  The one known
-  exception is Django's win32-only `tzdata` marker dependency, which may be
-  present in the lock but absent from a non-Windows resolution. It also fails
-  when any shipped platform (Windows, linux/amd64, linux/arm64) lacks a wheel
-  matching the lock's hashes.
+  The scheduled lock-drift workflow runs it daily and fails on drift; it
+  never gates a commit or a tag. The one known exception is Django's
+  win32-only `tzdata` marker dependency, which may be present in the lock but
+  absent from a non-Windows resolution.
 - `python scripts/lock_deps.py make` regenerates the lock — after changing
-  `requirements.txt`, or when the check fails on a new upstream release. It
+  `requirements.txt`, or when drift reports a new upstream release. It
   writes nothing when any platform has no wheel for a pin, and fails on
   yanked pins (pin an older release in `requirements.txt` instead) or on
   ungated additions that must be listed in `--fresh`.
-- Both commands resolve only releases uploaded at least 7 days ago, so a new
-  upstream release enters the lock (and turns the check red) one week after it
+- Both `make` and `drift` resolve only releases uploaded at least 7 days ago,
+  so a new
+  upstream release enters the lock (and turns `drift` red) one week after it
   appears; that age-gated pass resolves a floor-free copy of
   `requirements.txt` (lower bounds dropped, upper bounds kept), so a floor
   raised to a release younger than 7 days does not break the gate while the

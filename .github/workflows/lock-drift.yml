@@ -1,0 +1,28 @@
+name: lock-drift
+
+# Non-blocking live drift report. `check` in ci.yml is deterministic (no live
+# index resolution), so CI stays green when an upstream package ships a new
+# release after the merge — v0.12.0 published no Docker image and no APK
+# because the old check re-resolved requirements.txt against the live index
+# inside the release gate. This scheduled job re-resolves against the live
+# index and fails with the DRIFT report and the suggested commit subject;
+# nothing gates on it (wait-ci.yml reads only ci.yml runs). The fix is a lock
+# refresh: python scripts/lock_deps.py make.
+
+on:
+  schedule:
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: python scripts/lock_deps.py drift
