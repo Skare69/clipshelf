@@ -12,8 +12,7 @@ cannot fail it, and a release that crosses the MIN_RELEASE_AGE gate between a
 local run and CI cannot change its verdict. `drift` re-resolves against the
 index (age-gated) and reports what moved from the lock; it is a non-blocking
 daily report, so the clock moves only its verdict.
-make and drift resolve only releases uploaded at least MIN_RELEASE_AGE ago
-(pip >= 26.0);
+make and drift resolve only releases uploaded at least MIN_RELEASE_AGE ago (pip >= 26.0);
 the age-gated pass resolves a copy of requirements.txt without lower bounds
 (exact pins kept as upper bounds), so a floor raised to a release younger
 than that keeps working via `make --fresh NAME`.

@@ -127,7 +127,7 @@ so the audited set is the shipped set:
   CLIP-102 and CLIP-104 red mains on 2026-11-23); `test_lock_deps.py` replays
   that timeline on a fake index at release ages 6 days 23 hours and 7 days
   1 hour. Only the non-blocking `drift` report moves with the clock. CI runs
-  it as a blocking gate. It fails when `requirements.txt` names a package the lock
+  `check` as the blocking gate. It fails when `requirements.txt` names a package the lock
   does not pin, when a lock pin carries no hash, or when a shipped platform
   (Windows, linux/amd64, linux/arm64) lacks a wheel matching the lock's
   hashes; pip reports a yanked pin during that validation, and a yanked pin
@@ -164,7 +164,7 @@ so the audited set is the shipped set:
 - `pip-audit` in CI audits the lock directly (`--no-deps`), never a fresh
   re-resolution.
 
-The image base is pinned by manifest digest (`python:3.13-slim@sha256:...`)
+The image base is pinned by manifest digest (`python:3.15-slim@sha256:...`)
 and every GitHub Action is pinned to a commit SHA. Bump these deliberately,
 one review per bump; the publish workflow additionally verifies the built
 image's installed packages against the lock before pushing.
