@@ -1021,6 +1021,34 @@ def test_acquisition_mutant_pins(tmp):
     assert out["title"] == "T" * 500 and out["desc"] == "D" * 4000
 
 
+def test_extractor_env_allowlist():
+    """Extractor subprocesses get an allowlist env: a planted server secret is
+    absent from the env argument acquisition passes, while PATH survives."""
+    runs = []
+
+    def capture(argv, **kwargs):
+        runs.append(kwargs["env"])
+        return mock.Mock(returncode=0, stdout=b"", stderr=b"")
+
+    planted = {"CLIPSHELF_SECRET_KEY": "s3cret", "TYPESAFE_API_KEY": "t-key",
+               "DB_PASSWORD": "pw", "GITHUB_TOKEN": "gh",
+               "allowlist_probe": "ambient-noise", "LANG": "C.UTF-8",
+               "HOME": "/home/u", "TZ": "UTC"}
+    with mock.patch.dict(os.environ, planted), \
+         mock.patch.object(acq.subprocess, "run", capture):
+        assert acq._run_extractor(["yt-dlp"]) == (0, "")
+        assert acq._run_listing(["yt-dlp"]) == (0, b"", "")
+
+    assert len(runs) == 2, runs
+    for env in runs:
+        assert "PATH" in env, env
+        assert env["LANG"] == "C.UTF-8" and env["HOME"] == "/home/u", env
+        assert env["TZ"] == "UTC", env
+        for key in env:
+            assert not any(bad in key.upper() for bad in
+                           ("SECRET", "PASSWORD", "TOKEN", "API_KEY")), key
+
+
 def test_interpretation_regressions(tmp):
     config = {"base_url": "http://h/v1", "model": "m"}
     source = {"url": "https://example.com/page", "title": "", "desc": "",
@@ -2672,6 +2700,7 @@ def test():
     print("direct media ok")
     test_network_status_classification()
     test_extractor_output_bounds()
+    test_extractor_env_allowlist()
     test_interpretation_bounds()
     test_screening_policy().debug()
     test_screening_warning_projection()

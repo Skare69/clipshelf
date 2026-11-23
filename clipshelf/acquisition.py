@@ -318,10 +318,10 @@ def _extractor_argv(tool, proxy, outdir, url):
 
 
 def _run_extractor(argv):
-    """Bounded subprocess, scrubbed env, honest (code, tail-of-stderr) result."""
+    """Bounded subprocess, allowlisted env, honest (code, tail-of-stderr) result."""
     try:
         proc = subprocess.run(argv, capture_output=True, timeout=EXTRACTOR_TIMEOUT,
-                              env=network.scrub_env(), check=False, shell=False)
+                              env=network.extractor_env(), check=False, shell=False)
         return proc.returncode, proc.stderr.decode(errors="replace")[-4000:]
     except subprocess.TimeoutExpired:
         return 124, f"extractor exceeded {EXTRACTOR_TIMEOUT}s time bound"
@@ -508,7 +508,7 @@ def _run_listing(argv):
     """Bounded subprocess like _run_extractor, but stdout is the payload."""
     try:
         proc = subprocess.run(argv, capture_output=True, timeout=EXTRACTOR_TIMEOUT,
-                              env=network.scrub_env(), check=False, shell=False)
+                              env=network.extractor_env(), check=False, shell=False)
     except subprocess.TimeoutExpired:
         return 124, b"", f"extractor exceeded {EXTRACTOR_TIMEOUT}s time bound"
     return (proc.returncode, proc.stdout,

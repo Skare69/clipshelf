@@ -26,7 +26,7 @@ import urllib.parse
 import zlib
 
 __all__ = ["NetworkError", "Refused", "TooLarge", "fetch_public",
-           "resolve_public", "extractor_egress", "scrub_env"]
+           "resolve_public", "extractor_egress", "extractor_env"]
 
 MAX_REDIRECTS = 10
 _NAT64 = ipaddress.IPv6Network("64:ff9b::/96")
@@ -516,11 +516,19 @@ def extractor_egress():
         server.server_close()
 
 
-def scrub_env():
-    """Environment copy without ambient proxy variables (explicit args only)."""
-    env = dict(os.environ)
-    for key in [k for k in env if k.lower().endswith("_proxy")]:
-        env.pop(key)
+_EXTRACTOR_ENV_KEEP = ("PATH", "HOME", "TZ", "LANG",
+                       "XDG_CACHE_HOME", "XDG_CONFIG_HOME")
+
+
+def extractor_env():
+    """Allowlist environment for extractor subprocesses: locale, TZ, search
+    paths, and the XDG cache/config dirs yt-dlp and gallery-dl read. Built from
+    scratch, never from a copy of os.environ, so server secrets cannot reach
+    the third-party parsers, their verbose logs, or their crash dumps."""
+    env = {key: os.environ[key] for key in _EXTRACTOR_ENV_KEEP
+           if key in os.environ}
+    env.update({key: os.environ[key] for key in os.environ
+                if key.startswith("LC_")})
     return env
 
 
