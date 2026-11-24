@@ -59,7 +59,7 @@ class IsNewerTests(SimpleTestCase):
 class AvailableUpdateTests(TestCase):
     def setUp(self):
         update.reset()
-        env = mock.patch.dict(os.environ, {"CLIPSHELF_UPDATE_CHECK": ""})
+        env = mock.patch.dict(os.environ, {"CLIPSHELF_UPDATE_CHECK": "1"})
         env.start()
         self.addCleanup(env.stop)
         self.addCleanup(update.reset)
@@ -107,7 +107,7 @@ class AvailableUpdateTests(TestCase):
             update.available_update("0.12.1")
             self.assertEqual(update.available_update("0.12.1")["version"], "0.13.0")
 
-    def test_opt_out_skips_the_network(self):
+    def test_explicit_zero_skips_the_network(self):
         with mock.patch.dict(os.environ, {"CLIPSHELF_UPDATE_CHECK": "0"}), \
                 mock.patch.object(update.network, "fetch_public") as fetch:
             self.assertIsNone(update.available_update("0.12.1"))
@@ -122,6 +122,17 @@ class AvailableUpdateTests(TestCase):
             self.assertIsNone(update.available_update("dev"))
             self.assertIsNone(update.available_update("0.13.0-rc1"))
         fetch.assert_not_called()
+
+    def test_off_by_default_makes_no_request(self):
+        # unset (bare run) and "" (compose.yaml pass-through) both stay silent
+        for case in ("unset", "empty"):
+            with self.subTest(case=case), \
+                    mock.patch.dict(os.environ, {"CLIPSHELF_UPDATE_CHECK": ""}), \
+                    mock.patch.object(update.network, "fetch_public") as fetch:
+                if case == "unset":
+                    del os.environ["CLIPSHELF_UPDATE_CHECK"]
+                self.assertIsNone(update.available_update("0.12.1"))
+                fetch.assert_not_called()
 
     def test_notice_renders_in_the_footer(self):
         with mock.patch.object(update.network, "fetch_public",

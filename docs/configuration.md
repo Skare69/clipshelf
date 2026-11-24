@@ -37,9 +37,11 @@ source is never checked. See [how-it-works.md](how-it-works.md#followed-sources)
 
 ## Update check
 
-The footer shows a link to a newer release when one is available. The server
-asks the GitHub API (`api.github.com/repos/Skare69/clipshelf/releases/latest`)
-in the background and never blocks a page for it. A good answer stays for one
-hour. After a failed check, the notice stays hidden and the server waits 60
-seconds before it asks again. Prereleases and `dev` builds never show the
-notice. To stop the request, set `CLIPSHELF_UPDATE_CHECK=0`.
+The footer shows a link to a newer release when one is available. The check is
+opt-in: an unset `CLIPSHELF_UPDATE_CHECK` makes no request, and
+`CLIPSHELF_UPDATE_CHECK=1` lets the server ask the GitHub API
+(`api.github.com/repos/Skare69/clipshelf/releases/latest`) in the background.
+The server never blocks a page for the check, a good answer stays for one
+hour, and after a failed check the notice stays hidden for 60 seconds.
+Prereleases and `dev` builds never show the notice. Set
+`CLIPSHELF_UPDATE_CHECK=0` to keep the check off explicitly.

@@ -4,7 +4,8 @@ available_update() never blocks a page render: it answers from the in-memory
 cache and, when the cache is stale, starts one background check. A good answer
 is trusted for an hour. A failed check keeps the last good answer (none on a
 cold start: never a guessed update) and waits 60 s before github is asked
-again. CLIPSHELF_UPDATE_CHECK=0 skips the check, so no request leaves the server.
+again. The check is opt-in: with CLIPSHELF_UPDATE_CHECK unset no request
+leaves the server, and CLIPSHELF_UPDATE_CHECK=1 turns it on.
 """
 import json
 import logging
@@ -41,7 +42,7 @@ def is_newer(latest, current):
 
 def available_update(current):
     """{"version", "url"} of a newer stable release, else None."""
-    if os.environ.get("CLIPSHELF_UPDATE_CHECK") == "0":
+    if os.environ.get("CLIPSHELF_UPDATE_CHECK") != "1":
         return None
     if not _NUMERIC.fullmatch(current):
         # is_newer() refuses a non-numeric current (dev, prerelease suffix),

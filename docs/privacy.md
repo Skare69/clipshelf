@@ -17,3 +17,7 @@
   content, memberships and ownership.
 - Tailscale is transport only. LAN and remote requests get identical checks, and
   forwarded/identity headers never authenticate anyone.
+- The server makes no third-party request by default. The optional release
+  check, enabled with `CLIPSHELF_UPDATE_CHECK=1`, asks api.github.com at most
+  once an hour for the latest release; that request shows the server IP and
+  the time of the check to GitHub.
