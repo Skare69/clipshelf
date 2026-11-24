@@ -260,13 +260,21 @@ def _bounded_read(resp, encoding, max_bytes, deadline):
         if len(out) > max_bytes:
             raise TooLarge(f"response exceeds {max_bytes} byte bound")
 
+    def raw_read(size):
+        try:
+            return resp.read1(size)
+        except TimeoutError as exc:   # deadline-tightened timeout ran out
+            raise NetworkError("fetch exceeded time bound") from exc
+        except OSError as exc:
+            raise NetworkError(f"connection lost mid-body: {exc}") from exc
+
     try:
         while True:
             if dec is not None and dec.eof:
                 # Member complete: any later byte is a framing violation.
                 # Reading at most one byte past it keeps a trailer from
                 # growing unused_data or stretching the fetch (CLIP-139).
-                if dec.unused_data or resp.read1(1):
+                if dec.unused_data or raw_read(1):
                     raise NetworkError("trailing data after compressed stream")
                 break
             if dec is not None and dec.unconsumed_tail:
@@ -274,12 +282,7 @@ def _bounded_read(resp, encoding, max_bytes, deadline):
                 continue
             if deadline - time.monotonic() <= 0:
                 raise NetworkError("fetch exceeded time bound")
-            try:
-                chunk = resp.read1(65536)
-            except TimeoutError as exc:   # deadline-tightened timeout ran out
-                raise NetworkError("fetch exceeded time bound") from exc
-            except OSError as exc:
-                raise NetworkError(f"connection lost mid-body: {exc}") from exc
+            chunk = raw_read(65536)
             if not chunk:
                 break
             if dec is None:

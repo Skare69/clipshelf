@@ -289,6 +289,11 @@ def test_gzip_trailer_never_read_past_cap():
             tally[0] += n
             return n
 
+        def readinto1(self, b):
+            # _DeadlineIO.readinto reads through readinto1; one call is one
+            # underlying read, same as the raw-stream contract
+            return self.readinto(b)
+
         def readline(self, *a):
             return self._inner.readline(*a)
 
@@ -298,9 +303,15 @@ def test_gzip_trailer_never_read_past_cap():
                 self.file = CountingFile(self.file)
             return self.file
 
-    fake = FakeNet({"example.com": [PUBLIC]},
-                   [http(body=gzip.compress(page) + trailer, encoding="gzip")])
-    fake.socket = lambda family, type: CountingSock(fake)
+    class CountingNet(FakeNet):
+        def socket(self, family, type):
+            sock = super().socket(family, type)
+            sock.__class__ = CountingSock   # same wired fake, counts reads
+            return sock
+
+    fake = CountingNet({"example.com": [PUBLIC]},
+                       [http(body=gzip.compress(page) + trailer,
+                             encoding="gzip")])
     original = net.socket
     net.socket = fake
     try:
@@ -2802,6 +2813,8 @@ def test():
     test_screening_warning_projection()
     test_post_transport_and_http_errors()
     test_response_read_bound()
+    test_bounded_read_stops_after_compressed_member()
+    test_gzip_trailer_never_read_past_cap()
     test_image_source_bounds()
     test_image_area_bound()
     test_image_quality_rung()
