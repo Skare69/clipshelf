@@ -1189,9 +1189,11 @@ def test_interpretation_regressions(tmp):
                              [http(body=b"x" * (interp.VERIFY_URL_BYTES_MAX + 1)),
                               http(404, body=b"gone")])
     findings = {"repos": [large_url, unavailable_url], "links": [], "warnings": []}
+    material_state = {"url": "", "title": "", "description": "",
+                      "page_text": "see http://github.com/o/large and "
+                                   "http://github.com/o/unavailable", "links": []}
     try:
-        interp._verify_urls(findings, [], {"url": "", "title": "", "description": "",
-                                           "page_text": "", "links": []})
+        interp._verify_urls(findings, [], material_state)
     finally:
         net.socket = original
     assert fake.connected == [PUBLIC, PUBLIC], fake.connected
@@ -2274,10 +2276,11 @@ def test_validated_findings_caps():
 
 
 def test_verify_urls_policy():
-    """Only github-hosted emitted URLs are re-fetched, once each (deduped,
-    http(s) only) and in material order, never model order; link hosts and
-    non-github repos are never fetched; past 20 the rest skip with an honest
-    count."""
+    """The fetch set and its order come from the material alone: every
+    host-qualified github url in the capture is fetched once in material
+    order, capped at 20 with an honest count, whether or not the model
+    emitted it. Emissions never select or order fetches; bare slug mentions
+    fetch nothing; only emitted urls among the fetches get unverified flags."""
     fetched = []
 
     def failing_fetch(url, **k):
@@ -2287,9 +2290,11 @@ def test_verify_urls_policy():
     real_fetch = net.fetch_public
     net.fetch_public = failing_fetch
     try:
-        # material lists gist, z, a in this order; the model emitted a, gist, z
+        # material lists gist, z, extra (trailing punctuation stripped), a —
+        # in this order; the emissions order is reversed on purpose
         state = {"url": "https://src.example/p", "title": "", "description": "",
-                 "page_text": "see gist.github.com/o/g and https://github.com/z/repo",
+                 "page_text": "see gist.github.com/o/g and https://github.com/z/repo "
+                              "plus https://github.com/extra/repo.",
                  "links": [{"url": "https://github.com/a/repo", "title": "a"}]}
         findings = {"repos": ["https://github.com/a/repo", "https://gist.github.com/o/g",
                               "https://github.com/z/repo"],
@@ -2299,43 +2304,50 @@ def test_verify_urls_policy():
         warnings = []
         interp._verify_urls(findings, warnings, state)
         assert fetched == ["https://gist.github.com/o/g", "https://github.com/z/repo",
+                           "https://github.com/extra/repo",
                            "https://github.com/a/repo"], fetched
         assert sorted(findings["warnings"]) == ["unverified: https://gist.github.com/o/g",
                                                 "unverified: https://github.com/a/repo",
                                                 "unverified: https://github.com/z/repo"]
         assert warnings == [], warnings
 
-        # links and non-github hosts are never fetched, at any count
+        # emissions without host-qualified material urls fetch nothing: a
+        # bare slug names no host, and the model must not select fetches
         fetched.clear()
-        findings = {"repos": [],
+        findings = {"repos": ["https://github.com/o/a", "https://github.com/o/z"],
                     "links": [f"https://h/{i}" for i in range(21)],
                     "warnings": []}
         warnings = []
         interp._verify_urls(findings, warnings,
                             {"url": "", "title": "", "description": "",
-                             "page_text": "", "links": []})
+                             "page_text": "o/z then o/a", "links": []})
         assert fetched == [], fetched
+        assert findings["warnings"] == [], findings["warnings"]
         assert warnings == [], warnings
 
-        # the cap counts material-ordered fetchable URLs only
+        # the cap counts material-ordered fetch candidates only
         fetched.clear()
-        findings = {"repos": [f"https://github.com/o/{i}" for i in range(21)],
-                    "links": [], "warnings": []}
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": " ".join(f"https://github.com/o/{i}"
+                                       for i in range(21)),
+                 "links": []}
+        findings = {"repos": [], "links": [], "warnings": []}
         warnings = []
-        interp._verify_urls(findings, warnings,
-                            {"url": "", "title": "", "description": "",
-                             "page_text": "", "links": []})
-        assert len(fetched) == 20, len(fetched)
+        interp._verify_urls(findings, warnings, state)
+        assert fetched == [f"https://github.com/o/{i}" for i in range(20)], fetched
         assert warnings == ["1 URLs not re-verified"], warnings
+        assert findings["warnings"] == [], findings["warnings"]
 
+        # lookalike hosts stay unfetched; the dedup fetches a repeated url once
         fetched.clear()
-        findings = {"repos": ["https://github.com/c/1"], "links": [], "warnings": []}
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": "notgithub.com/o/r sub.github.com/o/r "
+                              "https://www.github.com/w/1 and https://www.github.com/w/1",
+                 "links": []}
+        findings = {"repos": [], "links": [], "warnings": []}
         warnings = []
-        interp._verify_urls(findings, warnings,
-                            {"url": "", "title": "", "description": "",
-                             "page_text": "", "links": []})
-        assert len(fetched) == 1
-        assert not any("not re-verified" in w for w in warnings), warnings
+        interp._verify_urls(findings, warnings, state)
+        assert fetched == ["https://github.com/w/1"], fetched
     finally:
         net.fetch_public = real_fetch
     print("verify urls ok")
@@ -2396,9 +2408,10 @@ def test_links_bound_to_material():
 
 
 def test_verify_urls_material_order():
-    """A model reply that reorders material URLs must not steer the fetch set
-    or order: github URLs fetch in material order, attacker-host links fetch
-    nothing, and flagged material fetches nothing at all (CLIP-138)."""
+    """A model reply that reorders material URLs must not steer the fetch
+    set or order: the set and order are the material's alone, attacker-host
+    links fetch nothing, and flagged material fetches nothing at all
+    (CLIP-138)."""
     categories = ["Bike", "Secret"]
     source = {"url": "https://evil.example/p", "title": "t", "desc": "",
               "text": "repos: https://github.com/z/repo then https://github.com/a/repo",
@@ -2433,6 +2446,21 @@ def test_verify_urls_material_order():
     assert not any("evil.example" in u for u in fetched), fetched
     assert findings["links"] == ["https://evil.example/b", "https://evil.example/i",
                                  "https://evil.example/k", "https://evil.example/e"]
+
+    # the fetch set is the material's alone: emitting nothing still fetches
+    # the material's github urls, so selection cannot encode prompt state
+    empty_raw = dict(raw, repos=[], links=[])
+    fetched.clear()
+
+    def empty_post(base, key, payload, timeout):
+        return {"choices": [{"message": {"content": json.dumps(empty_raw)}}]}
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=empty_post), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        findings = interp.interpret(source, config, categories)
+    assert fetched == ["https://github.com/z/repo", "https://github.com/a/repo"], fetched
+    assert findings["repos"] == [] and findings["links"] == []
 
     # screening flagged the material: nothing is fetched at all, and repos
     # and installs are withheld before any enrichment fetch

@@ -72,10 +72,12 @@ _INVISIBLE_CHARS = frozenset(
     + "".join(map(chr, range(0xFE00, 0xFE10)))
     + "".join(map(chr, range(0xE0100, 0xE01F0))))
 VERIFY_URLS_MAX, VERIFY_URL_BYTES_MAX = 20, 64 << 10
-# The only hosts _verify_urls fetches: repo_url canonicalizes to github.com,
-# and a fixed third party cannot observe the fetch set the way the page's
-# own link hosts (attacker-chosen content) can.
-_VERIFY_HOSTS = frozenset(("github.com", "gist.github.com"))
+# Host-qualified github urls in material text: the only fetch candidates.
+# The lookbehind rejects lookalike hosts (notgithub.com, sub.github.com);
+# a bare owner/name slug names no host and is never fetched.
+_GITHUB_URL_RE = re.compile(
+    r"(?<![\w.])((?:https?://)?(?:www\.)?(?:gist\.)?github\.com/"
+    r"[^\s\"'<>(){}`;,]+)")
 SUGGEST_TAGS_MAX, SUGGEST_TITLES_MAX, SUGGEST_EXISTING_MAX = 5, 20, 200
 SUGGEST_OUTPUT_TOKENS = 300
 
@@ -513,36 +515,50 @@ def _bound_to_material(findings, state, warnings):
         findings[key] = kept
 
 
-def _verify_urls(findings, warnings, state):
-    """Public enrichment: emitted URLs re-checked under the fetch policy.
+def _url_form(url):
+    """Casefolded host-qualified form used to match emitted urls to fetches."""
+    return url.split("://", 1)[-1].casefold().removeprefix("www.")
 
-    Only github.com/gist.github.com URLs are fetched, in material order
-    rather than model order. Link hosts are attacker-chosen page content:
-    fetching a model-chosen subset or order of them would leak prompt state
-    (allowed category labels in a shared collection) to that host.
+
+def _verify_urls(findings, warnings, state):
+    """Public enrichment: material-listed github urls re-checked under the
+    fetch policy.
+
+    The fetch set and its order come from the material alone, never from
+    the model's findings: attacker-owned github content exposes public
+    fetch counters (release asset download_count), so a model-chosen
+    subset or order would leak prompt state — allowed category labels in
+    a shared collection — through them. An emitted github url is flagged
+    only when the material fetch of the same path fails; bare slug
+    mentions stay bound but fetch nothing, because a slug names no host.
     """
-    blob = _material_blob(state)
-    urls, seen = [], set()
+    emitted = {}
     for url in findings["repos"] + findings["links"]:
-        if url not in seen and re.match(r"^https?://", url):
-            seen.add(url)
-            host = url.split("://", 1)[-1].partition("/")[0].casefold()
-            if host not in _VERIFY_HOSTS:
-                continue
-            position = blob.find(url.split("://", 1)[-1].casefold())
-            urls.append((position if position >= 0 else len(blob), url))
-    urls.sort(key=lambda pair: pair[0])  # stable: capture order, never model order
-    for _, url in urls[:VERIFY_URLS_MAX]:
+        if re.match(r"^https?://", url):
+            emitted.setdefault(_url_form(url), url)
+    urls, seen = [], set()
+    for m in _GITHUB_URL_RE.finditer(_material_blob(state)):
+        form = m.group(1).rstrip(".:!?")
+        scheme = "http" if form.startswith("http://") else "https"
+        bare = _url_form(form)
+        if bare and bare not in seen:
+            seen.add(bare)
+            urls.append(f"{scheme}://{bare}")
+    failures = set()
+    for url in urls[:VERIFY_URLS_MAX]:
         try:
             network.fetch_public(url, max_bytes=VERIFY_URL_BYTES_MAX, timeout=20)
         except Exception as exc:
             if isinstance(exc, network.TooLarge):
                 continue
+            failures.add(url.split("://", 1)[-1])
+    if len(urls) > VERIFY_URLS_MAX:
+        warnings.append(f"{len(urls) - VERIFY_URLS_MAX} URLs not re-verified")
+    for form, url in emitted.items():
+        if form in failures:
             flag = f"unverified: {url}"[:300]
             if flag not in findings["warnings"]:
                 findings["warnings"].append(flag)
-    if len(urls) > VERIFY_URLS_MAX:
-        warnings.append(f"{len(urls) - VERIFY_URLS_MAX} URLs not re-verified")
 
 # ------------------------------------------------------------------ API
 
