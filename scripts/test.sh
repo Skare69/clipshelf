@@ -37,3 +37,5 @@ node test_release_gates.mjs
 node test_cat_rail.mjs
 # Inbox keeps polling after "Try again" restarts a blocked job.
 node test_inbox_retry_poll.mjs
+# Follow form: "Suggest tags" chips fill the Topic tag; inline errors, no banner.
+node test_follow_tags.mjs

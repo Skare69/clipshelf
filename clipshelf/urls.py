@@ -30,6 +30,7 @@ urlpatterns = [
     path("api/entries/<uuid:entry_id>", views.api_entry),
     path("api/assets/<uuid:asset_id>", views.api_asset),
     path("api/follows", views.api_follows),
+    path("api/follows/suggest-tags", views.api_follow_suggest_tags),
     path("api/follows/<uuid:follow_id>", views.api_follow_detail),
     path("api/feed", views.api_feed),
     path("", include(accounts.account_urlpatterns)),

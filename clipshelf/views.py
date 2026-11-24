@@ -38,7 +38,9 @@ from django.views.static import serve as _static_serve
 from allauth.core.internal import ratelimit
 
 from clipshelf.api import ApiError, json_body, json_error, vmessage
-from clipshelf import accounts, asset_files, follows, imports, services
+from clipshelf import (
+    accounts, acquisition, asset_files, follows, imports, interpretation, services,
+)
 from clipshelf.models import (
     Asset,
     Capture,
@@ -132,8 +134,9 @@ def _collection_json(collection, user):
 
 
 def _me_payload(user):
+    settings_row = services.get_settings()
     return {
-        "instance_id": str(services.get_settings().instance_id),
+        "instance_id": str(settings_row.instance_id),
         "user": {
             "id": str(user.id),
             "email": user.email,
@@ -147,6 +150,7 @@ def _me_payload(user):
         "collections": [
             _collection_json(c, user) for c in services.accessible_collections(user)
         ],
+        "llm_configured": settings_row.llm_configured,
     }
 
 
@@ -846,6 +850,23 @@ def api_follows(request):
             raise ApiError(409, detail=str(exc))
         raise ApiError(400, detail=str(exc))
     return JsonResponse({"follow": follows.follow_json(source)}, status=201)
+
+
+@api
+@require_http_methods(["POST"])
+def api_follow_suggest_tags(request):
+    """Tag suggestions for the follow form; nothing is saved."""
+    body = json_body(request)
+    try:
+        tags = follows.suggest_tags(request.user, body.get("url"))
+    except follows.LlmNotConfigured as exc:
+        raise ApiError(503, detail=str(exc))
+    except ValueError as exc:
+        raise ApiError(400, detail=str(exc))
+    except (acquisition.ListingError, interpretation.InterpretationError,
+            interpretation.ConfigurationError) as exc:
+        raise ApiError(502, detail=str(exc)[:300])
+    return JsonResponse({"tags": tags})
 
 
 @api

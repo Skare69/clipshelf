@@ -282,6 +282,8 @@ input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(-
   font-size:var(--t2);font-weight:600}
 .row{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
 .row .grow{flex:1;min-width:180px}
+.suggest:empty{display:none}
+.suggest .tag[aria-pressed=true]{background:var(--ink);border-color:var(--ink);color:var(--label)}
 .panel{max-width:920px;margin-bottom:16px;padding:20px 24px;background:var(--label);border:1px solid var(--edge);
   border-radius:var(--r-label)}
 .panel>h2{font:700 var(--t4)/1.25 var(--sans);margin-bottom:12px}

@@ -564,7 +564,8 @@ def prop_profile_url_fixed_point(rng):
 
 def prop_list_profile_posts(rng):
     """Any extractor stdout raises only ListingError, or yields posts whose
-    ids are at most 64 characters and whose URLs are http(s)."""
+    ids are at most 64 characters, whose URLs are http(s), and whose titles
+    are stripped strings within PROFILE_TITLE_MAX."""
     url = "https://www.tiktok.com/@creator"
     corpus = [
         b'{"entries": [{"id": "7101",'
@@ -577,6 +578,8 @@ def prop_list_profile_posts(rng):
         b' {"id": "7104", "url": "https://x"}]}',
         b'{"entries": ["nope", null, 3]}',
         b'{"entries": [{"id": "7105", "webpage_url": "https://x/y"}]}',
+        b'{"entries": [{"id": "7106", "url": "https://x/y", "title": ["t"],'
+        b' "description": " ' + b"d" * 400 + b' "}]}',
     ]
     for _ in range(RUNS):
         corpus.append(json.dumps(rand_json(rng)).encode("utf-8"))
@@ -610,6 +613,11 @@ def prop_list_profile_posts(rng):
                 if not post["url"].startswith(("http://", "https://")):
                     bad.append(("non-http url", stdout[:60],
                                 repr(post["url"])[:60]))
+                title = post["title"]
+                if not (isinstance(title, str)
+                        and len(title) <= acquisition.PROFILE_TITLE_MAX
+                        and title == title.strip()):
+                    bad.append(("bad title", stdout[:60], repr(title)[:60]))
     finally:
         acquisition._run_listing, network.extractor_egress = saved
     assert not bad, f"({len(bad)} violations) {bad[:3]}"

@@ -780,19 +780,23 @@ def test_tiktok_host_dispatch(tmp):
 
 
 def test_profile_listing_bounds(tmp):
-    """list_profile_posts reads flat-playlist JSON only: ids and http(s)
-    URLs, numeric ids newest first, non-numeric ids last. Invalid input,
-    a non-zero exit, a timeout or unreadable JSON raises ListingError.
-    The fake yt-dlp keeps the test offline."""
+    """list_profile_posts reads flat-playlist JSON only: ids, http(s)
+    URLs and bounded titles, numeric ids newest first, non-numeric ids last.
+    Invalid input, a non-zero exit, a timeout or unreadable JSON raises
+    ListingError. The fake yt-dlp keeps the test offline."""
     payload = {"id": "playlist", "entries": [
-        {"id": "103", "url": "https://www.tiktok.com/@u/video/103"},
-        {"id": "not-a-number", "url": "https://www.tiktok.com/@u/video/x"},
-        {"id": "105", "url": "https://www.tiktok.com/@u/video/105"},
+        {"id": "103", "url": "https://www.tiktok.com/@u/video/103",
+         "title": "  Pasta night  ", "description": "unused"},
+        {"id": "not-a-number", "url": "https://www.tiktok.com/@u/video/x",
+         "title": 7},
+        {"id": "105", "url": "https://www.tiktok.com/@u/video/105",
+         "title": "   ", "description": "desc only"},
         {"id": "104"},  # no url: skipped
         {"id": "102", "url": "ftp://cdn.example/file"},  # not http(s): skipped
         {"id": "", "url": "https://www.tiktok.com/@u/video/none"},  # no id
         {"url": "https://www.tiktok.com/@u/video/web"},  # no id
-        {"id": "101", "webpage_url": "https://www.tiktok.com/@u/video/101"},
+        {"id": "101", "webpage_url": "https://www.tiktok.com/@u/video/101",
+         "title": "t" * (acq.PROFILE_TITLE_MAX + 50)},
     ]}
     argvs = []
 
@@ -807,6 +811,9 @@ def test_profile_listing_bounds(tmp):
         ("103", "https://www.tiktok.com/@u/video/103"),
         ("101", "https://www.tiktok.com/@u/video/101"),
         ("not-a-number", "https://www.tiktok.com/@u/video/x")]
+    # Title falls back to the description; blank or non-string reads as "".
+    assert [post["title"] for post in listing] == [
+        "desc only", "Pasta night", "t" * acq.PROFILE_TITLE_MAX, ""]
     # The fixed argv keeps the bounded flat-playlist window.
     assert "--flat-playlist" in argvs[0]
     assert argvs[0][argvs[0].index("--playlist-items") + 1] == \

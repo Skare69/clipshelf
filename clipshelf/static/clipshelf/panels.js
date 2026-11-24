@@ -793,11 +793,38 @@ function followedSourcesPanel() {
   };
   const url = el("input", { type: "url", id: "followUrl", required: true, class: "grow",
     placeholder: "https://www.tiktok.com/@handle", autocomplete: "off" });
-  const tag = el("input", { type: "text", id: "followTag", maxlength: 100, required: true, autocomplete: "off" });
+  const tag = el("input", { type: "text", id: "followTag", maxlength: 100, required: true, autocomplete: "off",
+    class: "grow" });
   const full = el("input", { type: "checkbox", id: "followFull" });
+  const noLlm = S.me?.llm_configured ? null : "An admin must set up the LLM connection in Admin settings first.";
+  const suggestBtn = el("button", { class: "btn small", type: "button", text: "Suggest tags", disabled: !!noLlm,
+    title: noLlm, "aria-describedby": noLlm && "followSuggestHint" });
+  const suggestOut = el("div", { class: "suggest" });
+  const suggestErr = msg => suggestOut.replaceChildren(el("p", { class: "err", role: "alert", text: msg }));
+  suggestBtn.addEventListener("click", async () => {
+    suggestOut.replaceChildren();
+    const u = url.value.trim();
+    if (!u) { suggestErr("Enter a profile URL first."); url.focus(); return; }
+    suggestBtn.disabled = true; suggestBtn.textContent = "Suggesting…"; suggestBtn.setAttribute("aria-busy", "true");
+    try {
+      const j = await api("/api/follows/suggest-tags", { method: "POST", body: { url: u } });
+      // No data-tag on the chips: the delegated click handler on out would treat them as library filters.
+      const chips = (j.tags || []).map(t => el("button", { class: "tag", type: "button", "aria-pressed": "false", text: t }));
+      for (const c of chips) c.addEventListener("click", () => {
+        tag.value = c.textContent;
+        for (const o of chips) o.setAttribute("aria-pressed", String(o === c));
+        tag.focus();
+      });
+      suggestOut.replaceChildren(el("div", { class: "tags", role: "group", "aria-label": "Suggested tags" }, ...chips));
+    }
+    catch (e) { if (e.status !== 401 && !e.cancelled) suggestErr(e.message); }
+    finally { suggestBtn.disabled = false; suggestBtn.textContent = "Suggest tags"; suggestBtn.removeAttribute("aria-busy"); }
+  });
   const addForm = el("form", { class: "field" },
     el("label", { for: "followUrl", text: "Profile URL" }), url,
-    el("label", { for: "followTag", text: "Topic tag" }), tag,
+    el("label", { for: "followTag", text: "Topic tag" }), el("div", { class: "row" }, tag, suggestBtn),
+    noLlm && el("p", { class: "hint", id: "followSuggestHint", text: noLlm }),
+    suggestOut,
     el("label", { class: "check", for: "followFull" }, full, "Include older posts on the first check"),
     el("button", { class: "btn primary", type: "submit", text: "Follow" }));
   addForm.addEventListener("submit", async ev => {
@@ -806,7 +833,7 @@ function followedSourcesPanel() {
     if (!u || !t) return;
     try {
       await api("/api/follows", { method: "POST", body: { url: u, tag: t, full: full.checked } });
-      url.value = ""; tag.value = ""; full.checked = false;
+      url.value = ""; tag.value = ""; full.checked = false; suggestOut.replaceChildren();
       load();
     }
     catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }

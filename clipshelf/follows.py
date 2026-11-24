@@ -1,4 +1,5 @@
-"""Followed creator sources: URL validation, creation, and one check cycle.
+"""Followed creator sources: URL validation, creation, tag suggestions, and
+one check cycle.
 
 A follow lists its TikTok profile on a schedule, queues only new posts
 through the ordinary capture path, and records them in the SeenPost
@@ -7,6 +8,7 @@ who wins a concurrent listing, and the row commits in the same
 transaction as its capture, so a failed capture never consumes the
 marker. The listing itself runs strictly outside any transaction.
 """
+import itertools
 import re
 import uuid
 import urllib.parse
@@ -16,12 +18,17 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.utils import timezone
 
-from clipshelf import acquisition, lib, services
+from clipshelf import acquisition, interpretation, lib, services
 from clipshelf.lib import MAX_URL_LENGTH
-from clipshelf.models import FollowedSource, Job, SeenPost
+from clipshelf.models import Contribution, FollowedSource, Job, SeenPost
 
 # Stable duplicate marker; views map it to 409.
 DUPLICATE = "duplicate follow"
+TAG_SCAN_MAX = 1000  # newest contributions read for existing tags
+
+
+class LlmNotConfigured(Exception):
+    """No LLM base URL or model is saved; views map it to 503."""
 
 
 def validate_profile_url(url):
@@ -77,6 +84,44 @@ def follow_json(source):
         "last_error": source.last_error,
         "created_at": source.created_at.isoformat(),
     }
+
+
+def existing_tags(user):
+    """The user's own tag vocabulary, newest first, each spelling once
+    (case-insensitive): follow tags, then tags stored on contributions in
+    collections the user can see. Bounded reads only."""
+    tags = {}
+    follow_tags = FollowedSource.objects.filter(user=user).order_by(
+        "-created_at").values_list("tag", flat=True)
+    stored = (Contribution.objects
+              .filter(entry__collection__in=services.accessible_collections(user))
+              .order_by("-created_at")
+              .values_list("data__tags", flat=True)[:TAG_SCAN_MAX])
+    for tag in itertools.chain(
+            follow_tags[:interpretation.SUGGEST_EXISTING_MAX],
+            (t for value in stored for t in services._stored_list(value))):
+        if len(tags) >= interpretation.SUGGEST_EXISTING_MAX:
+            break
+        if isinstance(tag, str) and tag.strip():
+            tags.setdefault(tag.strip().casefold(), tag.strip())
+    return list(tags.values())
+
+
+def suggest_tags(user, url):
+    """Topic tag suggestions for one profile from the configured LLM. Raises
+    ValueError (bad URL), LlmNotConfigured, acquisition.ListingError, or
+    interpretation.InterpretationError/ConfigurationError. Saves nothing."""
+    profile_url = validate_profile_url(url)
+    settings = services.get_settings()
+    if not settings.llm_configured:
+        raise LlmNotConfigured(
+            "No LLM is configured. An admin can set it up in Admin settings.")
+    posts = acquisition.list_profile_posts(profile_url)
+    titles = [post["title"] for post in posts if post["title"]]
+    material = {"profile": urllib.parse.urlsplit(profile_url).path[1:],
+                "post_titles": titles[:interpretation.SUGGEST_TITLES_MAX]}
+    return interpretation.suggest_tags(material, settings.llm_config(),
+                                       existing_tags(user))
 
 
 def check_source(source, say=None):

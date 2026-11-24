@@ -55,6 +55,7 @@ class ListingError(AcquisitionError):
 
 
 PROFILE_LIST_MAX = 200           # posts per profile listing window
+PROFILE_TITLE_MAX = 300          # characters kept per listed post title
 
 
 class ImportBudgetExhausted(AcquisitionError):
@@ -516,10 +517,12 @@ def _run_listing(argv):
 
 
 def list_profile_posts(url):
-    """List a TikTok profile: [{\"id\", \"url\"}] sorted newest first (numeric
-    ids descending, non-numeric ids last). Reads the flat-playlist JSON only;
-    no media downloads. Invalid input, non-zero exit, timeout, or unreadable
-    JSON raises ListingError with the _tiktok_failure mapping."""
+    """List a TikTok profile: [{\"id\", \"url\", \"title\"}] sorted newest
+    first (numeric ids descending, non-numeric ids last). title is the entry's
+    title or description, stripped and capped at PROFILE_TITLE_MAX characters,
+    "" when absent. Reads the flat-playlist JSON only; no media downloads.
+    Invalid input, non-zero exit, timeout, or unreadable JSON raises
+    ListingError with the _tiktok_failure mapping."""
     if not isinstance(url, str) or not norm(url) or not is_tiktok(url):
         raise ListingError(f"profile listing failed ({_tiktok_failure('')})")
     with network.extractor_egress() as proxy:
@@ -541,7 +544,11 @@ def list_profile_posts(url):
         post_url = str(entry.get("url") or entry.get("webpage_url") or "")
         if not post_id or not post_url.startswith(("http://", "https://")):
             continue
-        posts.append({"id": post_id, "url": post_url[:MAX_URL_LENGTH]})
+        title = next((value.strip() for value in
+                      (entry.get("title"), entry.get("description"))
+                      if isinstance(value, str) and value.strip()), "")
+        posts.append({"id": post_id, "url": post_url[:MAX_URL_LENGTH],
+                      "title": title[:PROFILE_TITLE_MAX].rstrip()})
 
     def sort_key(post):
         try:

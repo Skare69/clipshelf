@@ -523,6 +523,11 @@ class ServerSettings(models.Model):
             api_key = self.llm_api_key if self.same_endpoint(base_url, self.llm_base_url) else ""
         return base_url, model, (api_key or "") or None
 
+    @property
+    def llm_configured(self):
+        """Saved base URL and model are both set; safe to expose."""
+        return bool(self.llm_base_url.strip() and self.llm_model.strip())
+
     def llm_config(self):
         """Trusted server-side config for worker/interpretation calls only.
         NEVER return this from an API response."""
