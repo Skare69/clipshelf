@@ -41,7 +41,9 @@ The footer shows a link to a newer release when one is available. The check is
 opt-in: an unset `CLIPSHELF_UPDATE_CHECK` makes no request, and
 `CLIPSHELF_UPDATE_CHECK=1` lets the server ask the GitHub API
 (`api.github.com/repos/Skare69/clipshelf/releases/latest`) in the background.
-The server never blocks a page for the check, a good answer stays for one
-hour, and after a failed check the notice stays hidden for 60 seconds.
-Prereleases and `dev` builds never show the notice. Set
-`CLIPSHELF_UPDATE_CHECK=0` to keep the check off explicitly.
+The server never blocks a page for the check. A good answer stays for one
+hour and stops new requests for that hour. A failed check hides the notice,
+and the server waits 60 seconds before it asks again, so continued failures
+can cause several requests in one hour. Prereleases and `dev` builds never
+show the notice. Set `CLIPSHELF_UPDATE_CHECK=0` to keep the check off
+explicitly.
