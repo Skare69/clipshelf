@@ -1182,15 +1182,16 @@ def test_interpretation_regressions(tmp):
 
     # URL body overflow alone does not mean the endpoint is unverified: the
     # size error comes from a real oversized body, not a hand-written message
-    large_url = "http://example.com/large"
-    unavailable_url = "http://example.com/unavailable"
+    large_url = "http://github.com/o/large"
+    unavailable_url = "http://github.com/o/unavailable"
 
-    fake, original = patched({"example.com": [PUBLIC]},
+    fake, original = patched({"github.com": [PUBLIC]},
                              [http(body=b"x" * (interp.VERIFY_URL_BYTES_MAX + 1)),
                               http(404, body=b"gone")])
-    findings = {"repos": [], "links": [large_url, unavailable_url], "warnings": []}
+    findings = {"repos": [large_url, unavailable_url], "links": [], "warnings": []}
     try:
-        interp._verify_urls(findings, [])
+        interp._verify_urls(findings, [], {"url": "", "title": "", "description": "",
+                                           "page_text": "", "links": []})
     finally:
         net.socket = original
     assert fake.connected == [PUBLIC, PUBLIC], fake.connected
@@ -2273,8 +2274,10 @@ def test_validated_findings_caps():
 
 
 def test_verify_urls_policy():
-    """Emitted URLs are re-fetched once each (deduped, http(s) only); past 20
-    the rest are skipped with an honest count."""
+    """Only github-hosted emitted URLs are re-fetched, once each (deduped,
+    http(s) only) and in material order, never model order; link hosts and
+    non-github repos are never fetched; past 20 the rest skip with an honest
+    count."""
     fetched = []
 
     def failing_fetch(url, **k):
@@ -2284,28 +2287,53 @@ def test_verify_urls_policy():
     real_fetch = net.fetch_public
     net.fetch_public = failing_fetch
     try:
+        # material lists gist, z, a in this order; the model emitted a, gist, z
+        state = {"url": "https://src.example/p", "title": "", "description": "",
+                 "page_text": "see gist.github.com/o/g and https://github.com/z/repo",
+                 "links": [{"url": "https://github.com/a/repo", "title": "a"}]}
+        findings = {"repos": ["https://github.com/a/repo", "https://gist.github.com/o/g",
+                              "https://github.com/z/repo"],
+                    "links": ["https://b.example/2", "https://gitlab.com/x/y",
+                              "owner/name", "https://github.com/z/repo"],
+                    "warnings": []}
         warnings = []
-        findings = {"repos": ["https://a/1", "https://a/1"],
-                    "links": ["https://b/2", "owner/name"], "warnings": []}
-        interp._verify_urls(findings, warnings)
-        assert fetched == ["https://a/1", "https://b/2"], fetched
-        assert sorted(findings["warnings"]) == ["unverified: https://a/1",
-                                                "unverified: https://b/2"]
+        interp._verify_urls(findings, warnings, state)
+        assert fetched == ["https://gist.github.com/o/g", "https://github.com/z/repo",
+                           "https://github.com/a/repo"], fetched
+        assert sorted(findings["warnings"]) == ["unverified: https://gist.github.com/o/g",
+                                                "unverified: https://github.com/a/repo",
+                                                "unverified: https://github.com/z/repo"]
         assert warnings == [], warnings
 
+        # links and non-github hosts are never fetched, at any count
         fetched.clear()
         findings = {"repos": [],
                     "links": [f"https://h/{i}" for i in range(21)],
                     "warnings": []}
         warnings = []
-        interp._verify_urls(findings, warnings)
+        interp._verify_urls(findings, warnings,
+                            {"url": "", "title": "", "description": "",
+                             "page_text": "", "links": []})
+        assert fetched == [], fetched
+        assert warnings == [], warnings
+
+        # the cap counts material-ordered fetchable URLs only
+        fetched.clear()
+        findings = {"repos": [f"https://github.com/o/{i}" for i in range(21)],
+                    "links": [], "warnings": []}
+        warnings = []
+        interp._verify_urls(findings, warnings,
+                            {"url": "", "title": "", "description": "",
+                             "page_text": "", "links": []})
         assert len(fetched) == 20, len(fetched)
         assert warnings == ["1 URLs not re-verified"], warnings
 
         fetched.clear()
-        findings = {"repos": [], "links": ["https://c/1"], "warnings": []}
+        findings = {"repos": ["https://github.com/c/1"], "links": [], "warnings": []}
         warnings = []
-        interp._verify_urls(findings, warnings)
+        interp._verify_urls(findings, warnings,
+                            {"url": "", "title": "", "description": "",
+                             "page_text": "", "links": []})
         assert len(fetched) == 1
         assert not any("not re-verified" in w for w in warnings), warnings
     finally:
@@ -2314,8 +2342,9 @@ def test_verify_urls_policy():
 
 
 def test_links_bound_to_material():
-    """Emitted URLs are fetched and stored only when they occur in the
-    material; an injected off-material link is dropped unfetched."""
+    """Emitted URLs are stored only when they occur in the material; an
+    injected off-material link is dropped, and stored links are never
+    fetched (only the github repo URL is re-checked)."""
     config = {"base_url": "http://h/v1", "model": "m"}
     source = {"url": "https://example.com/p", "title": "t",
               "desc": "start from github.com/o/r",
@@ -2342,8 +2371,8 @@ def test_links_bound_to_material():
          mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
         findings = interp.interpret(source, config, [])
     assert attacker not in findings["links"], findings["links"]
-    assert set(fetched) == {"https://github.com/o/r", "https://linked.example/x",
-                            "https://kept.example/page"}, fetched
+    # stored links are never fetched: their hosts are attacker-chosen content
+    assert fetched == ["https://github.com/o/r"], fetched
     assert any(w.startswith(f"link not in the material: {attacker}")
                for w in findings["warnings"]), findings["warnings"]
 
@@ -2364,6 +2393,60 @@ def test_links_bound_to_material():
     interp._bound_to_material(findings, {"url": "", "title": "see https://x now"}, [])
     assert findings["links"] == ["https://x"], findings["links"]
     print("links bound to material ok")
+
+
+def test_verify_urls_material_order():
+    """A model reply that reorders material URLs must not steer the fetch set
+    or order: github URLs fetch in material order, attacker-host links fetch
+    nothing, and flagged material fetches nothing at all (CLIP-138)."""
+    categories = ["Bike", "Secret"]
+    source = {"url": "https://evil.example/p", "title": "t", "desc": "",
+              "text": "repos: https://github.com/z/repo then https://github.com/a/repo",
+              "links": [{"url": f"https://evil.example/{c}", "title": c} for c in
+                        "abcdefghijklmnopqrstuvwxyz"],
+              "assets": [], "metadata": {}}
+    config = {"base_url": "http://h/v1", "model": "m"}
+    # the model's reply spells an allowed label with its link picks and
+    # reverses the repos' material order
+    raw = {"summary": "s",
+           "repos": ["https://github.com/a/repo", "https://github.com/z/repo"],
+           "prompts": [], "installs": [],
+           "links": ["https://evil.example/b", "https://evil.example/i",
+                     "https://evil.example/k", "https://evil.example/e"],
+           "categories": [], "warnings": []}
+
+    def fake_post(base, key, payload, timeout):
+        return {"choices": [{"message": {"content": json.dumps(raw)}}]}
+
+    fetched = []
+
+    def fake_fetch(url, **k):
+        fetched.append(url)
+        raise net.NetworkError("down")
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=fake_post), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        findings = interp.interpret(source, config, categories)
+    # material order (z before a), not the model's reordered reply
+    assert fetched == ["https://github.com/z/repo", "https://github.com/a/repo"], fetched
+    assert not any("evil.example" in u for u in fetched), fetched
+    assert findings["links"] == ["https://evil.example/b", "https://evil.example/i",
+                                 "https://evil.example/k", "https://evil.example/e"]
+
+    # screening flagged the material: nothing is fetched at all, and repos
+    # and installs are withheld before any enrichment fetch
+    flagged = {"text_steer": 0.9, "meta_steer": 0.0, "severity": 1.0}
+    fetched.clear()
+    with mock.patch.object(interp.judgment, "available", return_value=True), \
+         mock.patch.object(interp.judgment, "screen_material", return_value=flagged), \
+         mock.patch.object(interp, "post", side_effect=fake_post), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        findings = interp.interpret(source, config, categories)
+    assert fetched == [], fetched
+    assert findings["repos"] == [] and findings["installs"] == []
+    assert any("repos and installs withheld" in w for w in findings["warnings"])
+    print("verify urls material order ok")
 
 
 def test_interpret_pipeline_contract():
@@ -2826,6 +2909,7 @@ def test():
     test_validated_findings_caps()
     test_verify_urls_policy()
     test_links_bound_to_material()
+    test_verify_urls_material_order()
     test_interpret_pipeline_contract()
     test_interpret_screening_thresholds()
     test_interpret_screening_failure_is_reported()

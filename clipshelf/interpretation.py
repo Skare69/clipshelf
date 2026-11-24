@@ -72,6 +72,10 @@ _INVISIBLE_CHARS = frozenset(
     + "".join(map(chr, range(0xFE00, 0xFE10)))
     + "".join(map(chr, range(0xE0100, 0xE01F0))))
 VERIFY_URLS_MAX, VERIFY_URL_BYTES_MAX = 20, 64 << 10
+# The only hosts _verify_urls fetches: repo_url canonicalizes to github.com,
+# and a fixed third party cannot observe the fetch set the way the page's
+# own link hosts (attacker-chosen content) can.
+_VERIFY_HOSTS = frozenset(("github.com", "gist.github.com"))
 SUGGEST_TAGS_MAX, SUGGEST_TITLES_MAX, SUGGEST_EXISTING_MAX = 5, 20, 200
 SUGGEST_OUTPUT_TOKENS = 300
 
@@ -475,15 +479,22 @@ def _validated(raw, source_url, categories, warnings):
             "installs": installs, "warnings": out_warnings}
 
 
-def _bound_to_material(findings, state, warnings):
-    """Keep only URLs derivable from the material text; the rest are dropped
-    and never fetched, so captured content cannot make the worker probe
-    attacker-chosen URLs (which would leak allowed_categories)."""
+def _material_blob(state):
+    """Casefolded capture text that emitted URLs must occur in; also the
+    fetch-order source: positions here belong to the capture, never to the
+    model's choice."""
     parts = [state.get("url") or "", state.get("title") or "",
              state.get("description") or "", state.get("page_text") or ""]
     for link in state.get("links") or []:
         parts += [link.get("url") or "", link.get("title") or ""]
-    blob = "\n".join(parts).casefold()
+    return "\n".join(parts).casefold()
+
+
+def _bound_to_material(findings, state, warnings):
+    """Keep only URLs derivable from the material text; the rest are dropped
+    and never fetched, so captured content cannot make the worker probe
+    attacker-chosen URLs (which would leak allowed_categories)."""
+    blob = _material_blob(state)
     for key in ("repos", "links"):
         kept = []
         for url in findings[key]:
@@ -502,14 +513,26 @@ def _bound_to_material(findings, state, warnings):
         findings[key] = kept
 
 
-def _verify_urls(findings, warnings):
-    """Public enrichment: emitted URLs re-checked under the fetch policy."""
+def _verify_urls(findings, warnings, state):
+    """Public enrichment: emitted URLs re-checked under the fetch policy.
+
+    Only github.com/gist.github.com URLs are fetched, in material order
+    rather than model order. Link hosts are attacker-chosen page content:
+    fetching a model-chosen subset or order of them would leak prompt state
+    (allowed category labels in a shared collection) to that host.
+    """
+    blob = _material_blob(state)
     urls, seen = [], set()
     for url in findings["repos"] + findings["links"]:
         if url not in seen and re.match(r"^https?://", url):
             seen.add(url)
-            urls.append(url)
-    for url in urls[:VERIFY_URLS_MAX]:
+            host = url.split("://", 1)[-1].partition("/")[0].casefold()
+            if host not in _VERIFY_HOSTS:
+                continue
+            position = blob.find(url.split("://", 1)[-1].casefold())
+            urls.append((position if position >= 0 else len(blob), url))
+    urls.sort(key=lambda pair: pair[0])  # stable: capture order, never model order
+    for _, url in urls[:VERIFY_URLS_MAX]:
         try:
             network.fetch_public(url, max_bytes=VERIFY_URL_BYTES_MAX, timeout=20)
         except Exception as exc:
@@ -569,13 +592,16 @@ def interpret(source, config, categories, screening_key=None):
             findings = _validated(_parse_json_content(content), source["url"],
                                   categories, warnings)
             _bound_to_material(findings, state, warnings)
-            _verify_urls(findings, warnings)
             if screened and steer >= judgment.ACTION_STEER:
+                # flagged content: withhold first and fetch nothing — URL
+                # fetches must never run for, or reflect, steering output
                 findings["repos"] = []
                 findings["installs"] = []
                 warnings.append(
                     "screening: suspicious interpreter-directed content; "
                     "repos and installs withheld")
+            else:
+                _verify_urls(findings, warnings, state)
             # runtime diagnostics (skipped images, dropped categories, ...) are
             # evidence too: keep them beside the model's own warnings
             findings["warnings"] = list(dict.fromkeys(
