@@ -19,7 +19,7 @@
   forwarded/identity headers never authenticate anyone.
 - The server makes no third-party request by default. The optional release
   check, enabled with `CLIPSHELF_UPDATE_CHECK=1`, asks api.github.com for the
-  latest release. A good answer stops new requests for one hour; a failed
-  check retries after 60 seconds, so continued failures can ask several times
-  in one hour. Each request shows the server IP and the time of the check to
-  GitHub.
+  latest release when the version is numeric; a dev or prerelease build never
+  asks. A good answer stops new requests for one hour; a failed check retries
+  after 60 seconds, so continued failures can ask several times in one hour.
+  Each request shows the server IP and the time of the check to GitHub.

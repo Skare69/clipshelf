@@ -45,5 +45,5 @@ The server never blocks a page for the check. A good answer stays for one
 hour and stops new requests for that hour. A failed check hides the notice,
 and the server waits 60 seconds before it asks again, so continued failures
 can cause several requests in one hour. Prereleases and `dev` builds never
-show the notice. Set `CLIPSHELF_UPDATE_CHECK=0` to keep the check off
-explicitly.
+show the notice, and the server never asks about them. Set
+`CLIPSHELF_UPDATE_CHECK=0` to keep the check off explicitly.
