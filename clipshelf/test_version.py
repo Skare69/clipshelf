@@ -113,6 +113,16 @@ class AvailableUpdateTests(TestCase):
             self.assertIsNone(update.available_update("0.12.1"))
         fetch.assert_not_called()
 
+    def test_non_numeric_version_skips_the_network(self):
+        # a dev or prerelease build can never show the notice: the check must
+        # not even start (CLIPSHELF_UPDATE_CHECK is unset here).
+        env = {k: v for k, v in os.environ.items() if k != "CLIPSHELF_UPDATE_CHECK"}
+        with mock.patch.dict(os.environ, env, clear=True), \
+                mock.patch.object(update.network, "fetch_public") as fetch:
+            self.assertIsNone(update.available_update("dev"))
+            self.assertIsNone(update.available_update("0.13.0-rc1"))
+        fetch.assert_not_called()
+
     def test_notice_renders_in_the_footer(self):
         with mock.patch.object(update.network, "fetch_public",
                                return_value=_release("v0.13.0")), \

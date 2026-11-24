@@ -43,6 +43,10 @@ def available_update(current):
     """{"version", "url"} of a newer stable release, else None."""
     if os.environ.get("CLIPSHELF_UPDATE_CHECK") == "0":
         return None
+    if not _NUMERIC.fullmatch(current):
+        # is_newer() refuses a non-numeric current (dev, prerelease suffix),
+        # so a check for one is a guaranteed-useless request: never start it.
+        return None
     now = time.monotonic()
     with _lock:
         stale = _state["at"] is None or now - _state["at"] >= FRESH_S
