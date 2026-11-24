@@ -235,20 +235,28 @@ class ListingFailureTests(FollowMixin, TestCase):
 
 # ----------------------------------------------------- unfollow mid-check
 
-class UnfollowMidCheckTests(FollowMixin, TestCase):
+class UnfollowMidCheckTests(FollowMixin, TransactionTestCase):
     """A source unfollowed between the worker's claim and the check: the
-    claimed instance is stale, and every schedule write must treat zero
-    updated rows as "missing" instead of raising NotUpdated (which the
-    worker would log as a crash for a normal user action)."""
+    claimed instance keeps its UUID while the row is really gone, and every
+    schedule write must treat zero updated rows as "missing" instead of
+    raising NotUpdated (which the worker would log as a crash for a normal
+    user action). TransactionTestCase so the delete and the check cycle hit
+    committed rows, not the TestCase transaction."""
 
     def test_deleted_source_reports_missing_without_writing(self):
         source = follows.create_follow(self.alice, PROFILE, "recipes")
-        source.delete()
+        # The delete endpoint fetches its own instance, so the worker's
+        # claimed instance never learns that the row is gone.
+        deleted, _ = FollowedSource.objects.filter(pk=source.pk).delete()
+        self.assertEqual(deleted, 1)
+        self.assertIsNotNone(source.pk)  # the claim keeps its UUID
         with mock.patch.object(acquisition, "list_profile_posts",
                                return_value=[]):
             self.assertEqual(follows.check_source(source), "missing")
-        # One listed post: the seen-marker insert hits the deleted-row FK,
-        # and the cycle still ends as "missing", never as a raise.
+        # One listed post: the seen-marker insert hits the deleted-row FK
+        # (IntegrityError, not the unsaved-instance guard, because the
+        # claimed pk is intact), and the cycle still ends as "missing",
+        # never as a raise.
         with mock.patch.object(acquisition, "list_profile_posts",
                                return_value=posts("204")):
             self.assertEqual(follows.check_source(source), "missing")
