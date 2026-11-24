@@ -319,9 +319,19 @@ td .acts{justify-content:flex-end;flex-wrap:nowrap}
 .filebtn:hover{border-color:var(--ink);background:var(--hover)}
 .filebtn input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .filebtn:focus-within{outline:2px solid var(--ink);outline-offset:2px}
-.prog{height:6px;margin:12px 0;border-radius:3px;background:var(--label2);overflow:hidden;max-width:420px}
-.prog>div{height:100%;background:var(--ink);transform:scaleX(0);transform-origin:left;
-  transition:transform .25s var(--ease)}
+.prog{height:6px;margin:12px 0;padding:0;border:0;border-radius:3px;background:var(--label2);
+  overflow:hidden;max-width:420px;appearance:none;-webkit-appearance:none}
+.prog::-webkit-progress-bar{background:var(--label2);border-radius:3px}
+.prog::-webkit-progress-value{background:var(--ink);border-radius:3px;
+  transition:width .25s var(--ease)}
+.prog::-moz-progress-bar{background:var(--ink);border-radius:3px;
+  transition:width .25s var(--ease)}
+/* No value attribute: the bar is indeterminate. appearance:none drops Chrome's
+   throbber, so sweep an ink band across the track; Firefox keeps its native
+   blink on ::-moz-progress-bar (the webkit rule is invalid there and ignored). */
+@keyframes prog-sweep{from{background-position:0 0}to{background-position:100% 0}}
+.prog:not([value])::-webkit-progress-bar{background:linear-gradient(90deg,transparent 0,var(--ink) 50%,transparent 100%) no-repeat;
+  background-size:40% 100%;animation:prog-sweep 1.2s linear infinite}
 
 /* ---------- snackbar ---------- */
 .banner{position:fixed;z-index:60;left:50%;bottom:24px;transform:translateX(-50%);

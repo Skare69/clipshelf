@@ -63,7 +63,7 @@
       <label class="filebtn">Choose a file<input id="impFile" type="file" accept=".json,application/json"></label>
       <span id="impName" class="hint"></span>
     </div>
-    <div class="prog" id="impProg" hidden role="progressbar" aria-label="Import upload progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="impFill"></div></div>
+    <progress id="impProg" class="prog" max="100" value="0" aria-label="Import upload progress" hidden></progress>
     <p class="err" id="impErr" role="alert" hidden></p>
     <div class="row">
       <button id="impBtn" class="btn primary" type="button" disabled>Import</button>

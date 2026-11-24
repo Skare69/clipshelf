@@ -23,8 +23,8 @@ These facts come from `clipshelf/templates/` and `clipshelf/static/`:
   focus to the search input (`static/clipshelf/panels.js`).
 - Icon-only buttons carry `aria-label` text.
 - Notices use a polite live region (`role="status"`, `aria-live="polite"`).
-- Form errors use `role="alert"`, and import progress uses
-  `role="progressbar"` with value attributes.
+- Form errors use `role="alert"`, and import progress is a native
+  `progress` element, so the browser exposes its role and value.
 - Decorative marks use empty `alt` text, and media thumbnails carry alt text:
   the asset name, or `retained image` when the asset has no name
   (`static/clipshelf/panels.js`).

@@ -594,7 +594,7 @@ capBtn.addEventListener("click", async () => {
 });
 
 const impFile = $("#impFile"), impBtn = $("#impBtn"), impErr = $("#impErr"),
-  impProg = $("#impProg"), impFill = $("#impFill"), impStat = $("#impStat");
+  impProg = $("#impProg"), impStat = $("#impStat");
 impFile.addEventListener("change", () => {
   impErr.hidden = true;
   $("#impName").textContent = impFile.files[0]?.name || "";
@@ -617,10 +617,9 @@ impBtn.addEventListener("click", () => {
   xhr.setRequestHeader("X-CSRFToken", csrf());
   xhr.setRequestHeader("Accept", "application/json");
   xhr.upload.addEventListener("progress", ev => {
-    if (!ev.lengthComputable) return;
+    if (!ev.lengthComputable) { impProg.removeAttribute("value"); return; }
     const pct = Math.round(100 * ev.loaded / ev.total);
-    impFill.style.transform = `scaleX(${pct / 100})`;
-    impProg.setAttribute("aria-valuenow", pct);
+    impProg.value = pct;
     impStat.textContent = `Uploading ${pct}% (${(ev.loaded / 1048576).toFixed(1)} of ${(ev.total / 1048576).toFixed(1)} MiB)`;
   });
   xhr.addEventListener("load", () => {
@@ -635,7 +634,7 @@ impBtn.addEventListener("click", () => {
         impErr.hidden = false;
         return;
       }
-      impProg.hidden = true; impFill.style.transform = "scaleX(0)";
+      impProg.hidden = true; impProg.value = 0;
       impStat.textContent = "";
       impFile.value = ""; $("#impName").textContent = ""; impBtn.disabled = true;
       addDlg.close();

@@ -22,11 +22,16 @@ function fakeEl(tag) {
     tagName: String(tag).toUpperCase(),
     attributes: {}, dataset: {}, listeners: {},
     children: [], childNodes: [], parentElement: null,
-    className: "", value: "", hidden: false, open: false,
+    className: "", hidden: false, open: false,
+    // Mirrors the real DOM: the value IDL attribute reflects to the content
+    // attribute, so removeAttribute("value") is observable in the stub.
+    get value() { return this.attributes.value ?? ""; },
+    set value(v) { this.attributes.value = String(v); },
     get textContent() { return this.childNodes.map((c) => typeof c === "string" ? c : c.textContent).join(""); },
     set textContent(v) { this.childNodes = [String(v)]; this.children = []; },
     setAttribute(k, v) { this.attributes[k] = String(v); },
     getAttribute(k) { return this.attributes[k] ?? null; },
+    removeAttribute(k) { delete this.attributes[k]; },
     append(...kids) {
       // The real DOM stringifies non-node kids into text nodes (null -> "null").
       for (const k of kids.flat(9)) {
@@ -159,7 +164,6 @@ const impFile = bySel.get("#impFile");
 const uploadFile = new Blob(["{}"], { type: "application/json" });
 uploadFile.name = "tiktok.json";
 impFile.files = [uploadFile];
-bySel.get("#impFill").style = {}; // success path resets the bar width
 const addDlg = bySel.get("#addDlg");
 let dialogClosed = false;
 addDlg.close = () => { dialogClosed = true; };
@@ -167,7 +171,8 @@ class FakeUploadXhr {
   static sent = [];
   constructor() {
     this.listeners = {};
-    this.upload = { addEventListener() {} };
+    this.upload = { listeners: {},
+      addEventListener: (t, fn) => { (this.upload.listeners[t] ||= []).push(fn); } };
     this.status = 0; this.responseText = "";
     FakeUploadXhr.sent.push(this);
   }
@@ -185,9 +190,23 @@ const respond = (status, payload) => {
   xhr.responseText = JSON.stringify(payload);
   for (const fn of xhr.listeners.load) fn({});
 };
+const fireUploadProgress = (loaded, total, computable = true) => {
+  const xhr = FakeUploadXhr.sent.at(-1);
+  for (const fn of xhr.upload.listeners.progress || [])
+    fn({ loaded, total, lengthComputable: computable });
+};
 
 // 200 replay of a failed import: error element, no dialog close, no ok banner.
 impClick();
+// fakeEl mirrors the real reflection contract: setting the value IDL attribute
+// stores the content attribute, so the asserts below watch attributes.value.
+fireUploadProgress(200, 1000);
+const impProg = bySel.get("#impProg");
+assert.equal(impProg.attributes.value, "20",
+  "computable progress must set the bar value to the rounded percent");
+fireUploadProgress(500, 0, false);
+assert.equal("value" in impProg.attributes, false,
+  "progress without a computable length must drop the value attribute: the bar shows indeterminate");
 respond(200, { import: { id: "r1", status: "error", error: "too many items (5001 > 5000)" } });
 assert.equal(impErr.hidden, false, "failed replay must surface the error element");
 assert.match(impErr.textContent, /too many items \(5001 > 5000\)/,
@@ -200,10 +219,15 @@ assert.ok(!bannerEl.className.includes("ok"),
 
 // Control: a pending import still takes the success path.
 impClick();
+fireUploadProgress(400, 1000);
+assert.equal(bySel.get("#impProg").attributes.value, "40",
+  "the bar value must follow the upload progress events");
 respond(201, { import: { id: "r2", status: "pending" } });
 assert.equal(dialogClosed, true, "accepted import still closes the dialog");
 assert.ok(bannerEl.className.includes("ok"), "accepted import still shows the ok banner");
 assert.equal(impErr.hidden, true, "accepted import shows no error");
+assert.equal(bySel.get("#impProg").attributes.value, "0",
+  "the success path must reset the bar value for the next upload");
 clearTimeout(S.libTimer); // drop the deferred library refresh so node exits
 
 console.log("ok: failed import replay shows the stored error and never the success banner");
