@@ -1193,7 +1193,8 @@ def test_interpretation_regressions(tmp):
                       "page_text": "see http://github.com/o/large and "
                                    "http://github.com/o/unavailable", "links": []}
     try:
-        interp._verify_urls(findings, [], material_state)
+        failures = interp._verify_urls(material_state, [])
+        interp._warn_unverified_urls(findings, failures)
     finally:
         net.socket = original
     assert fake.connected == [PUBLIC, PUBLIC], fake.connected
@@ -2302,7 +2303,8 @@ def test_verify_urls_policy():
                               "owner/name", "https://github.com/z/repo"],
                     "warnings": []}
         warnings = []
-        interp._verify_urls(findings, warnings, state)
+        failures = interp._verify_urls(state, warnings)
+        interp._warn_unverified_urls(findings, failures)
         assert fetched == ["https://gist.github.com/o/g", "https://github.com/z/repo",
                            "https://github.com/extra/repo",
                            "https://github.com/a/repo"], fetched
@@ -2318,9 +2320,10 @@ def test_verify_urls_policy():
                     "links": [f"https://h/{i}" for i in range(21)],
                     "warnings": []}
         warnings = []
-        interp._verify_urls(findings, warnings,
-                            {"url": "", "title": "", "description": "",
-                             "page_text": "o/z then o/a", "links": []})
+        failures = interp._verify_urls(
+            {"url": "", "title": "", "description": "",
+             "page_text": "o/z then o/a", "links": []}, warnings)
+        interp._warn_unverified_urls(findings, failures)
         assert fetched == [], fetched
         assert findings["warnings"] == [], findings["warnings"]
         assert warnings == [], warnings
@@ -2333,7 +2336,8 @@ def test_verify_urls_policy():
                  "links": []}
         findings = {"repos": [], "links": [], "warnings": []}
         warnings = []
-        interp._verify_urls(findings, warnings, state)
+        failures = interp._verify_urls(state, warnings)
+        interp._warn_unverified_urls(findings, failures)
         assert fetched == [f"https://github.com/o/{i}" for i in range(20)], fetched
         assert warnings == ["1 URLs not re-verified"], warnings
         assert findings["warnings"] == [], findings["warnings"]
@@ -2346,7 +2350,8 @@ def test_verify_urls_policy():
                  "links": []}
         findings = {"repos": [], "links": [], "warnings": []}
         warnings = []
-        interp._verify_urls(findings, warnings, state)
+        failures = interp._verify_urls(state, warnings)
+        interp._warn_unverified_urls(findings, failures)
         assert fetched == ["https://github.com/w/1"], fetched
     finally:
         net.fetch_public = real_fetch
@@ -2475,6 +2480,112 @@ def test_verify_urls_material_order():
     assert findings["repos"] == [] and findings["installs"] == []
     assert any("repos and installs withheld" in w for w in findings["warnings"])
     print("verify urls material order ok")
+
+
+def test_interpret_valid_reply_fetches_before_model():
+    source = {"url": "https://example.com/page", "title": "", "desc": "",
+              "text": "https://github.com/o/r/releases/download/v1/first.zip "
+                      "https://github.com/o/r/releases/download/v1/second.zip "
+                      "https://github.com/o/r/releases/download/v1/third.zip",
+              "links": [], "assets": [], "metadata": {}}
+    expected = ["https://github.com/o/r/releases/download/v1/first.zip",
+                "https://github.com/o/r/releases/download/v1/second.zip",
+                "https://github.com/o/r/releases/download/v1/third.zip"]
+    events = []
+    fetched = []
+    raw = {"summary": "s", "repos": [], "prompts": [], "installs": [],
+           "links": [expected[2], expected[0]], "categories": [], "warnings": []}
+
+    def fake_fetch(url, **kwargs):
+        fetched.append(url)
+        events.append(("fetch", url))
+        raise net.NetworkError("down")
+
+    def fake_post(base, key, payload, timeout):
+        events.append(("post", None))
+        return {"choices": [{"message": {"content": json.dumps(raw)}}]}
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=fake_post), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        findings = interp.interpret(source, {"base_url": "http://h/v1", "model": "m"}, [])
+    assert fetched == expected, fetched
+    assert events == [("fetch", url) for url in expected] + [("post", None)], events
+    assert findings["links"] == [expected[2], expected[0]], findings
+
+
+def test_interpret_malformed_replies_fetch_before_model():
+    source = {"url": "https://example.com/page", "title": "", "desc": "",
+              "text": "https://github.com/o/r/releases/download/v1/first.zip "
+                      "https://github.com/o/r/releases/download/v1/second.zip "
+                      "https://github.com/o/r/releases/download/v1/third.zip",
+              "links": [], "assets": [], "metadata": {}}
+    expected = ["https://github.com/o/r/releases/download/v1/first.zip",
+                "https://github.com/o/r/releases/download/v1/second.zip",
+                "https://github.com/o/r/releases/download/v1/third.zip"]
+    events = []
+    fetched = []
+    calls = []
+
+    def fake_fetch(url, **kwargs):
+        fetched.append(url)
+        events.append(("fetch", url))
+        raise net.NetworkError("down")
+
+    def fake_post(base, key, payload, timeout):
+        calls.append(payload)
+        events.append(("post", None))
+        return {"choices": [{"message": {"content": "not valid JSON"}}]}
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=fake_post), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        try:
+            interp.interpret(source, {"base_url": "http://h/v1", "model": "m"}, [])
+        except interp.InterpretationError:
+            pass
+        else:
+            raise AssertionError("two malformed replies were accepted")
+    assert len(calls) == 2, calls
+    assert fetched == expected, fetched
+    assert events == ([("fetch", url) for url in expected]
+                      + [("post", None), ("post", None)]), events
+
+
+def test_interpret_material_url_case():
+    upper = "https://github.com/Owner/Repo/blob/Main/README.md?View=Raw"
+    lower = "https://github.com/Owner/Repo/blob/Main/readme.md?View=Raw"
+    query = "https://github.com/Owner/Repo/blob/Main/README.md?View=raw"
+    source = {"url": "https://example.com/page", "title": "", "desc": "",
+              "text": upper.replace("github.com", "GitHub.COM") + " "
+                      + lower + " " + query + " " + upper,
+              "links": [], "assets": [], "metadata": {}}
+    raw = {"summary": "s", "repos": [], "prompts": [], "installs": [],
+           "links": [query, lower, upper], "categories": [], "warnings": []}
+    fetched = []
+
+    def fake_fetch(url, **kwargs):
+        fetched.append(url)
+        if url == lower:
+            return b"", "text/plain", url
+        raise net.NetworkError("down")
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", return_value={
+             "choices": [{"message": {"content": json.dumps(raw)}}]}), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        findings = interp.interpret(source, {"base_url": "http://h/v1", "model": "m"}, [])
+    assert fetched == [upper, lower, query], fetched
+    expected_links = [
+        "https://github.com/owner/repo/blob/Main/README.md?View=raw",
+        "https://github.com/owner/repo/blob/Main/readme.md?View=Raw",
+        "https://github.com/owner/repo/blob/Main/README.md?View=Raw",
+    ]
+    assert findings["links"] == expected_links, findings
+    assert findings["warnings"] == [
+        "unverified: " + expected_links[0],
+        "unverified: " + expected_links[2],
+    ], findings
 
 
 def test_interpret_pipeline_contract():
@@ -2938,6 +3049,9 @@ def test():
     test_verify_urls_policy()
     test_links_bound_to_material()
     test_verify_urls_material_order()
+    test_interpret_valid_reply_fetches_before_model()
+    test_interpret_malformed_replies_fetch_before_model()
+    test_interpret_material_url_case()
     test_interpret_pipeline_contract()
     test_interpret_screening_thresholds()
     test_interpret_screening_failure_is_reported()

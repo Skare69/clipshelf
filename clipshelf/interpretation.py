@@ -77,7 +77,7 @@ VERIFY_URLS_MAX, VERIFY_URL_BYTES_MAX = 20, 64 << 10
 # a bare owner/name slug names no host and is never fetched.
 _GITHUB_URL_RE = re.compile(
     r"(?<![\w.])((?:https?://)?(?:www\.)?(?:gist\.)?github\.com/"
-    r"[^\s\"'<>(){}`;,]+)")
+    r"[^\s\"'<>(){}`;,]+)", re.IGNORECASE)
 SUGGEST_TAGS_MAX, SUGGEST_TITLES_MAX, SUGGEST_EXISTING_MAX = 5, 20, 200
 SUGGEST_OUTPUT_TOKENS = 300
 
@@ -482,21 +482,17 @@ def _validated(raw, source_url, categories, warnings):
 
 
 def _material_blob(state):
-    """Casefolded capture text that emitted URLs must occur in; also the
-    fetch-order source: positions here belong to the capture, never to the
-    model's choice."""
+    """Return capture text in material order, with URL case intact."""
     parts = [state.get("url") or "", state.get("title") or "",
              state.get("description") or "", state.get("page_text") or ""]
     for link in state.get("links") or []:
         parts += [link.get("url") or "", link.get("title") or ""]
-    return "\n".join(parts).casefold()
+    return "\n".join(parts)
 
 
 def _bound_to_material(findings, state, warnings):
-    """Keep only URLs derivable from the material text; the rest are dropped
-    and never fetched, so captured content cannot make the worker probe
-    attacker-chosen URLs (which would leak allowed_categories)."""
-    blob = _material_blob(state)
+    """Keep only emitted URLs that occur in the material, including bare slugs."""
+    blob = _material_blob(state).casefold()
     for key in ("repos", "links"):
         kept = []
         for url in findings[key]:
@@ -516,30 +512,21 @@ def _bound_to_material(findings, state, warnings):
 
 
 def _url_form(url):
-    """Casefolded host-qualified form used to match emitted urls to fetches."""
-    return url.split("://", 1)[-1].casefold().removeprefix("www.")
+    """Normalize the host only; retain exact path and query case."""
+    host, sep, tail = url.split("://", 1)[-1].partition("/")
+    return host.casefold().removeprefix("www.") + sep + tail
 
 
-def _verify_urls(findings, warnings, state):
-    """Public enrichment: material-listed github urls re-checked under the
-    fetch policy.
+def _verify_urls(state, warnings):
+    """Fetch material URLs once before model output can affect public counters.
 
-    The fetch set and its order come from the material alone, never from
-    the model's findings: attacker-owned github content exposes public
-    fetch counters (release asset download_count), so a model-chosen
-    subset or order would leak prompt state — allowed category labels in
-    a shared collection — through them. An emitted github url is flagged
-    only when the material fetch of the same path fails; bare slug
-    mentions stay bound but fetch nothing, because a slug names no host.
+    Material alone selects and orders fetches. Bare slugs name no host.
+    Return failed URL forms for later local warnings.
     """
-    emitted = {}
-    for url in findings["repos"] + findings["links"]:
-        if re.match(r"^https?://", url):
-            emitted.setdefault(_url_form(url), url)
     urls, seen = [], set()
     for m in _GITHUB_URL_RE.finditer(_material_blob(state)):
         form = m.group(1).rstrip(".:!?")
-        scheme = "http" if form.startswith("http://") else "https"
+        scheme = "http" if form.casefold().startswith("http://") else "https"
         bare = _url_form(form)
         if bare and bare not in seen:
             seen.add(bare)
@@ -551,9 +538,21 @@ def _verify_urls(findings, warnings, state):
         except Exception as exc:
             if isinstance(exc, network.TooLarge):
                 continue
-            failures.add(url.split("://", 1)[-1])
+            failures.add(_url_form(url))
     if len(urls) > VERIFY_URLS_MAX:
         warnings.append(f"{len(urls) - VERIFY_URLS_MAX} URLs not re-verified")
+    return failures
+
+
+def _warn_unverified_urls(findings, failures):
+    """Map cached fetch failures to emitted URLs without network calls."""
+    # Validation canonicalizes owner/repo segments, but not asset path case.
+    failures = {_url_form(canonical) for form in failures
+                if (canonical := norm(f"https://{form}"))}
+    emitted = {}
+    for url in findings["repos"] + findings["links"]:
+        if re.match(r"^https?://", url):
+            emitted.setdefault(_url_form(url), url)
     for form, url in emitted.items():
         if form in failures:
             flag = f"unverified: {url}"[:300]
@@ -595,6 +594,10 @@ def interpret(source, config, categories, screening_key=None):
     elif screened and steer >= judgment.REVIEW_STEER:
         warnings.append("screening: suspicious content flagged; proceeding")
 
+    failures = set()
+    if not (screened and steer >= judgment.ACTION_STEER):
+        failures = _verify_urls(state, warnings)
+
     reason = None
     for attempt in range(2):  # exactly one malformed-output retry
         if reason:
@@ -609,15 +612,13 @@ def interpret(source, config, categories, screening_key=None):
                                   categories, warnings)
             _bound_to_material(findings, state, warnings)
             if screened and steer >= judgment.ACTION_STEER:
-                # flagged content: withhold first and fetch nothing — URL
-                # fetches must never run for, or reflect, steering output
+                # Screening blocks enrichment before the first model call.
                 findings["repos"] = []
                 findings["installs"] = []
                 warnings.append(
                     "screening: suspicious interpreter-directed content; "
                     "repos and installs withheld")
-            else:
-                _verify_urls(findings, warnings, state)
+            _warn_unverified_urls(findings, failures)
             # runtime diagnostics (skipped images, dropped categories, ...) are
             # evidence too: keep them beside the model's own warnings
             findings["warnings"] = list(dict.fromkeys(

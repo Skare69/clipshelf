@@ -882,6 +882,40 @@ def prop_bounded_read(rng):
 
 # --------------------------------------------------------------------- harness
 
+def prop_url_form_case(rng):
+    """URL comparison folds the host but preserves path and query case."""
+    corpus = [("/Owner/Repo/blob/Main/README.md", "View=Raw"),
+              ("/Owner/Repo/blob/Main/readme.md", "View=raw")]
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+    for _ in range(RUNS):
+        path = "/A" + "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 40)))
+        query = "Key=A" + "".join(rng.choice(alphabet) for _ in range(rng.randint(1, 30)))
+        corpus.append((path, query))
+    for path, query in corpus:
+        expected = "github.com" + path + "?" + query
+        for host in ("github.com", "GitHub.COM", "WWW.GitHub.COM"):
+            url = "https://" + host + path + "?" + query
+            got = interpretation._url_form(url)
+            assert got == expected, (url, expected, got)
+        path_variant = path.swapcase()
+        query_variant = query.swapcase()
+        assert interpretation._url_form(
+            "https://github.com" + path_variant + "?" + query
+        ) == "github.com" + path_variant + "?" + query
+        assert interpretation._url_form(
+            "https://github.com" + path_variant + "?" + query
+        ) != expected, (path, path_variant)
+        assert interpretation._url_form(
+            "https://github.com" + path + "?" + query_variant
+        ) == "github.com" + path + "?" + query_variant
+        assert interpretation._url_form(
+            "https://github.com" + path + "?" + query_variant
+        ) != expected, (query, query_variant)
+    assert interpretation._url_form(
+        "https://github.com/o/r/README.md"
+    ) != interpretation._url_form("https://github.com/o/r/readme.md")
+
+
 PROPERTIES = [
     ("norm", prop_norm),
     ("legacy_media_path", prop_legacy_media_path),
@@ -893,6 +927,7 @@ PROPERTIES = [
     ("public_ip", prop_public_ip),
     ("validated", prop_validated),
     ("validate_url", prop_validate_url),
+    ("url_form_case", prop_url_form_case),
     ("profile_url", prop_profile_url),
     ("profile_url_fixed_point", prop_profile_url_fixed_point),
     ("list_profile_posts", prop_list_profile_posts),
