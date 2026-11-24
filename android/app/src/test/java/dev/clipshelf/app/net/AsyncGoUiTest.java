@@ -11,10 +11,11 @@ import org.robolectric.Shadows;
 import org.robolectric.android.controller.ActivityController;
 import org.robolectric.annotation.Config;
 
+import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 
 import static org.junit.Assert.assertFalse;
@@ -27,9 +28,14 @@ import static org.junit.Assert.assertTrue;
  * must never fire a Toast in the next test's Robolectric environment (CI
  * NPE in ShadowToast.show, 2026-11-23).
  *
- * The drop assertion needs dispatch evidence first: a probe outcome to a
- * live activity must land before the destroyed activity is judged, so a
- * slow executor fails the probe instead of passing an empty negative.
+ * A drop is silent, so absence alone proves nothing: the result may simply
+ * not have dispatched yet. destroyedActivityDropsTheOutcome therefore
+ * arranges proof that the destroyed result's runnable has already executed
+ * before asserting the drop: the pool is saturated with gated blockers, so
+ * the destroyed job and the live probe run sequentially on one worker and
+ * their outcomes enter the main looper queue in FIFO order. Once the live
+ * probe's outcome delivers, the destroyed runnable has been executed too —
+ * and must not have called done.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = 34)
@@ -45,47 +51,77 @@ public class AsyncGoUiTest {
 
     @Test
     public void destroyedActivityDropsTheOutcome() throws Exception {
-        Activity live = Robolectric.buildActivity(Activity.class).setup().get();
         ActivityController<Activity> controller =
                 Robolectric.buildActivity(Activity.class).setup();
         controller.destroy();
-
-        // Probe: the same executor and looper must dispatch an outcome to a
-        // live activity, else this environment cannot judge the drop at all.
-        AtomicReference<String> liveGot = new AtomicReference<>(null);
-        CountDownLatch probeStarted = new CountDownLatch(1);
-        CountDownLatch probeRelease = new CountDownLatch(1);
-        Async.goUi(live, () -> {
-            probeStarted.countDown();
-            probeRelease.await(5, TimeUnit.SECONDS);
-            return "x";
-        }, (r, e) -> liveGot.set(r));
-        assertTrue("the probe job never started", probeStarted.await(5, TimeUnit.SECONDS));
-        probeRelease.countDown();
-        await(() -> liveGot.get() != null,
-                "dispatch does not occur: the probe outcome never landed");
-
-        // Now the destroyed activity, gated the same way so its post is
-        // already due when the window opens.
-        AtomicBoolean destroyedGot = new AtomicBoolean(false);
-        CountDownLatch droppedStarted = new CountDownLatch(1);
-        CountDownLatch droppedRelease = new CountDownLatch(1);
-        Async.goUi(controller.get(), () -> {
-            droppedStarted.countDown();
-            droppedRelease.await(5, TimeUnit.SECONDS);
-            return "x";
-        }, (r, e) -> destroyedGot.set(true));
-        assertTrue("the drop-path job never started", droppedStarted.await(5, TimeUnit.SECONDS));
-        droppedRelease.countDown();
-
-        // Hold a window that dwarfs the just-proven dispatch latency; the
-        // guard must keep the outcome dropped for the whole window.
-        long deadline = System.currentTimeMillis() + 2_000;
-        while (System.currentTimeMillis() < deadline && !destroyedGot.get()) {
-            Shadows.shadowOf(Looper.getMainLooper()).idle();
-            Thread.sleep(10);
+        Activity live = Robolectric.buildActivity(Activity.class).setup().get();
+        // Robolectric's main looper only runs tasks on explicit idle(), so the
+        // outcomes below queue up untouched until the drain at the bottom.
+        // Saturate the fixed pool so the jobs below queue in FIFO order
+        // and later run sequentially on one worker, in release order.
+        Gate[] blockers = new Gate[4];
+        for (int i = 0; i < blockers.length; i++) {
+            blockers[i] = Gate.submit();
         }
-        assertFalse("the destroyed activity must drop the outcome", destroyedGot.get());
+        for (Gate blocker : blockers) {
+            await(blocker.started, "the blocker jobs never started");
+        }
+
+        AtomicBoolean delivered = new AtomicBoolean(false);
+        Gate destroyedJob = Gate.via(controller.get(), () -> "x",
+                (r, e) -> delivered.set(true));
+        AtomicBoolean liveGot = new AtomicBoolean(false);
+        Gate liveJob = Gate.via(live, () -> "x",
+                (r, e) -> liveGot.set(true));
+
+        blockers[0].release();
+        await(destroyedJob.started, "the destroyed-path job never started");
+        destroyedJob.release();
+        await(liveJob.started, "the live probe never started");
+        liveJob.release();
+
+        // Drain until the probe delivers. FIFO order on one worker means
+        // the destroyed outcome's runnable already ran in this drain.
+        await(liveGot::get, "dispatch does not occur: the probe never delivered");
+        assertFalse("the destroyed activity must drop the outcome once dispatched",
+                delivered.get());
+    }
+
+    /** A gated job: the Callable waits at started, the test opens release. */
+    private static final class Gate {
+        private final CountDownLatch started = new CountDownLatch(1);
+        private final CountDownLatch release = new CountDownLatch(1);
+
+        /** Occupies a pool worker until released; the outcome is discarded. */
+        private static Gate submit() {
+            Gate gate = new Gate();
+            Async.go(() -> {
+                gate.started.countDown();
+                gate.release.await(5, TimeUnit.SECONDS);
+                return null;
+            }, (r, e) -> { });
+            return gate;
+        }
+
+        /** Queues a gated goUi job: the outcome flows through goUi's guard. */
+        private static Gate via(Activity activity, Callable<Object> job,
+                BiConsumer<Object, Exception> done) {
+            Gate gate = new Gate();
+            Async.goUi(activity, () -> {
+                gate.started.countDown();
+                gate.release.await(5, TimeUnit.SECONDS);
+                return job.call();
+            }, done);
+            return gate;
+        }
+
+        private void release() {
+            release.countDown();
+        }
+    }
+
+    private static void await(CountDownLatch latch, String message) throws Exception {
+        assertTrue(message, latch.await(5, TimeUnit.SECONDS));
     }
 
     /** Idles the main looper until check holds; fails with message at the 5s bound. */
