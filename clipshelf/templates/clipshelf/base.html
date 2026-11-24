@@ -33,7 +33,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="foot">
-    <p><a href="/">Library</a> · <a href="https://github.com/Skare69/clipshelf">clipshelf</a> <a class="vtag" href="{{ CLIPSHELF_RELEASE_URL }}">v{{ CLIPSHELF_VERSION }}</a></p>
+    <p>{% if CLIPSHELF_UPDATE %}<a class="upd" href="{{ CLIPSHELF_UPDATE.url }}" title="clipshelf v{{ CLIPSHELF_UPDATE.version }} is available">v{{ CLIPSHELF_UPDATE.version }} available</a> · {% endif %}<a href="/">Library</a> · <a href="https://github.com/Skare69/clipshelf">clipshelf</a> <a class="vtag" href="{{ CLIPSHELF_RELEASE_URL }}">v{{ CLIPSHELF_VERSION }}</a></p>
   </footer>
 </div>
 {% endblock %}

@@ -7,6 +7,8 @@ set -eux
 cd "$(dirname "$0")/.."
 : "${CLIPSHELF_DATA_DIR:?set CLIPSHELF_DATA_DIR to a throwaway dir, never ./data}"
 PY=${PY:-python3}
+# Page renders start the GitHub release check; tests never reach the network.
+export CLIPSHELF_UPDATE_CHECK=0
 $PY clipshelf.py check
 # --noinput: a leftover test-db.sqlite3 must never hang the run on Django's
 # "delete the test database?" prompt (CLIP-104 merge-turn incident).

@@ -34,3 +34,12 @@ writes them:
 
 A failed check backs off with the same schedule as capture jobs, and a paused
 source is never checked. See [how-it-works.md](how-it-works.md#followed-sources).
+
+## Update check
+
+The footer shows a link to a newer release when one is available. The server
+asks the GitHub API (`api.github.com/repos/Skare69/clipshelf/releases/latest`)
+in the background and never blocks a page for it. A good answer stays for one
+hour. After a failed check, the notice stays hidden and the server waits 60
+seconds before it asks again. Prereleases and `dev` builds never show the
+notice. To stop the request, set `CLIPSHELF_UPDATE_CHECK=0`.

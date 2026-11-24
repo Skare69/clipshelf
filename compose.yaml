@@ -31,6 +31,7 @@ x-app: &app
     CLIPSHELF_CSRF: ${CLIPSHELF_CSRF:-}
     CLIPSHELF_DEBUG: ${CLIPSHELF_DEBUG:-0}
     CLIPSHELF_MAX_IMPORT_BYTES: ${CLIPSHELF_MAX_IMPORT_BYTES:-}
+    CLIPSHELF_UPDATE_CHECK: ${CLIPSHELF_UPDATE_CHECK:-}
     # SQLite pragmas (WAL, synchronous=FULL, busy timeout) are enforced by the
     # app settings; do not add database flags here.
     CLIPSHELF_SQLITE_VERIFIED: ${CLIPSHELF_SQLITE_VERIFIED:-}

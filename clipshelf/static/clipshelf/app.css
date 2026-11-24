@@ -116,6 +116,8 @@ button{font:inherit;color:inherit;cursor:pointer}
 .ver a{color:inherit;font-weight:700;text-decoration:none}
 .ver a.vtag,.foot a.vtag{font-weight:400}
 .ver a.vtag:hover{text-decoration:underline}
+.ver a.upd,.foot a.upd{display:inline-block;padding:1px 8px;border:1px solid var(--signal-edge);border-radius:999px;background:var(--signal);color:var(--on-signal);font-weight:700;text-decoration:none}
+.ver a.upd{display:block;width:fit-content;margin-bottom:8px}
 .shell>main{min-width:0;padding:28px 32px 96px}
 
 /* ---------- view header ---------- */
