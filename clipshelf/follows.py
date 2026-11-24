@@ -133,36 +133,37 @@ def check_source(source, say=None):
     """One listing cycle for one followed source. Listing and capture
     failures write last_error and move next_check out by the backoff; success
     marks every listed post seen, queues the new candidates, and reschedules.
-    Never raises for a listing or capture failure; a source deleted mid-check
-    returns early."""
-    try:
-        return _check_source(source, say)
-    except FollowedSource.DoesNotExist:
-        # Unfollowed between claim and check: nothing left to update.
-        return "missing"
+    Never raises for a listing or capture failure. Returns "ok", "error", or
+    "missing": the worker claims an instance before the check, so an
+    unfollow between claim and check leaves every schedule write with no row
+    to update — the writes go through a filtered .update(), and zero updated
+    rows mean the source is gone ("missing"), not a crash."""
+    return _check_source(source, say)
 
 
 def _fail_cycle(source, say, exc, event):
     """One failed cycle (listing or capture): last_error set, failures
-    counted, next_check moved out by the backoff, last_check untouched. The
-    write runs in its own transaction, so nothing from the failed cycle
-    leaks into it. A message-less exception still names itself, because an
-    empty last_error reads as healthy on the source row."""
+    counted, next_check moved out by the backoff, last_check untouched.
+    Returns False when the source row is gone (unfollowed mid-check), True
+    after the write. The single UPDATE is atomic, so nothing from the failed
+    cycle leaks into it. A message-less exception still names itself,
+    because an empty last_error reads as healthy on the source row."""
     message = str(exc)[:500] or type(exc).__name__
-    with transaction.atomic():
-        source.last_error = message
-        source.failures += 1
-        source.next_check = timezone.now() + Job.backoff(source.failures)
-        source.save(update_fields=["last_error", "failures", "next_check"])
+    updated = FollowedSource.objects.filter(pk=source.pk).update(
+        last_error=message,
+        failures=source.failures + 1,
+        next_check=timezone.now() + Job.backoff(source.failures + 1))
     if say:
         say(f"follow {source.id}: {event} ({message})")
+    return bool(updated)
 
 
 def _check_source(source, say):
     try:
         posts = acquisition.list_profile_posts(source.profile_url)
     except acquisition.ListingError as exc:
-        _fail_cycle(source, say, exc, "listing failed")
+        if not _fail_cycle(source, say, exc, "listing failed"):
+            return "missing"
         return "error"
 
     settings = services.get_settings()
@@ -209,18 +210,16 @@ def _check_source(source, say):
         # consumed) and takes the listing-failure path. Without the backoff
         # write the source would stay due and the coordinator would re-list
         # in a tight loop; the next scheduled listing retries the post.
-        _fail_cycle(source, say, exc, "capture failed")
+        if not _fail_cycle(source, say, exc, "capture failed"):
+            return "missing"
         return "error"
 
     now = timezone.now()
-    with transaction.atomic():
-        source.last_check = now
-        source.last_error = ""
-        source.failures = 0
-        source.backfill_done = True
-        source.next_check = now + timedelta(seconds=settings.follow_poll_seconds)
-        source.save(update_fields=["last_check", "last_error", "failures",
-                                   "backfill_done", "next_check"])
+    updated = FollowedSource.objects.filter(pk=source.pk).update(
+        last_check=now, last_error="", failures=0, backfill_done=True,
+        next_check=now + timedelta(seconds=settings.follow_poll_seconds))
+    if not updated:
+        return "missing"  # unfollowed mid-check: nothing left to update
     if say:
         say(f"follow {source.id}: ok ({len(posts)} posts, {queued} queued)")
     return "ok"

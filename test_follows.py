@@ -233,6 +233,29 @@ class ListingFailureTests(FollowMixin, TestCase):
                                Job.backoff(1).total_seconds(), delta=10)
 
 
+# ----------------------------------------------------- unfollow mid-check
+
+class UnfollowMidCheckTests(FollowMixin, TestCase):
+    """A source unfollowed between the worker's claim and the check: the
+    claimed instance is stale, and every schedule write must treat zero
+    updated rows as "missing" instead of raising NotUpdated (which the
+    worker would log as a crash for a normal user action)."""
+
+    def test_deleted_source_reports_missing_without_writing(self):
+        source = follows.create_follow(self.alice, PROFILE, "recipes")
+        source.delete()
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               return_value=[]):
+            self.assertEqual(follows.check_source(source), "missing")
+        # One listed post: the seen-marker insert hits the deleted-row FK,
+        # and the cycle still ends as "missing", never as a raise.
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               return_value=posts("204")):
+            self.assertEqual(follows.check_source(source), "missing")
+        self.assertEqual(Capture.objects.count(), 0)
+        self.assertEqual(SeenPost.objects.count(), 0)
+
+
 # ------------------------------------------------------------ concurrency
 
 class ConcurrentListingTests(FollowMixin, TransactionTestCase):
