@@ -114,6 +114,8 @@ button{font:inherit;color:inherit;cursor:pointer}
 .cats a.on{background:var(--label);box-shadow:inset 0 0 0 1px var(--field);font-weight:700}
 .ver{margin-top:auto;padding:12px 12px 0;border-top:1px solid var(--hair);font-size:var(--t1);color:var(--ink2)}
 .ver a{color:inherit;font-weight:700;text-decoration:none}
+.ver a.vtag,.foot a.vtag{font-weight:400}
+.ver a.vtag:hover{text-decoration:underline}
 .shell>main{min-width:0;padding:28px 32px 96px}
 
 /* ---------- view header ---------- */
