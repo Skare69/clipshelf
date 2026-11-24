@@ -1107,12 +1107,14 @@ _NO_CSRF_MIDDLEWARE = [
 
 
 @override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
-class SameSiteApiCsrfTests(TestCase):
-    """Security-audit lead same-site-cookie-csrf-default-off: a page on
-    another port of the same host is same-site, so the browser sends the
+class SameSiteApiCsrfTests(AccountTestCase):
+    """Security-audit lead same-site-cookie-csrf-default-off, fixed: a page
+    on another port of the same host is same-site, so the browser sends the
     Lax session cookie, and a text/plain POST needs no CORS preflight.
-    With CLIPSHELF_CSRF off (the default) the cookie API accepts that
-    request: the lead is confirmed. CLIPSHELF_CSRF=1 rejects it."""
+    api_csrf now answers 403 for cookie requests that are not same-origin
+    or that carry a body without application/json. Adapted from CLIP-123
+    commit 57c8f36, which asserted the unfixed behavior: its default test
+    expected 201 and a planted FollowedSource row."""
 
     def setUp(self):
         self.victim = make_user("victim@clipshelf.test")
@@ -1132,10 +1134,10 @@ class SameSiteApiCsrfTests(TestCase):
         )
 
     @override_settings(CLIPSHELF_CSRF=False, MIDDLEWARE=_NO_CSRF_MIDDLEWARE)
-    def test_default_accepts_same_site_text_plain_cookie_post(self):
+    def test_default_rejects_same_site_text_plain_cookie_post(self):
         response = self.post_follow()
-        self.assertEqual(response.status_code, 201)
-        self.assertTrue(
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(
             FollowedSource.objects.filter(user=self.victim, tag="planted").exists()
         )
 
@@ -1144,3 +1146,67 @@ class SameSiteApiCsrfTests(TestCase):
         response = self.post_follow()
         self.assertEqual(response.status_code, 403)
         self.assertFalse(FollowedSource.objects.filter(user=self.victim).exists())
+
+    @override_settings(CLIPSHELF_CSRF=False, MIDDLEWARE=_NO_CSRF_MIDDLEWARE)
+    def test_same_origin_json_cookie_post_still_creates_follow(self):
+        response = self.client.post(
+            "/api/follows",
+            data=json.dumps({"url": "https://www.tiktok.com/@victim", "tag": "ui"}),
+            content_type="application/json",
+            HTTP_HOST="192.168.1.10:8000",
+            HTTP_ORIGIN="http://192.168.1.10:8000",
+            HTTP_SEC_FETCH_SITE="same-origin",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            FollowedSource.objects.filter(user=self.victim, tag="ui").exists()
+        )
+
+    @override_settings(CLIPSHELF_CSRF=False, MIDDLEWARE=_NO_CSRF_MIDDLEWARE)
+    def test_token_post_skips_same_site_checks(self):
+        client = Client(enforce_csrf_checks=True)
+        token = self.headless_login(
+            self.victim.email, client=client
+        ).json()["meta"]["session_token"]
+        response = client.post(
+            "/api/follows",
+            data=json.dumps(
+                {"url": "https://www.tiktok.com/@app", "tag": "token"}
+            ),
+            content_type="text/plain",
+            headers={"x-session-token": token},
+            HTTP_HOST="192.168.1.10:8000",
+            HTTP_ORIGIN="http://192.168.1.10:9000",
+            HTTP_SEC_FETCH_SITE="cross-site",
+        )
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            FollowedSource.objects.filter(user=self.victim, tag="token").exists()
+        )
+
+    @override_settings(CLIPSHELF_CSRF=False, MIDDLEWARE=_NO_CSRF_MIDDLEWARE)
+    def test_same_origin_multipart_import_reaches_the_view(self):
+        response = self.client.post(
+            "/api/import",
+            data={"client_request_id": str(uuid4())},
+            format="multipart",
+            HTTP_HOST="192.168.1.10:8000",
+            HTTP_ORIGIN="http://192.168.1.10:8000",
+            HTTP_SEC_FETCH_SITE="same-origin",
+        )
+        # The multipart type is allowed on the api_multipart-marked upload
+        # view; this 400 comes from the view's own file check, not the gate.
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json(), {"detail": "multipart file required"})
+
+    @override_settings(CLIPSHELF_CSRF=False, MIDDLEWARE=_NO_CSRF_MIDDLEWARE)
+    def test_cross_site_multipart_import_rejected(self):
+        response = self.client.post(
+            "/api/import",
+            data={"client_request_id": str(uuid4())},
+            format="multipart",
+            HTTP_HOST="192.168.1.10:8000",
+            HTTP_ORIGIN="http://192.168.1.10:9000",
+            HTTP_SEC_FETCH_SITE="same-site",
+        )
+        self.assertEqual(response.status_code, 403)

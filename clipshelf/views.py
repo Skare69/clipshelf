@@ -762,6 +762,7 @@ def _import_replay(record, spooled):
 
 @api
 @require_http_methods(["POST"])
+@accounts.api_multipart
 def api_import(request):
     user = request.user
     upload = request.FILES.get("file")

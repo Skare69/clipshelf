@@ -534,28 +534,92 @@ def create_admin(email, password=None, *, verified=False):
 _csrf_middleware = CsrfViewMiddleware(lambda request: None)
 
 
+def api_multipart(view_func):
+    """Mark an API view that consumes multipart/form-data uploads.
+
+    The default-on check in api_csrf requires application/json on cookie
+    requests that carry a body; only views marked here may take
+    multipart/form-data instead. The import upload is the only consumer.
+    """
+    view_func.csrf_multipart_ok = True
+    return view_func
+
+
+def _same_origin_ok(request) -> bool:
+    """True when the fetch metadata proves this request stays on this origin.
+
+    SameSite=Lax cannot provide that proof: a page on another port or
+    subdomain is same-site, and the browser still sends the session
+    cookie. Browsers set Sec-Fetch-Site on unsafe requests and add Origin
+    to fetch and XHR posts; either header naming another origin rejects
+    the request. Both headers absent allows the request: non-browser
+    clients carry no ambient cookies, and old browsers without these
+    headers stay a residual risk for deployments that run without
+    CLIPSHELF_CSRF=1.
+    """
+    fetch_site = request.headers.get("Sec-Fetch-Site")
+    if fetch_site is not None and fetch_site not in ("same-origin", "none"):
+        return False
+    origin = request.headers.get("Origin")
+    if origin:
+        try:
+            parts = urlsplit(origin)
+        except ValueError:
+            return False
+        if parts.scheme != request.scheme or parts.netloc.lower() != request.get_host().lower():
+            return False
+    return True
+
+
+def _body_type_ok(request, view_func) -> bool:
+    """True when a body-carrying cookie request names an accepted type.
+
+    json_body parses the raw body whatever its Content-Type, so a
+    text/plain body is reachable for a no-cors fetch, which needs no CORS
+    preflight. A body without the explicit JSON type is rejected;
+    multipart/form-data is accepted only on views marked with
+    api_multipart. Requests without a body carry nothing to forge and
+    pass; the origin check still covers them.
+    """
+    if not request.body:
+        return True
+    media_type = request.headers.get("Content-Type", "").split(";")[0].strip().lower()
+    if media_type == "application/json":
+        return True
+    return media_type == "multipart/form-data" and getattr(
+        view_func, "csrf_multipart_ok", False
+    )
+
+
 def api_csrf(view_func):
     """Central CSRF entry for API views.
 
-    CSRF protection is opt-in (``CLIPSHELF_CSRF=1``): the default
-    deployment is plain HTTP on a LAN behind a VPN, and
-    ``SESSION_COOKIE_SAMESITE="Lax"`` is what keeps cookie mutations safe
-    by default. When enabled, the csrf_exempt view's unsafe requests
-    WITHOUT an X-Session-Token header are run through Django's maintained
-    CSRF verification. Token requests rely on the header being a valid
-    session token, enforced by api_auth.
+    Same-site defense runs on every deployment: a cookie request (no
+    X-Session-Token header) to an unsafe method must stay same-origin
+    (_same_origin_ok) and, when it carries a body, name application/json
+    or an api_multipart type (_body_type_ok); anything else answers 403
+    JSON. Token requests skip this; the header must be a valid session
+    token, enforced by api_auth.
+
+    On top, Django's maintained CSRF verification is opt-in
+    (``CLIPSHELF_CSRF=1``): the default deployment is plain HTTP on a LAN
+    behind a VPN, and ``SESSION_COOKIE_SAMESITE="Lax"`` plus the same-site
+    checks above keep cookie mutations safe by default. When enabled, the
+    csrf_exempt view's unsafe cookie requests are also run through that
+    verification.
     """
 
     @wraps(view_func)
     def wrapped(request, *args, **kwargs):
-        if (
-            request.method not in _SAFE_METHODS
-            and not request.headers.get("x-session-token")
-            and getattr(django_settings, "CLIPSHELF_CSRF", False)
+        if request.method not in _SAFE_METHODS and not request.headers.get(
+            "x-session-token"
         ):
-            rejected = _csrf_middleware.process_view(request, view_func, args, kwargs)
-            if rejected is not None:
+            if not _same_origin_ok(request) or not _body_type_ok(request, view_func):
                 return JsonResponse({"detail": "CSRF verification failed."}, status=403)
+            if getattr(django_settings, "CLIPSHELF_CSRF", False):
+                rejected = _csrf_middleware.process_view(request, view_func, args, kwargs)
+                if rejected is not None:
+                    return JsonResponse({"detail": "CSRF verification failed."}, status=403)
         return view_func(request, *args, **kwargs)
 
     wrapped.csrf_exempt = True

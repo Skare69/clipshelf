@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import timedelta
 from unittest import mock
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlsplit
 
 from django.contrib.auth import HASH_SESSION_KEY, get_user_model
 from django.core import mail
@@ -1477,13 +1477,11 @@ class MalformedRequestTests(ApiTestCase):
     def test_too_many_fields_on_import_is_json_400(self):
         alice = self._login(self.alice)
         # TooManyFieldsSent escapes the api wrapper's except chain and must
-        # land in handler400, not Django's default HTML page.
-        fields = urlencode({f"field{i}": "x" for i in range(1500)})
-        response = alice.post(
-            "/api/import",
-            data=fields,
-            content_type="application/x-www-form-urlencoded",
-        )
+        # land in handler400, not Django's default HTML page. Sent as the
+        # multipart upload the endpoint accepts; urlencoded bodies are
+        # rejected earlier by the api_csrf body-type check.
+        fields = {f"field{i}": "x" for i in range(1500)}
+        response = alice.post("/api/import", data=fields, format="multipart")
         self.assertEqual(response.status_code, 400)
         self.assertTrue(response["Content-Type"].startswith("application/json"))
         self.assertEqual(response.json()["detail"], "malformed request")
@@ -1581,6 +1579,14 @@ class CaptureTests(ApiTestCase):
     def _capture(self, client, capture_id):
         listing = client.get("/api/captures").json()["captures"]
         return next(c for c in listing if c["id"] == str(capture_id))
+
+    def _retry(self, client, job_id):
+        # The body the web UI sends: api_csrf rejects a body without
+        # application/json on cookie requests, and the test client's
+        # no-data POST default is multipart, not empty.
+        return client.post(
+            f"/api/jobs/{job_id}/retry", data="{}", content_type="application/json"
+        )
 
     def test_idempotent_retry_and_conflict(self):
         alice = self._login(self.alice)
@@ -1798,19 +1804,19 @@ class CaptureTests(ApiTestCase):
 
         # Other users cannot retry.
         self.assertEqual(
-            self._login(self.bob).post(f"/api/jobs/{job['id']}/retry").status_code,
+            self._retry(self._login(self.bob), job["id"]).status_code,
             404,
         )
         # In-flight job refuses retry.
         job_row.state = "queued"
         job_row.save()
         self.assertEqual(
-            alice.post(f"/api/jobs/{job['id']}/retry").status_code, 409
+            self._retry(alice, job["id"]).status_code, 409
         )
         # Blocked job requeues keeping history.
         job_row.state = "blocked"
         job_row.save()
-        response = alice.post(f"/api/jobs/{job['id']}/retry")
+        response = self._retry(alice, job["id"])
         self.assertEqual(response.status_code, 200)
         job_row.refresh_from_db()
         self.assertEqual(job_row.state, "queued")
@@ -1839,7 +1845,7 @@ class CaptureTests(ApiTestCase):
             self.assertTrue(detail["active"])
             self.assertFalse(detail["can_retry"])
             self.assertEqual(
-                alice.post(f"/api/jobs/{job_id}/retry").status_code, 409
+                self._retry(alice, job_id).status_code, 409
             )
 
         # Scheduled-backoff jobs remain active and refuse immediate requeue.
@@ -1850,7 +1856,7 @@ class CaptureTests(ApiTestCase):
         self.assertTrue(retry_job.active)
         self.assertFalse(retry_job.can_retry)
         self.assertEqual(
-            alice.post(f"/api/jobs/{job_id}/retry").status_code, 409
+            self._retry(alice, job_id).status_code, 409
         )
         retry_job.refresh_from_db()
         self.assertEqual(retry_job.state, "retry")
@@ -1860,7 +1866,7 @@ class CaptureTests(ApiTestCase):
         self.assertFalse(detail["active"])
         self.assertTrue(detail["needs_attention"])
         self.assertTrue(detail["can_retry"])
-        self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 200)
+        self.assertEqual(self._retry(alice, job_id).status_code, 200)
         row = Job.objects.get(id=job_id)
         self.assertEqual(row.state, "queued")
         self.assertEqual(row.error, "upstream blocked")
@@ -1870,10 +1876,10 @@ class CaptureTests(ApiTestCase):
         self.assertFalse(detail["active"])
         self.assertFalse(detail["needs_attention"])
         self.assertTrue(detail["can_retry"])
-        self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 200)
+        self.assertEqual(self._retry(alice, job_id).status_code, 200)
         self.assertEqual(Job.objects.get(id=job_id).state, "queued")
         # The requeued job now refuses a second concurrent retry.
-        self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 409)
+        self.assertEqual(self._retry(alice, job_id).status_code, 409)
 
         # Interpretation-only failure still flags attention on an otherwise
         # finished job, and the projection drives capture aggregation.
@@ -1897,7 +1903,7 @@ class CaptureTests(ApiTestCase):
             "blocked", interpretation="blocked",
             error="interpreter-directed content detected; findings withheld")
         self.assertTrue(detail["guardrail"])
-        self.assertEqual(alice.post(f"/api/jobs/{job_id}/retry").status_code, 200)
+        self.assertEqual(self._retry(alice, job_id).status_code, 200)
         detail = self._capture(alice, capture_id)["jobs"][0]
         # requeued with the error still on the row: no longer a guardrail block
         self.assertFalse(detail["guardrail"])
