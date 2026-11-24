@@ -617,7 +617,14 @@ impBtn.addEventListener("click", () => {
   xhr.setRequestHeader("X-CSRFToken", csrf());
   xhr.setRequestHeader("Accept", "application/json");
   xhr.upload.addEventListener("progress", ev => {
-    if (!ev.lengthComputable) { impProg.removeAttribute("value"); return; }
+    if (!ev.lengthComputable) {
+      impProg.removeAttribute("value");
+      // Under reduced motion the bar has no sweep, so the status line is the
+      // only active-state signal until the length becomes computable.
+      impStat.textContent = ev.loaded
+        ? `Uploading ${(ev.loaded / 1048576).toFixed(1)} MiB` : "Uploading…";
+      return;
+    }
     const pct = Math.round(100 * ev.loaded / ev.total);
     impProg.value = pct;
     impStat.textContent = `Uploading ${pct}% (${(ev.loaded / 1048576).toFixed(1)} of ${(ev.total / 1048576).toFixed(1)} MiB)`;

@@ -184,6 +184,7 @@ const impClick = (bySel.get("#impBtn").listeners.click || [])[0];
 assert.ok(impClick, "panels.js did not register the import click handler");
 const bannerEl = bySel.get("#banner");
 const impErr = bySel.get("#impErr");
+const impStat = bySel.get("#impStat");
 const respond = (status, payload) => {
   const xhr = FakeUploadXhr.sent.at(-1);
   xhr.status = status;
@@ -207,6 +208,11 @@ assert.equal(impProg.attributes.value, "20",
 fireUploadProgress(500, 0, false);
 assert.equal("value" in impProg.attributes, false,
   "progress without a computable length must drop the value attribute: the bar shows indeterminate");
+assert.match(impStat.textContent, /Uploading/,
+  "a non-computable progress event must leave non-empty status text: under reduced motion the bar has no sweep, so the text is the active-state signal");
+fireUploadProgress(0, 0, false);
+assert.match(impStat.textContent, /^Uploading…$/,
+  "a non-computable event with no loaded bytes must still set the status text");
 respond(200, { import: { id: "r1", status: "error", error: "too many items (5001 > 5000)" } });
 assert.equal(impErr.hidden, false, "failed replay must surface the error element");
 assert.match(impErr.textContent, /too many items \(5001 > 5000\)/,

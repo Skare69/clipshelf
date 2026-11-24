@@ -330,11 +330,17 @@ td .acts{justify-content:flex-end;flex-wrap:nowrap}
    throbber, so sweep an ink band across the track; Firefox keeps its native
    blink on ::-moz-progress-bar (the webkit rule is invalid there and ignored).
    The media guard is load-bearing: the global reduced-motion reset matches
-   only ::before/::after, never this vendor pseudo-element. */
+   only ::before/::after, never this vendor pseudo-element. Under reduce the
+   sweep must become a static band, not vanish: an empty track is unreadable
+   as "active" (ui-ux-check 19), so keep the band centered and unmoving. */
 @keyframes prog-sweep{from{background-position:0 0}to{background-position:100% 0}}
 @media (prefers-reduced-motion:no-preference){
   .prog:not([value])::-webkit-progress-bar{background:linear-gradient(90deg,transparent 0,var(--ink) 50%,transparent 100%) no-repeat;
     background-size:40% 100%;animation:prog-sweep 1.2s linear infinite}
+}
+@media (prefers-reduced-motion:reduce){
+  .prog:not([value])::-webkit-progress-bar{background:linear-gradient(90deg,transparent 0,var(--ink) 50%,transparent 100%) no-repeat;
+    background-size:40% 100%;background-position:center}
 }
 
 /* ---------- snackbar ---------- */
