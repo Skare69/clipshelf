@@ -2282,6 +2282,39 @@ class ImportTests(ApiTestCase):
             imports.run_staged_import(record)
         self.assertIn("too many elements", str(raised.exception))
 
+    def test_import_element_budget_counts_wide_encodings(self):
+        # The scan decodes like json.load: a UTF-16 or UTF-32 body must
+        # count the characters the parser builds, not the raw bytes.
+        # Before the char-level scan, a body whose first item is a quote
+        # character hid every later array from the counter (count 1) and
+        # reached the parser whole.
+        alice = self._login(self.alice)
+        doc = [chr(34)] + [[]] * 125_001
+        for encoding in ("utf-16-le", "utf-32-le"):
+            with self.subTest(encoding=encoding):
+                response = self._post_import(
+                    alice, json.dumps(doc).encode(encoding))
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("too many elements", response.json()["detail"])
+                self.assertFalse(
+                    ImportRecord.objects.filter(user=self.alice).exists())
+
+    def test_import_element_budget_survives_backslash_run_boundary(self):
+        # The body carries a 65537-backslash run that straddles the 64 KiB
+        # chunk seam right after a carried escape byte; the parity of the
+        # run after that byte decides where the string ends. Before the
+        # fix the run was recounted including the skipped byte (even), the
+        # string never closed, and the counter hid all 125001 arrays.
+        alice = self._login(self.alice)
+        body = (b'["' + b"x" * 65533 + b"\\" * 65537 + b'""'
+                + b",[]" * 125_001 + b"]")
+        json.loads(body)  # the boundary body itself must stay valid JSON
+        response = self._post_import(alice, body)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too many elements", response.json()["detail"])
+        self.assertFalse(
+            ImportRecord.objects.filter(user=self.alice).exists())
+
     def test_import_rejects_malformed_shapes_at_admission(self):
         # The engine's parser runs at admission: shapes the worker used to
         # reject after a 201 now fail with a 400 and leave nothing behind.

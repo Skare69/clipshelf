@@ -4,6 +4,7 @@ run_staged_import processes the upload-staged ImportRecords the worker
 coordinator claims; import_items backs the import_library command and
 legacy_payload translates a legacy library.json.
 """
+import codecs
 import hashlib
 import json
 import logging
@@ -260,10 +261,12 @@ def _url_item(item):
 # shape check runs. A worst-case body of empty arrays costs a measured ~26
 # MiB of peak RSS per MiB of body, so the default 32 MiB ceiling built ~11
 # million list objects, about 830 MiB (scripts/bench_import_parse.py).
-# Counting the structural bytes outside string literals bounds that build
-# before it starts: every element but a bare scalar document carries one
-# counted byte, and the cap admits at most 125000 empty arrays, a measured
-# ~9 MiB of objects. String contents do not count as elements, so a body
+# Counting the structural characters outside string literals bounds that
+# build before it starts: every element but a bare scalar document carries
+# one counted character, and the cap admits at most 125000 empty arrays, a
+# measured ~9 MiB of objects. The scanner decodes bytes through the same
+# encoding sniffing json.load uses, so UTF-16 and UTF-32 uploads count the
+# characters the parser builds. String contents do not count as elements, so a body
 # of a few giant string literals rides the upload ceiling alone; one
 # astral character widens a CPython string to four bytes per character,
 # a measured ~9 MiB of peak RSS per MiB of body, about 286 MiB at the
@@ -272,23 +275,33 @@ def _url_item(item):
 # carry ~20k structural bytes, so the cap keeps ~10x headroom for real
 # exports.
 MAX_IMPORT_ELEMENTS = 250_000
-_STRUCTURAL = b"[{,:"
-_STRING_TAIL = re.compile(rb'(?:[^"\\]|\\.)*"')
+_STRUCTURAL = "[{,:"
+_STRING_TAIL = re.compile(r'(?:[^"\\]|\\.)*"')
 
 
 def count_elements(fh, chunk_size=1 << 16):
-    """Count structural bytes ([ { , :) outside string literals.
+    """Count structural characters ([ { , :) outside string literals.
 
     Every JSON element but a bare scalar document is preceded by one of
-    them, so the count bounds what json.load would build. The stream walks
-    in chunks, so peak memory is one chunk, never the file.
+    them, so the count bounds what json.load would build. The bytes decode
+    through the same encoding sniffing json.load uses (UTF-8, UTF-16,
+    UTF-32), so the count covers the characters the parser builds, and the
+    stream walks in chunks, so peak memory is one chunk, never the file.
     """
+    head = fh.read(4)
+    decoder = codecs.getincrementaldecoder(
+        json.detect_encoding(head))("surrogatepass")
     total = 0
     in_string = False
     escaped = False
+    raw = head
     while True:
-        chunk = fh.read(chunk_size)
-        if not chunk:
+        try:
+            chunk = decoder.decode(raw, final=not raw)
+        except UnicodeDecodeError:
+            # json.load fails on these same bytes and answers 400; a
+            # partial count admits the body to that identical failure
+            # instead of turning garbage into a 500 here.
             return total
         pos = 0
         end = len(chunk)
@@ -297,28 +310,32 @@ def count_elements(fh, chunk_size=1 << 16):
                 if escaped:
                     escaped = False
                     pos += 1
-                    continue
                 close = _STRING_TAIL.match(chunk, pos)
                 if close is None:
-                    # The literal continues in the next chunk. A trailing
-                    # backslash run escapes across the boundary when it is
-                    # odd, an even run does not.
-                    escaped = (len(chunk) - len(chunk.rstrip(b"\\"))) % 2 == 1
+                    # The literal continues in a later chunk. Count the
+                    # trailing backslash run after any carried escape byte:
+                    # an odd run escapes across the boundary, an even run
+                    # does not.
+                    rest = chunk[pos:]
+                    escaped = (len(rest) - len(rest.rstrip("\\"))) % 2 == 1
                     pos = end
                 else:
                     pos = close.end()
                     in_string = False
                 continue
-            quote = chunk.find(b'"', pos)
+            quote = chunk.find('"', pos)
             if quote == -1:
                 rest = chunk[pos:]
-                total += sum(rest.count(byte) for byte in _STRUCTURAL)
+                total += sum(rest.count(c) for c in _STRUCTURAL)
                 pos = end
             else:
                 rest = chunk[pos:quote]
-                total += sum(rest.count(byte) for byte in _STRUCTURAL)
+                total += sum(rest.count(c) for c in _STRUCTURAL)
                 in_string = True
                 pos = quote + 1
+        if not raw:
+            return total
+        raw = fh.read(chunk_size)
 
 
 def check_element_budget(fh):

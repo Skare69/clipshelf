@@ -38,12 +38,14 @@ Empty-array floods cost about 26 MiB of peak RSS per MiB of body: the
 default 32 MiB ceiling (`CLIPSHELF_MAX_IMPORT_BYTES`) built about 830 MiB
 of list objects, and the web process runs waitress with its default four
 threads, so four parallel floods asked for about 3.3 GiB. Admission now
-counts the structural bytes `[ { , :` outside string literals and refuses
-a body past `MAX_IMPORT_ELEMENTS` (250000, clipshelf/imports.py) with a
-400. The count walks the file in 64 KiB chunks, so the scan adds no peak
-memory. The largest admitted flood holds 125000 empty arrays and parses
-to about 9 MiB of Python objects. The worker re-parses the staged file
-under the same cap.
+counts the structural characters `[ { , :` outside string literals and
+refuses a body past `MAX_IMPORT_ELEMENTS` (250000, clipshelf/imports.py)
+with a 400. The scanner decodes the bytes exactly like the parser
+(UTF-8, UTF-16, UTF-32), so a wide encoding cannot hide elements from
+the count. The count walks the file in 64 KiB chunks, so the scan adds
+no peak memory. The largest admitted flood holds 125000 empty arrays and
+parses to about 9 MiB of Python objects. The worker re-parses the staged
+file under the same cap.
 
 String contents do not count as elements. A body of a few giant string
 literals is admitted and rides the upload ceiling alone, and one astral

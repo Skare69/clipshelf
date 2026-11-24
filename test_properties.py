@@ -369,6 +369,18 @@ def prop_element_budget(rng):
         b'{"links":{"u\\"":["[","]"]},"prompts":[]}',
         b'{"a":"\\\\", "b":"x"}',
         b'"' + b"x" * 9000 + b'"',    # one giant literal
+        # Regression (CLIP-140 send-back 2): the 65537-backslash run
+        # straddles the default chunk seam right after a carried escape
+        # byte; parity must be counted after that byte.
+        b'["' + b"x" * 65533 + b"\\" * 65537 + b'""' + b",[]" * 40 + b"]",
+        # Regression (send-back 1): the scan must decode like json.load.
+        # A quote-character first item closed a byte-level string scan
+        # early and hid every later array from the count.
+        json.dumps([chr(34)] + [[]] * 40).encode("utf-16-le"),
+        json.dumps([chr(34)] + [[]] * 40).encode("utf-16-be"),
+        json.dumps([chr(34)] + [[]] * 40).encode("utf-16"),
+        json.dumps([chr(34)] + [[]] * 40).encode("utf-32-le"),
+        json.dumps([chr(34)] + [[]] * 40).encode("utf-32-be"),
         b'\xef\xbb\xbf[{"a":1}]', '[{"a":1}]'.encode("utf-16"),
         b"[" * 1000, b'gar"bage', b"",
     ]
