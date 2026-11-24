@@ -586,7 +586,7 @@ def prop_list_profile_posts(rng):
     holder = {}
     saved = (acquisition._run_listing, network.extractor_egress)
 
-    def fake_run(argv):
+    def fake_run(argv, timeout=None):
         return 0, holder["stdout"], ""
 
     def fake_egress():

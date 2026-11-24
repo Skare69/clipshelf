@@ -800,7 +800,7 @@ def test_profile_listing_bounds(tmp):
     ]}
     argvs = []
 
-    def fake_run(argv):
+    def fake_run(argv, timeout=None):
         argvs.append(argv)
         return 0, json.dumps(payload).encode(), ""
 

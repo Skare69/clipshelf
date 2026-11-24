@@ -11,6 +11,7 @@ import json
 import os
 import re
 import secrets
+import threading
 import uuid as uuid_mod
 from functools import wraps
 from pathlib import Path
@@ -852,20 +853,46 @@ def api_follows(request):
     return JsonResponse({"follow": follows.follow_json(source)}, status=201)
 
 
+# One tag suggestion runs a yt-dlp listing plus up to two LLM calls in a
+# web thread; the gate keeps this process from running more than one at a
+# time so parallel presses cannot hold every waitress thread.
+_suggest_tags_gate = threading.BoundedSemaphore(1)
+
+
 @api
 @require_http_methods(["POST"])
 def api_follow_suggest_tags(request):
-    """Tag suggestions for the follow form; nothing is saved."""
+    """Tag suggestions for the follow form; nothing is saved. Budgeted per
+    user like collection_invite and capped at one run per process: the
+    listing and LLM calls can hold a web thread for minutes, so an
+    unprotected endpoint would let one account stall the whole app."""
+    # The internal consume answers a truthy usage when allowed and None when
+    # over budget; `not allowed` fails closed either way.
+    allowed = ratelimit.consume(
+        request,
+        app="clipshelf",
+        action="suggest_tags",
+        config={"suggest_tags": getattr(
+            settings, "CLIPSHELF_SUGGEST_TAGS_RATE", "3/m/user")},
+        user=request.user,
+    )
+    if not allowed:
+        raise ApiError(429, detail="too many tag suggestions; try again soon")
     body = json_body(request)
+    if not _suggest_tags_gate.acquire(blocking=False):
+        raise ApiError(429, detail="another tag suggestion is already running")
     try:
-        tags = follows.suggest_tags(request.user, body.get("url"))
-    except follows.LlmNotConfigured as exc:
-        raise ApiError(503, detail=str(exc))
-    except ValueError as exc:
-        raise ApiError(400, detail=str(exc))
-    except (acquisition.ListingError, interpretation.InterpretationError,
-            interpretation.ConfigurationError) as exc:
-        raise ApiError(502, detail=str(exc)[:300])
+        try:
+            tags = follows.suggest_tags(request.user, body.get("url"))
+        except follows.LlmNotConfigured as exc:
+            raise ApiError(503, detail=str(exc))
+        except ValueError as exc:
+            raise ApiError(400, detail=str(exc))
+        except (acquisition.ListingError, interpretation.InterpretationError,
+                interpretation.ConfigurationError) as exc:
+            raise ApiError(502, detail=str(exc)[:300])
+    finally:
+        _suggest_tags_gate.release()
     return JsonResponse({"tags": tags})
 
 

@@ -505,28 +505,30 @@ def _profile_list_argv(proxy, url):
             "--playlist-items", f"1:{PROFILE_LIST_MAX}", url]
 
 
-def _run_listing(argv):
+def _run_listing(argv, timeout=EXTRACTOR_TIMEOUT):
     """Bounded subprocess like _run_extractor, but stdout is the payload."""
     try:
-        proc = subprocess.run(argv, capture_output=True, timeout=EXTRACTOR_TIMEOUT,
+        proc = subprocess.run(argv, capture_output=True, timeout=timeout,
                               env=network.extractor_env(), check=False, shell=False)
     except subprocess.TimeoutExpired:
-        return 124, b"", f"extractor exceeded {EXTRACTOR_TIMEOUT}s time bound"
+        return 124, b"", f"extractor exceeded {timeout}s time bound"
     return (proc.returncode, proc.stdout,
             proc.stderr.decode(errors="replace")[-4000:])
 
 
-def list_profile_posts(url):
+def list_profile_posts(url, timeout=EXTRACTOR_TIMEOUT):
     """List a TikTok profile: [{\"id\", \"url\", \"title\"}] sorted newest
     first (numeric ids descending, non-numeric ids last). title is the entry's
     title or description, stripped and capped at PROFILE_TITLE_MAX characters,
     "" when absent. Reads the flat-playlist JSON only; no media downloads.
-    Invalid input, non-zero exit, timeout, or unreadable JSON raises
-    ListingError with the _tiktok_failure mapping."""
+    The subprocess run is bounded by timeout (EXTRACTOR_TIMEOUT by default;
+    the interactive suggest path passes a much shorter bound). Invalid input,
+    non-zero exit, timeout, or unreadable JSON raises ListingError with the
+    _tiktok_failure mapping."""
     if not isinstance(url, str) or not norm(url) or not is_tiktok(url):
         raise ListingError(f"profile listing failed ({_tiktok_failure('')})")
     with network.extractor_egress() as proxy:
-        code, out, err = _run_listing(_profile_list_argv(proxy, url))
+        code, out, err = _run_listing(_profile_list_argv(proxy, url), timeout)
     if code != 0:
         raise ListingError(f"profile listing failed ({_tiktok_failure(err)})")
     try:

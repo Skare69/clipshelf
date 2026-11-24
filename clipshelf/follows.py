@@ -25,6 +25,10 @@ from clipshelf.models import Contribution, FollowedSource, Job, SeenPost
 # Stable duplicate marker; views map it to 409.
 DUPLICATE = "duplicate follow"
 TAG_SCAN_MAX = 1000  # newest contributions read for existing tags
+# Interactive suggest path: a flat-playlist listing is one round trip, so
+# the short bound answers failure fast instead of holding a web thread for
+# the 900 s background ceiling.
+SUGGEST_LISTING_TIMEOUT = 60
 
 
 class LlmNotConfigured(Exception):
@@ -116,7 +120,8 @@ def suggest_tags(user, url):
     if not settings.llm_configured:
         raise LlmNotConfigured(
             "No LLM is configured. An admin can set it up in Admin settings.")
-    posts = acquisition.list_profile_posts(profile_url)
+    posts = acquisition.list_profile_posts(
+        profile_url, timeout=SUGGEST_LISTING_TIMEOUT)
     titles = [post["title"] for post in posts if post["title"]]
     material = {"profile": urllib.parse.urlsplit(profile_url).path[1:],
                 "post_titles": titles[:interpretation.SUGGEST_TITLES_MAX]}
