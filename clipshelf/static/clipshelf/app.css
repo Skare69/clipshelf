@@ -328,10 +328,14 @@ td .acts{justify-content:flex-end;flex-wrap:nowrap}
   transition:width .25s var(--ease)}
 /* No value attribute: the bar is indeterminate. appearance:none drops Chrome's
    throbber, so sweep an ink band across the track; Firefox keeps its native
-   blink on ::-moz-progress-bar (the webkit rule is invalid there and ignored). */
+   blink on ::-moz-progress-bar (the webkit rule is invalid there and ignored).
+   The media guard is load-bearing: the global reduced-motion reset matches
+   only ::before/::after, never this vendor pseudo-element. */
 @keyframes prog-sweep{from{background-position:0 0}to{background-position:100% 0}}
-.prog:not([value])::-webkit-progress-bar{background:linear-gradient(90deg,transparent 0,var(--ink) 50%,transparent 100%) no-repeat;
-  background-size:40% 100%;animation:prog-sweep 1.2s linear infinite}
+@media (prefers-reduced-motion:no-preference){
+  .prog:not([value])::-webkit-progress-bar{background:linear-gradient(90deg,transparent 0,var(--ink) 50%,transparent 100%) no-repeat;
+    background-size:40% 100%;animation:prog-sweep 1.2s linear infinite}
+}
 
 /* ---------- snackbar ---------- */
 .banner{position:fixed;z-index:60;left:50%;bottom:24px;transform:translateX(-50%);
