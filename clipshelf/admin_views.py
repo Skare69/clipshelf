@@ -7,6 +7,7 @@ invitations, shared-collection succession, LLM connection settings).
 
 import os
 import secrets
+import unicodedata
 from functools import wraps
 
 from django.contrib.auth import get_user_model
@@ -340,6 +341,17 @@ def _llm_dict(s) -> dict:
     }
 
 
+def _validated_api_key(raw) -> str:
+    """The stored key rides in an Authorization header: http.client refuses a
+    header value that holds control characters and puts the whole value into
+    the error text. Reject them at the one write path; strip the surrounding
+    whitespace a paste can carry."""
+    key = str(raw or "").strip()
+    if any(unicodedata.category(ch) == "Cc" for ch in key):
+        raise ApiError(400, detail="api_key must not contain control characters")
+    return key
+
+
 def _resolve_kwargs(body) -> dict:
     """Present-only request fields for ServerSettings.resolve. Omission must
     stay distinct from an explicit empty value, which clears the key."""
@@ -349,7 +361,7 @@ def _resolve_kwargs(body) -> dict:
     if "model" in body:
         kwargs["model"] = str(body["model"] or "").strip()
     if "api_key" in body:
-        kwargs["api_key"] = str(body["api_key"] or "")
+        kwargs["api_key"] = _validated_api_key(body["api_key"])
     return kwargs
 
 

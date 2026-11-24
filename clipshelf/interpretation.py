@@ -140,6 +140,11 @@ class _TransportError(InterpretationError):
             message = "model response exceeds size bound"
         elif kind == "json":
             message = "endpoint returned invalid JSON"
+        elif kind == "request":
+            # The refused-header ValueError embeds the whole Authorization
+            # header in repr-escaped form a plain replace cannot match, so
+            # no detail ever reaches the message.
+            message = "request could not be sent (check the saved API key and base URL)"
         else:  # http: the endpoint answered with a non-ok status
             message = f"endpoint rejected request (HTTP {code}): {detail}"
         super().__init__(message)
@@ -167,6 +172,12 @@ def _request(method, url, key, payload, timeout):
     except (urllib.error.URLError, OSError) as exc:
         raise _TransportError("unreachable",
                               detail=_redact(str(exc), key)[:300]) from None
+    except ValueError:
+        # A header http.client refuses while building the request (control
+        # characters in the stored key) carries the whole header value in its
+        # text, in repr-escaped form a plain replace cannot match. No detail
+        # survives: the fixed message is the whole surface.
+        raise _TransportError("request") from None
     if len(raw) > LLM_RESPONSE_MAX:
         raise _TransportError("size")
     try:
@@ -195,6 +206,9 @@ def list_models(config, timeout=30):
             raise ConfigurationError(f"endpoint rejected credentials (HTTP {exc.code})") from None
         if exc.kind == "unreachable":
             raise ConfigurationError(f"endpoint unreachable: {exc.detail[:200]}") from None
+        if exc.kind == "request":
+            raise ConfigurationError(
+                "request could not be sent (check the saved API key and base URL)") from None
         if exc.kind == "size":
             raise ConfigurationError("model list exceeds size bound") from None
         if exc.kind == "http":

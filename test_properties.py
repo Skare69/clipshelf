@@ -22,6 +22,7 @@ import re
 import socket
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path, PureWindowsPath
 from urllib.parse import quote, urlsplit
 
@@ -41,7 +42,7 @@ from django.test import Client
 from django.test import runner as test_runner
 from django.test import utils as test_utils
 
-from clipshelf import acquisition, follows, imports, interpretation
+from clipshelf import acquisition, admin_views, follows, imports, interpretation
 from clipshelf import lib, models, network, services
 from clipshelf.api import ApiError, json_body
 
@@ -230,7 +231,37 @@ def prop_json_body(rng):
     assert not bad, f"({len(bad)} violations) {bad[:3]}"
 
 
-# ------------------------------------------- 4. admission and worker agreement
+# --------------------------------------- 3b. admin api_key validation
+
+def prop_api_key_validator(rng):
+    """Any raw api_key input is either a 400 or a stripped string free of
+    control characters — never stored raw, never another raise."""
+    corpus = ["", " ", "  sk-test  ", "sk\r\nX: y", "sk\rX: y", "sk\nX: y",
+              "sk\x00", "sk\x7f", "sk\ttab", "sk\xe9\u00a0"]
+    for _ in range(RUNS):
+        corpus.append("".join(
+            chr(rng.choice([rng.randint(1, 0xD7FF),
+                            rng.randint(0xE000, 0x10FFFF)]))
+            for _ in range(rng.randint(0, 40))))
+    bad = []
+    for raw in corpus:
+        try:
+            out = admin_views._validated_api_key(raw)
+        except ApiError as exc:
+            if exc.response.status_code != 400:
+                bad.append(("status", repr(raw)[:40], exc.response.status_code))
+            continue
+        except Exception as exc:
+            bad.append(("raise", repr(raw)[:40], type(exc).__name__))
+            continue
+        if out != str(raw).strip():
+            bad.append(("mutated", repr(raw)[:40]))
+        if any(unicodedata.category(ch) == "Cc" for ch in out):
+            bad.append(("control survived", repr(raw)[:40], repr(out)[:40]))
+    assert not bad, f"({len(bad)} violations) {bad[:3]}"
+
+
+# --------------------------------------------- 4. admission and worker agreement
 
 def prop_upload_parse(rng):
     """Admission never 500s: for any byte string, decoding plus the engine's
@@ -720,6 +751,7 @@ PROPERTIES = [
     ("norm", prop_norm),
     ("legacy_media_path", prop_legacy_media_path),
     ("json_body", prop_json_body),
+    ("api_key_validator", prop_api_key_validator),
     ("upload_parse", prop_upload_parse),
     ("admission_worker_agreement", prop_admission_worker_agreement),
     ("public_ip", prop_public_ip),

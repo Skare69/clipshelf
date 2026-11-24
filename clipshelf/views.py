@@ -882,12 +882,14 @@ def api_follow_suggest_tags(request):
     if not _suggest_tags_gate.acquire(blocking=False):
         raise ApiError(429, detail="another tag suggestion is already running")
     try:
+        try:  # the URL check is explicit, so only a bad profile URL is a 400
+            follows.validate_profile_url(body.get("url"))
+        except ValueError as exc:
+            raise ApiError(400, detail=str(exc))
         try:
             tags = follows.suggest_tags(request.user, body.get("url"))
         except follows.LlmNotConfigured as exc:
             raise ApiError(503, detail=str(exc))
-        except ValueError as exc:
-            raise ApiError(400, detail=str(exc))
         except (acquisition.ListingError, interpretation.InterpretationError,
                 interpretation.ConfigurationError) as exc:
             raise ApiError(502, detail=str(exc)[:300])

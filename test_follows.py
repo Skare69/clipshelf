@@ -39,6 +39,7 @@ from clipshelf.models import Capture, Contribution, Entry, FollowedSource, Job, 
 
 PASSWORD = "test-pass-1234"
 FAKE_LLM_KEY = "fake-llm-key-for-tests"  # not a real credential
+POISONED_KEY = "sk-poisoned-key\r\nX-Injected: true"  # not a real credential
 PROFILE = "https://www.tiktok.com/@creator"
 FOLLOW_KEYS = {"id", "platform", "profile_url", "tag", "enabled",
                "full_backfill", "last_check", "next_check", "last_error",
@@ -667,6 +668,36 @@ class SuggestTagsApiTests(FollowMixin, TestCase):
         self.assertEqual(response.status_code, 502)
         self.assertIn("unreachable", response.json()["detail"])
         self.assertNotIn(FAKE_LLM_KEY, response.content.decode())
+
+    def test_control_character_key_leaks_nowhere(self):
+        """A stored key holding CRLF makes http.client refuse the header while
+        the request is built; its ValueError text embeds the whole key in
+        repr-escaped form. The route answers 502 with a fixed message, and
+        neither the body nor the worker-path error text (what _fail stores in
+        job.error) ever carries the key."""
+        cfg = services.get_settings()
+        cfg.llm_base_url = "http://127.0.0.1:9/v1"  # putheader refuses before any connect
+        cfg.llm_model = "test-model"
+        cfg.llm_api_key = POISONED_KEY
+        cfg.save()
+        with mock.patch.object(acquisition, "list_profile_posts",
+                               return_value=self.LISTING):
+            response = self._post_json(self._login(self.alice), self.ROUTE,
+                                       {"url": PROFILE})
+        self.assertEqual(response.status_code, 502)
+        body = response.content.decode()
+        self.assertIn("request could not be sent", body)
+        self.assertNotIn(POISONED_KEY, body)
+        self.assertNotIn("X-Injected", body)
+        # The worker path stores str(InterpretationError) in job.error: the
+        # same transport failure must stay redacted there too.
+        with self.assertRaises(interpretation.InterpretationError) as ctx:
+            interpretation.post("http://127.0.0.1:9/v1", POISONED_KEY,
+                                {"model": "test-model", "messages": []},
+                                interpretation.CHECK_TIMEOUT)
+        self.assertIn("request could not be sent", str(ctx.exception))
+        self.assertNotIn(POISONED_KEY, str(ctx.exception))
+        self.assertNotIn("X-Injected", str(ctx.exception))
 
     def test_bad_profile_url_answers_400(self):
         self._configure()
