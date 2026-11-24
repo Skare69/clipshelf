@@ -199,20 +199,23 @@ const fireUploadProgress = (loaded, total, computable = true) => {
 
 // 200 replay of a failed import: error element, no dialog close, no ok banner.
 impClick();
+// The first event may carry no computable length; the status line is still
+// empty here, so these asserts cannot pass on stale text from an earlier
+// computable event.
+fireUploadProgress(500, 0, false);
+const impProg = bySel.get("#impProg");
+assert.equal("value" in impProg.attributes, false,
+  "progress without a computable length must drop the value attribute: the bar shows indeterminate");
+assert.equal(impStat.textContent, "Uploading 0.0 MiB",
+  "a first non-computable event with known loaded bytes must set the status text: under reduced motion the bar has no sweep, so the text is the active-state signal");
+fireUploadProgress(0, 0, false);
+assert.equal(impStat.textContent, "Uploading…",
+  "a non-computable event with no loaded bytes must still set the status text");
 // fakeEl mirrors the real reflection contract: setting the value IDL attribute
 // stores the content attribute, so the asserts below watch attributes.value.
 fireUploadProgress(200, 1000);
-const impProg = bySel.get("#impProg");
 assert.equal(impProg.attributes.value, "20",
   "computable progress must set the bar value to the rounded percent");
-fireUploadProgress(500, 0, false);
-assert.equal("value" in impProg.attributes, false,
-  "progress without a computable length must drop the value attribute: the bar shows indeterminate");
-assert.match(impStat.textContent, /Uploading/,
-  "a non-computable progress event must leave non-empty status text: under reduced motion the bar has no sweep, so the text is the active-state signal");
-fireUploadProgress(0, 0, false);
-assert.match(impStat.textContent, /^Uploading…$/,
-  "a non-computable event with no loaded bytes must still set the status text");
 respond(200, { import: { id: "r1", status: "error", error: "too many items (5001 > 5000)" } });
 assert.equal(impErr.hidden, false, "failed replay must surface the error element");
 assert.match(impErr.textContent, /too many items \(5001 > 5000\)/,
