@@ -673,8 +673,8 @@ class SuggestTagsApiTests(FollowMixin, TestCase):
         """A stored key holding CRLF makes http.client refuse the header while
         the request is built; its ValueError text embeds the whole key in
         repr-escaped form. The route answers 502 with a fixed message, and
-        neither the body nor the worker-path error text (what _fail stores in
-        job.error) ever carries the key."""
+        neither the body nor the saved job.error of a failed worker attempt
+        ever carries the key."""
         cfg = services.get_settings()
         cfg.llm_base_url = "http://127.0.0.1:9/v1"  # putheader refuses before any connect
         cfg.llm_model = "test-model"
@@ -698,6 +698,29 @@ class SuggestTagsApiTests(FollowMixin, TestCase):
         self.assertIn("request could not be sent", str(ctx.exception))
         self.assertNotIn(POISONED_KEY, str(ctx.exception))
         self.assertNotIn("X-Injected", str(ctx.exception))
+        # And the full worker path: acquire a real job, run the interpret
+        # phase against the poisoned settings, then reload the row and check
+        # what _fail stored in job.error.
+        capture, _ = services.accept_capture(
+            self.alice, uuid.uuid4(), "https://example.com/page", None)
+        job = Job.objects.get(capture=capture)
+
+        def fake_acquire(url, directory):
+            page = Path(directory) / "page.html"
+            page.write_text(f"<html>{url}</html>", encoding="utf-8")
+            return {"url": url, "original_url": url, "title": "t", "desc": "d",
+                    "text": "x", "links": [],
+                    "assets": [{"path": str(page), "kind": "page",
+                                "content_type": "text/html", "position": 0}],
+                    "acquisition": "complete", "warnings": [], "metadata": {}}
+
+        with mock.patch("clipshelf.acquisition.acquire", side_effect=fake_acquire):
+            self.assertTrue(worker._acquire_phase(job))
+        worker._interpret_phase(job)
+        job.refresh_from_db()
+        self.assertIn("request could not be sent", job.error)
+        self.assertNotIn(POISONED_KEY, job.error)
+        self.assertNotIn("X-Injected", job.error)
 
     def test_bad_profile_url_answers_400(self):
         self._configure()
