@@ -145,11 +145,37 @@ token). A follow belongs to its user: another user's follow id answers 404.
 | `api/follows` | POST | `{"url", "tag", "full"?}` | 201 `{"follow": follow_json}`; malformed 400; duplicate 409 |
 | `api/follows/<uuid>` | DELETE | — | `{"removed": true}` |
 | `api/follows/<uuid>` | POST | `{"enabled": bool}` | `{"follow": follow_json}` (pause/resume) |
+| `api/follows/suggest-tags` | POST | `{"url"}` | 200 `{"tags": [str]}` (1–5, nothing saved); bad URL 400; no LLM 503; listing or model failure 502 |
 | `api/feed` | GET | `since` (required), `tag?`, `limit?` | `{"entries": [...], "count": n}` |
 
 `follow_json`: `{"id", "platform", "profile_url", "tag", "enabled",
 "full_backfill", "last_check" (ISO or null), "next_check", "last_error",
 "created_at"}`.
+
+`api/follows/suggest-tags` — topic tag suggestions for the follow form. It
+saves nothing. The URL must pass `validate_profile_url`, else 400. With no LLM
+configured the answer is 503 (`follows.LlmNotConfigured`). A listing or model
+failure answers 502 with the mapped message, truncated to 300 characters
+(`acquisition.ListingError`, `interpretation.InterpretationError` or
+`interpretation.ConfigurationError`).
+
+Success answers 200 `{"tags": [...]}` with 1–5 labels: the model is asked for
+3–5 short labels, tags from the user's own vocabulary are reused verbatim, and
+the list is capped at 5 (`SUGGEST_TAGS_MAX`). A model reply with no usable
+label is a 502 too (`InterpretationError`).
+
+The model request is one JSON data blob with:
+
+- the profile handle (`@handle` from the normalized URL),
+- at most 20 recent post titles (`SUGGEST_TITLES_MAX`),
+- at most 200 tags from the user's own vocabulary (`SUGGEST_EXISTING_MAX`):
+  follow tags first, then tags stored on entries in the user's accessible
+  collections, each spelling once, case-insensitive, newest first.
+
+`/api/me` also returns `llm_configured` (bool: an LLM base URL and model are
+saved in admin settings, `ServerSettings.llm_configured`). The follow form
+reads the field to disable the suggest action with a hint when no LLM is
+configured.
 
 `api/feed` — entries added since a timestamp for the signed-in user: entries in
 the user's accessible collections with `created_at >= since`, newest first,
