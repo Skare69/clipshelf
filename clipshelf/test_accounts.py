@@ -31,7 +31,14 @@ from clipshelf.accounts import (
     invitation_token_hash,
 )
 from clipshelf.api import json_error
-from clipshelf.models import Collection, Invitation, Job, Membership, ServerSettings
+from clipshelf.models import (
+    Collection,
+    FollowedSource,
+    Invitation,
+    Job,
+    Membership,
+    ServerSettings,
+)
 from clipshelf.interpretation import _TransportError
 from clipshelf.services import accessible_collections
 from django.core import mail
@@ -1092,3 +1099,48 @@ class AdminCollectionListShapeTests(AccountTestCase):
             data[0]["members"],
             [{"id": str(member.pk), "email": member.email, "is_active": True}],
         )
+
+
+_NO_CSRF_MIDDLEWARE = [
+    m for m in settings.MIDDLEWARE if m != "django.middleware.csrf.CsrfViewMiddleware"
+]
+
+
+@override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
+class SameSiteApiCsrfTests(TestCase):
+    """Security-audit lead same-site-cookie-csrf-default-off: a page on
+    another port of the same host is same-site, so the browser sends the
+    Lax session cookie, and a text/plain POST needs no CORS preflight.
+    With CLIPSHELF_CSRF off (the default) the cookie API accepts that
+    request: the lead is confirmed. CLIPSHELF_CSRF=1 rejects it."""
+
+    def setUp(self):
+        self.victim = make_user("victim@clipshelf.test")
+        self.client = Client(enforce_csrf_checks=True)
+        self.client.force_login(self.victim)
+
+    def post_follow(self):
+        return self.client.post(
+            "/api/follows",
+            data=json.dumps(
+                {"url": "https://www.tiktok.com/@attacker", "tag": "planted"}
+            ),
+            content_type="text/plain",
+            HTTP_HOST="192.168.1.10:8000",
+            HTTP_ORIGIN="http://192.168.1.10:9000",
+            HTTP_SEC_FETCH_SITE="same-site",
+        )
+
+    @override_settings(CLIPSHELF_CSRF=False, MIDDLEWARE=_NO_CSRF_MIDDLEWARE)
+    def test_default_accepts_same_site_text_plain_cookie_post(self):
+        response = self.post_follow()
+        self.assertEqual(response.status_code, 201)
+        self.assertTrue(
+            FollowedSource.objects.filter(user=self.victim, tag="planted").exists()
+        )
+
+    @override_settings(CLIPSHELF_CSRF=True, MIDDLEWARE=_CSRF_MIDDLEWARE)
+    def test_csrf_flag_rejects_same_site_text_plain_cookie_post(self):
+        response = self.post_follow()
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(FollowedSource.objects.filter(user=self.victim).exists())
