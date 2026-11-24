@@ -199,11 +199,14 @@ const fireUploadProgress = (loaded, total, computable = true) => {
 
 // 200 replay of a failed import: error element, no dialog close, no ok banner.
 impClick();
+// Real #impProg carries value="0" from index.html and the success path resets
+// it to 0, so the removal assert below must watch a value that exists.
+const impProg = bySel.get("#impProg");
+impProg.value = 0;
 // The first event may carry no computable length; the status line is still
 // empty here, so these asserts cannot pass on stale text from an earlier
 // computable event.
 fireUploadProgress(500, 0, false);
-const impProg = bySel.get("#impProg");
 assert.equal("value" in impProg.attributes, false,
   "progress without a computable length must drop the value attribute: the bar shows indeterminate");
 assert.equal(impStat.textContent, "Uploading 0.0 MiB",
