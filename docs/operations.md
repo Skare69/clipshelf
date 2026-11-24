@@ -32,28 +32,38 @@ removes its own fixtures, and the server never scans the OS temp directory.
 ## Import parse memory budget
 
 `json.load()` is not a streaming parser. It builds every element of the
-import body before the shape check runs. A worst-case body of empty JSON
-arrays costs about 26 MiB of peak RSS per MiB of body. The default 32 MiB
-upload ceiling (`CLIPSHELF_MAX_IMPORT_BYTES`) therefore costs about 830 MiB
-per request. The web process runs waitress with its default four threads,
-so four parallel imports of that kind ask for about 3.3 GiB.
+import body before the shape check runs. The admitted cost has two shapes.
 
-Admission bounds this before parsing. `MAX_IMPORT_ELEMENTS`
-(clipshelf/imports.py) counts the structural bytes `[ { , :` outside string
-literals and refuses a body past 250000 with a 400. The count walks the
-file in 64 KiB chunks, so the scan adds no peak memory. The largest body
-the cap admits holds 125000 empty arrays and parses to about 9 MiB of
-Python objects. One worst-case import then costs about 41 MiB of parse
-memory, and four parallel imports about 165 MiB. The worker re-parses the
-staged file under the same cap.
+Empty-array floods cost about 26 MiB of peak RSS per MiB of body: the
+default 32 MiB ceiling (`CLIPSHELF_MAX_IMPORT_BYTES`) built about 830 MiB
+of list objects, and the web process runs waitress with its default four
+threads, so four parallel floods asked for about 3.3 GiB. Admission now
+counts the structural bytes `[ { , :` outside string literals and refuses
+a body past `MAX_IMPORT_ELEMENTS` (250000, clipshelf/imports.py) with a
+400. The count walks the file in 64 KiB chunks, so the scan adds no peak
+memory. The largest admitted flood holds 125000 empty arrays and parses
+to about 9 MiB of Python objects. The worker re-parses the staged file
+under the same cap.
+
+String contents do not count as elements. A body of a few giant string
+literals is admitted and rides the upload ceiling alone, and one astral
+character (an emoji is enough) makes CPython store the whole string as
+four bytes per character: a 4 MiB string then occupies 16777280 bytes.
+Poisoned 64 KiB strings measure about 9 MiB of peak RSS per MiB of body,
+about 286 MiB at the 32 MiB ceiling. Four parallel string-heavy imports
+ask for about 1.2 GiB.
 
 Size the container memory for the web and worker baseline plus about
-200 MiB of import headroom. Set a lower `CLIPSHELF_MAX_IMPORT_BYTES` in
-the compose environment when the host is smaller. Re-measure after a
-Python upgrade with `python3 scripts/bench_import_parse.py`; the script
-prints the peak RSS per body size and needs about 850 MB free for the
-32 MiB probe. Measured on 2026-11-24 with CPython 3.13.5: 4 MiB body
-108 MiB peak RSS, 8 MiB 216 MiB, 16 MiB 433 MiB, 32 MiB 833 MiB.
+1.25 GiB of import headroom, or set a lower `CLIPSHELF_MAX_IMPORT_BYTES`
+in the compose environment when the host is smaller: string-heavy parse
+memory stays near 9 MiB of RSS per MiB of body at any ceiling.
+Re-measure after a Python upgrade with
+`python3 scripts/bench_import_parse.py`; run it once with `--arrays` and
+once with `--strings`. The script prints the peak RSS per body size and
+needs about 850 MB free for the 32 MiB probes. Measured on 2026-11-24
+with CPython 3.13.5: arrays 4 MiB body 108 MiB peak RSS, 8 MiB 216 MiB,
+16 MiB 433 MiB, 32 MiB 833 MiB; poisoned strings 4 MiB 34 MiB, 8 MiB
+70 MiB, 16 MiB 142 MiB, 32 MiB 286 MiB.
 
 ## Backup and restore
 

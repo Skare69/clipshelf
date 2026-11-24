@@ -263,8 +263,14 @@ def _url_item(item):
 # Counting the structural bytes outside string literals bounds that build
 # before it starts: every element but a bare scalar document carries one
 # counted byte, and the cap admits at most 125000 empty arrays, a measured
-# ~9 MiB of objects. 5000 legal items carry ~20k structural bytes, so the
-# cap keeps ~10x headroom for real exports.
+# ~9 MiB of objects. String contents do not count as elements, so a body
+# of a few giant string literals rides the upload ceiling alone; one
+# astral character widens a CPython string to four bytes per character,
+# a measured ~9 MiB of peak RSS per MiB of body, about 286 MiB at the
+# 32 MiB ceiling (scripts/bench_import_parse.py --strings).
+# docs/operations.md states the combined worst case. 5000 legal items
+# carry ~20k structural bytes, so the cap keeps ~10x headroom for real
+# exports.
 MAX_IMPORT_ELEMENTS = 250_000
 _STRUCTURAL = b"[{,:"
 _STRING_TAIL = re.compile(rb'(?:[^"\\]|\\.)*"')
