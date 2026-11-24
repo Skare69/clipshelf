@@ -13,6 +13,7 @@ editing this file:
       python3 test_properties.py
 """
 import contextlib
+import gzip
 import io
 import ipaddress
 import json
@@ -22,7 +23,9 @@ import re
 import socket
 import sys
 import tempfile
+import time
 import unicodedata
+import zlib
 from pathlib import Path, PureWindowsPath
 from urllib.parse import quote, urlsplit
 
@@ -745,6 +748,70 @@ def prop_feed(rng):
     assert not bad, f"({len(bad)} violations) {bad[:3]}"
 
 
+# ---------------------------------------------- 10. network._bounded_read
+
+class _StagedResp:
+    """read1 fake serving pre-split chunks; counts raw bytes handed out."""
+
+    def __init__(self, chunks):
+        self.chunks, self.served = list(chunks), 0
+
+    def read1(self, n):
+        if not self.chunks:
+            return b""
+        chunk = self.chunks.pop(0)
+        self.served += len(chunk)
+        return chunk
+
+
+def prop_bounded_read(rng):
+    """A complete gzip/deflate member decodes to its payload; any trailing
+    byte raises NetworkError — never a crash, never a silent accept, and
+    the read stops at the member end (CLIP-139)."""
+    bad = []
+    # explicit counterexamples: trailer shares the member's chunk (64 KiB,
+    # the validated shape) and arrives in a chunk of its own (100 bytes)
+    examples = []
+    for payload in (b"", b"hi", bytes(range(256))):
+        for enc, make in (("gzip", gzip.compress), ("deflate", zlib.compress)):
+            examples.append((payload, make(payload), enc))
+    corpus = [(p, [m + b"\x00" * 65536], e, 65536) for p, m, e in examples]
+    corpus += [(p, [m, b"\x00" * 100], e, 100) for p, m, e in examples]
+    corpus += [(p, [m], e, 0) for p, m, e in examples]   # clean member alone
+    for _ in range(RUNS):
+        payload = bytes(rng.getrandbits(8) for _ in range(rng.randint(0, 300)))
+        enc, make = rng.choice((("gzip", gzip.compress),
+                                ("deflate", zlib.compress)))
+        member = make(payload)
+        trailer = bytes(rng.getrandbits(8) for _ in range(rng.randint(0, 6000)))
+        data = member + trailer
+        chunks, pos = [], 0
+        while pos < len(data):
+            size = rng.randint(1, max(1, len(data) // 2))
+            chunks.append(data[pos:pos + size])
+            pos += size
+        corpus.append((payload, chunks, enc, len(trailer)))
+    for payload, chunks, enc, trailer_len in corpus:
+        resp = _StagedResp(chunks)
+        try:
+            out = network._bounded_read(resp, enc, 1 << 20,
+                                        time.monotonic() + 30)
+        except network.NetworkError as exc:
+            if trailer_len == 0:
+                bad.append(("refused a clean stream", enc, len(payload)))
+            elif "trailing" not in str(exc):
+                bad.append(("wrong refusal", enc, str(exc)[:60]))
+            continue
+        except Exception as exc:
+            bad.append(("unexpected exception", enc, type(exc).__name__))
+            continue
+        if trailer_len:
+            bad.append(("trailing data accepted", enc, trailer_len))
+        elif out != payload:
+            bad.append(("payload mismatch", enc, len(payload)))
+    assert not bad, f"({len(bad)} violations) {bad[:3]}"
+
+
 # --------------------------------------------------------------------- harness
 
 PROPERTIES = [
@@ -761,6 +828,7 @@ PROPERTIES = [
     ("profile_url_fixed_point", prop_profile_url_fixed_point),
     ("list_profile_posts", prop_list_profile_posts),
     ("feed", prop_feed),
+    ("bounded_read", prop_bounded_read),
 ]
 
 

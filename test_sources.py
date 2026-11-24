@@ -227,6 +227,95 @@ def test_redirects_and_bounds():
         net.socket = original
 
 
+def test_bounded_read_stops_after_compressed_member():
+    # CLIP-139: bytes past the end of the gzip member used to keep the loop
+    # reading into dec.unused_data until end of input or the deadline; now
+    # the loop stops at the member end and any trailing byte is refused.
+    payload = b"<html>ok</html>"
+    gz = gzip.compress(payload)
+    deadline = time.monotonic() + 10
+
+    class Staged:
+        """read1 fake serving prepared chunks; counts the read calls."""
+        def __init__(self, chunks):
+            self.chunks, self.reads = list(chunks), 0
+
+        def read1(self, n):
+            self.reads += 1
+            return self.chunks.pop(0) if self.chunks else b""
+
+    def refuse_trailing(resp, enc="gzip"):
+        try:
+            net._bounded_read(resp, enc, 1 << 20, deadline)
+            raise AssertionError("trailing data accepted")
+        except net.NetworkError as exc:
+            assert "trailing" in str(exc)
+
+    # trailer inside the member's own chunk: refused before any further read
+    r = Staged([gz + b"x" * 5000])
+    refuse_trailing(r)
+    assert r.reads == 1, r.reads
+
+    # trailer in a later chunk: exactly one read past the member end
+    r = Staged([gz, b"y" * 5000])
+    refuse_trailing(r)
+    assert r.reads == 2, r.reads
+
+    # the deflate branch shares the loop; a trailing byte is refused there too
+    refuse_trailing(Staged([zlib.compress(payload) + b"z"]), "deflate")
+
+    # a clean end right at the member still decodes
+    out = net._bounded_read(Staged([gz]), "gzip", 1 << 20, deadline)
+    assert out == payload
+
+
+def test_gzip_trailer_never_read_past_cap():
+    # CLIP-139 acceptance: trailing bytes after a complete gzip stream fail
+    # the fetch without the loop reading anywhere near the byte cap.
+    page = b"<html>ok</html>"
+    trailer = b"\0" * (8 << 20)
+    tally = [0]
+
+    class CountingFile(io.RawIOBase):
+        """Delegates reads to the fake socket file; tallies raw bytes."""
+        def __init__(self, inner):
+            self._inner = inner
+
+        def readable(self):
+            return True
+
+        def readinto(self, b):
+            n = self._inner.readinto(b)
+            tally[0] += n
+            return n
+
+        def readline(self, *a):
+            return self._inner.readline(*a)
+
+    class CountingSock(FakeSock):
+        def makefile(self, *a, **k):
+            if not isinstance(self.file, CountingFile):
+                self.file = CountingFile(self.file)
+            return self.file
+
+    fake = FakeNet({"example.com": [PUBLIC]},
+                   [http(body=gzip.compress(page) + trailer, encoding="gzip")])
+    fake.socket = lambda family, type: CountingSock(fake)
+    original = net.socket
+    net.socket = fake
+    try:
+        try:
+            net.fetch_public("http://example.com/", max_bytes=1 << 20)
+            raise AssertionError("trailing data accepted")
+        except net.NetworkError as exc:
+            assert "trailing" in str(exc)
+        # the whole 8 MiB trailer used to land in unused_data; the fix stops
+        # within one chunk past the member, far below the 1 MiB cap
+        assert tally[0] < 1 << 20, tally[0]
+    finally:
+        net.socket = original
+
+
 def test_non_ascii_path_percent_encoded():
     # a raw non-ASCII path/query must reach the wire RFC 3986-encoded;
     # http.client sends the request line as ascii, so a raw "Bücher"

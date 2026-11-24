@@ -239,7 +239,10 @@ def _bounded_read(resp, encoding, max_bytes, deadline):
 
     Reads one raw chunk at a time; resp's _DeadlineIO stream bounds every
     socket read by the whole-fetch deadline, so a slow trickle can never
-    stretch the fetch past it.
+    stretch the fetch past it. The loop stops at the end of the compressed
+    member: bytes past it are a framing violation and raise NetworkError,
+    so a trailer can never accumulate in unused_data past one chunk or
+    outlast the deadline (CLIP-139).
     """
     enc = (encoding or "").strip().lower()
     dec = None
@@ -259,6 +262,13 @@ def _bounded_read(resp, encoding, max_bytes, deadline):
 
     try:
         while True:
+            if dec is not None and dec.eof:
+                # Member complete: any later byte is a framing violation.
+                # Reading at most one byte past it keeps a trailer from
+                # growing unused_data or stretching the fetch (CLIP-139).
+                if dec.unused_data or resp.read1(1):
+                    raise NetworkError("trailing data after compressed stream")
+                break
             if dec is not None and dec.unconsumed_tail:
                 absorb(dec.decompress(dec.unconsumed_tail, 65536))
                 continue
