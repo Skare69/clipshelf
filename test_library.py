@@ -2241,6 +2241,47 @@ class ImportTests(ApiTestCase):
             "pending",
         )
 
+    def test_import_rejects_element_flood_before_parsing(self):
+        # json.load builds ~64 bytes of objects per element, a measured ~26
+        # MiB of RSS per MiB of body (scripts/bench_import_parse.py): a 32
+        # MiB body of empty arrays used to build ~11 million lists before
+        # any shape check. The element budget refuses the flood first.
+        alice = self._login(self.alice)
+        flood = b"[" + b"[]," * 125_001 + b"[]]"  # 250,002 structural bytes
+        response = self._post_import(alice, flood)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("too many elements", response.json()["detail"])
+        self.assertFalse(ImportRecord.objects.filter(user=self.alice).exists())
+        self.assertEqual(
+            os.listdir(os.path.join(os.path.realpath(self._data_dir()), "staging")),
+            [],
+        )
+        # Exactly at the cap the budget passes: the body parses and fails
+        # later on shape, not on the budget.
+        at_cap = b"[" + b"[]," * 124_999 + b"[]]"  # 250,000 structural bytes
+        response = self._post_import(alice, at_cap)
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json()["detail"],
+            "every import item needs a dict with a url",
+        )
+        self.assertFalse(ImportRecord.objects.filter(user=self.alice).exists())
+
+    def test_staged_import_refuses_element_flood(self):
+        # The worker re-parses the staged file under the same budget, so no
+        # path builds an unbudgeted payload, whatever wrote the staging file.
+        staging = os.path.join(os.path.realpath(self._data_dir()), "staging")
+        os.makedirs(staging, exist_ok=True)
+        name = "flood-element-budget.json"
+        with open(os.path.join(staging, name), "wb") as out:
+            out.write(b"[" + b"[]," * 125_001 + b"[]]")
+        self.addCleanup(os.remove, os.path.join(staging, name))
+        record = ImportRecord(manifest={"staging": f"staging/{name}"})
+        record.user = self.alice  # never read: the budget refuses first
+        with self.assertRaises(services.ValidationError) as raised:
+            imports.run_staged_import(record)
+        self.assertIn("too many elements", str(raised.exception))
+
     def test_import_rejects_malformed_shapes_at_admission(self):
         # The engine's parser runs at admission: shapes the worker used to
         # reject after a 201 now fail with a 400 and leave nothing behind.

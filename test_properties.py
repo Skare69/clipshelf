@@ -342,6 +342,62 @@ def prop_admission_worker_agreement(rng):
     assert not bad, f"({len(bad)} violations) {bad[:3]}"
 
 
+def _json_elements(node):
+    """The oracle: every value in the parsed document counts once."""
+    if isinstance(node, dict):
+        return 1 + sum(_json_elements(v) for v in node.values())
+    if isinstance(node, list):
+        return 1 + sum(_json_elements(v) for v in node)
+    return 1
+
+
+def _flood_arrays(n):
+    """A worst-case body of n empty arrays: 2n structural bytes."""
+    return b"[" + b"[]," * (n - 1) + b"[]]"
+
+
+def prop_element_budget(rng):
+    """The element counter bounds what json.load builds: it never depends
+    on the chunk size, never undercounts the parsed document's elements,
+    and check_element_budget refuses exactly past MAX_IMPORT_ELEMENTS —
+    before the parser builds anything."""
+    cap = imports.MAX_IMPORT_ELEMENTS
+    corpus = [rand_upload(rng) for _ in range(RUNS)] + [
+        _flood_arrays(cap // 2),      # at the cap: accepted
+        _flood_arrays(cap // 2 + 1),  # past the cap: refused
+        b'["a\\"b", "\\\\", "c,d", "[,{:"]',
+        b'{"links":{"u\\"":["[","]"]},"prompts":[]}',
+        b'{"a":"\\\\", "b":"x"}',
+        b'"' + b"x" * 9000 + b'"',    # one giant literal
+        b'\xef\xbb\xbf[{"a":1}]', '[{"a":1}]'.encode("utf-16"),
+        b"[" * 1000, b'gar"bage', b"",
+    ]
+    bad = []
+    for body in corpus:
+        whole = imports.count_elements(io.BytesIO(body))
+        for size in (1, 2, 3, 7, 64, 4096):
+            part = imports.count_elements(io.BytesIO(body), chunk_size=size)
+            if part != whole:
+                bad.append(("chunk count differs", size, body[:40], whole, part))
+        try:
+            doc = json.load(io.BytesIO(body))
+        except (ValueError, RecursionError):
+            continue  # the view's decode gate answers 400 first
+        elements = _json_elements(doc)
+        if whole < elements - 1:
+            bad.append(("undercount", body[:40], whole, elements))
+        try:
+            imports.check_element_budget(io.BytesIO(body))
+            refused = False
+        except ValidationError:
+            refused = True
+        if refused != (whole > cap):
+            bad.append(("refusal disagrees with count", body[:40], whole))
+    assert not bad, f"({len(bad)} violations) {bad[:3]}"
+
+
+
+
 # ------------------------------------------------- 5. network._assert_public_ip
 
 def _ref_refuses(text):
@@ -821,6 +877,7 @@ PROPERTIES = [
     ("api_key_validator", prop_api_key_validator),
     ("upload_parse", prop_upload_parse),
     ("admission_worker_agreement", prop_admission_worker_agreement),
+    ("element_budget", prop_element_budget),
     ("public_ip", prop_public_ip),
     ("validated", prop_validated),
     ("validate_url", prop_validate_url),

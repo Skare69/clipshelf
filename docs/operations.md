@@ -29,6 +29,32 @@ restore drills: `clipshelf-*`, `cs-src-*`, `restore-*` directories and probe
 databases in the OS temp directory) are disposable by policy; the test suite
 removes its own fixtures, and the server never scans the OS temp directory.
 
+## Import parse memory budget
+
+`json.load()` is not a streaming parser. It builds every element of the
+import body before the shape check runs. A worst-case body of empty JSON
+arrays costs about 26 MiB of peak RSS per MiB of body. The default 32 MiB
+upload ceiling (`CLIPSHELF_MAX_IMPORT_BYTES`) therefore costs about 830 MiB
+per request. The web process runs waitress with its default four threads,
+so four parallel imports of that kind ask for about 3.3 GiB.
+
+Admission bounds this before parsing. `MAX_IMPORT_ELEMENTS`
+(clipshelf/imports.py) counts the structural bytes `[ { , :` outside string
+literals and refuses a body past 250000 with a 400. The count walks the
+file in 64 KiB chunks, so the scan adds no peak memory. The largest body
+the cap admits holds 125000 empty arrays and parses to about 9 MiB of
+Python objects. One worst-case import then costs about 41 MiB of parse
+memory, and four parallel imports about 165 MiB. The worker re-parses the
+staged file under the same cap.
+
+Size the container memory for the web and worker baseline plus about
+200 MiB of import headroom. Set a lower `CLIPSHELF_MAX_IMPORT_BYTES` in
+the compose environment when the host is smaller. Re-measure after a
+Python upgrade with `python3 scripts/bench_import_parse.py`; the script
+prints the peak RSS per body size and needs about 850 MB free for the
+32 MiB probe. Measured on 2026-11-24 with CPython 3.13.5: 4 MiB body
+108 MiB peak RSS, 8 MiB 216 MiB, 16 MiB 433 MiB, 32 MiB 833 MiB.
+
 ## Backup and restore
 
 `backup` writes a new directory (the path must not exist yet): a SQLite

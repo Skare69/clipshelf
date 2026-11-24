@@ -808,6 +808,8 @@ def api_import(request):
             return _import_replay(existing, spooled)
 
         with open(spooled, "rb") as fh:
+            imports.check_element_budget(fh)
+            fh.seek(0)
             try:
                 data = json.load(fh)
             except (ValueError, RecursionError):

@@ -7,6 +7,7 @@ legacy_payload translates a legacy library.json.
 import hashlib
 import json
 import logging
+import re
 import shutil
 import uuid
 from pathlib import Path, PureWindowsPath
@@ -42,7 +43,13 @@ def run_staged_import(record):
         raise ValidationError("import record staging path is missing or outside DATA_DIR")
     # read_bytes: the same decoder admission used on the binary spool, so a
     # BOM/UTF-16 upload accepted with a 201 cannot die here on decoding.
-    payload = json.loads(path.read_bytes())
+    # json.load on a binary handle sniffs the encoding exactly like
+    # json.loads(bytes). The element budget is re-checked before parsing so
+    # no path builds an unbudgeted payload, whatever wrote the staging file.
+    with open(path, "rb") as fh:
+        check_element_budget(fh)
+        fh.seek(0)
+        payload = json.load(fh)
     fmt, args = parse_upload(payload)
     if fmt == "legacy":
         # Legacy library.json upload: media referenced as cache/<sha1>.<ext> is
@@ -247,6 +254,76 @@ def _url_item(item):
     """The engine's one per-item rule: a dict carrying a url."""
     if not isinstance(item, dict) or not item.get("url"):
         raise ValidationError("every import item needs a dict with a url")
+
+
+# json.load() is not a streaming parser: it builds every element before the
+# shape check runs. A worst-case body of empty arrays costs a measured ~26
+# MiB of peak RSS per MiB of body, so the default 32 MiB ceiling built ~11
+# million list objects, about 830 MiB (scripts/bench_import_parse.py).
+# Counting the structural bytes outside string literals bounds that build
+# before it starts: every element but a bare scalar document carries one
+# counted byte, and the cap admits at most 125000 empty arrays, a measured
+# ~9 MiB of objects. 5000 legal items carry ~20k structural bytes, so the
+# cap keeps ~10x headroom for real exports.
+MAX_IMPORT_ELEMENTS = 250_000
+_STRUCTURAL = b"[{,:"
+_STRING_TAIL = re.compile(rb'(?:[^"\\]|\\.)*"')
+
+
+def count_elements(fh, chunk_size=1 << 16):
+    """Count structural bytes ([ { , :) outside string literals.
+
+    Every JSON element but a bare scalar document is preceded by one of
+    them, so the count bounds what json.load would build. The stream walks
+    in chunks, so peak memory is one chunk, never the file.
+    """
+    total = 0
+    in_string = False
+    escaped = False
+    while True:
+        chunk = fh.read(chunk_size)
+        if not chunk:
+            return total
+        pos = 0
+        end = len(chunk)
+        while pos < end:
+            if in_string:
+                if escaped:
+                    escaped = False
+                    pos += 1
+                    continue
+                close = _STRING_TAIL.match(chunk, pos)
+                if close is None:
+                    # The literal continues in the next chunk. A trailing
+                    # backslash run escapes across the boundary when it is
+                    # odd, an even run does not.
+                    escaped = (len(chunk) - len(chunk.rstrip(b"\\"))) % 2 == 1
+                    pos = end
+                else:
+                    pos = close.end()
+                    in_string = False
+                continue
+            quote = chunk.find(b'"', pos)
+            if quote == -1:
+                rest = chunk[pos:]
+                total += sum(rest.count(byte) for byte in _STRUCTURAL)
+                pos = end
+            else:
+                rest = chunk[pos:quote]
+                total += sum(rest.count(byte) for byte in _STRUCTURAL)
+                in_string = True
+                pos = quote + 1
+
+
+def check_element_budget(fh):
+    """Refuse a body whose element count would blow the parse memory budget.
+
+    Reads fh to EOF; the caller seeks back before parsing.
+    """
+    total = count_elements(fh)
+    if total > MAX_IMPORT_ELEMENTS:
+        raise ValidationError(
+            f"export has too many elements ({total} > {MAX_IMPORT_ELEMENTS})")
 
 
 _UPLOAD_SHAPE = (
