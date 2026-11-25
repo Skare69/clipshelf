@@ -2425,6 +2425,62 @@ def test_verify_urls_candidate_dedup():
     print("verify urls candidate dedup ok")
 
 
+def test_verify_urls_closers_matched():
+    """A markdown closer strips only when its opener sits right before the
+    match: a repo slug or file path keeps its trailing underscore, and
+    distinct slugs stay distinct fetches (CLIP-151 send-back)."""
+    fetched = []
+
+    def failing_fetch(url, **k):
+        fetched.append(url)
+        raise net.NetworkError("down")
+
+    real_fetch = net.fetch_public
+    net.fetch_public = failing_fetch
+    try:
+        # an unmatched trailing underscore is part of the url: it is fetched
+        # as-is and its failure is reported for the emitted repo
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": "see https://github.com/o/r_ now", "links": []}
+        findings = {"repos": ["https://github.com/o/r_"], "links": [],
+                    "warnings": []}
+        warnings = []
+        failures = interp._verify_urls(state, warnings)
+        interp._warn_unverified_urls(findings, failures)
+        assert fetched == ["https://github.com/o/r_"], fetched
+        assert findings["warnings"] == [
+            "unverified: https://github.com/o/r_"], findings["warnings"]
+
+        # file paths keep the underscore; r and r_ stay distinct candidates
+        fetched.clear()
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": "https://github.com/o/r/blob/Main/file_ "
+                              "https://github.com/o/r "
+                              "https://github.com/o/r_",
+                 "links": []}
+        findings = {"repos": [], "links": [], "warnings": []}
+        interp._verify_urls(state, [])
+        assert fetched == ["https://github.com/o/r/blob/Main/file_",
+                           "https://github.com/o/r",
+                           "https://github.com/o/r_"], fetched
+
+        # an unmatched asterisk stays too; matched pairs still strip
+        fetched.clear()
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": "see https://github.com/o/r* "
+                              "and **https://github.com/o/r** "
+                              "and [https://github.com/o/r2]",
+                 "links": []}
+        findings = {"repos": [], "links": [], "warnings": []}
+        interp._verify_urls(state, [])
+        assert fetched == ["https://github.com/o/r*",
+                           "https://github.com/o/r",
+                           "https://github.com/o/r2"], fetched
+    finally:
+        net.fetch_public = real_fetch
+    print("verify urls closers matched ok")
+
+
 def test_links_bound_to_material():
     """Emitted URLs are stored only when they occur in the material; an
     injected off-material link is dropped, and stored links are never
@@ -3175,6 +3231,7 @@ def test():
     test_validated_findings_caps()
     test_verify_urls_policy()
     test_verify_urls_candidate_dedup()
+    test_verify_urls_closers_matched()
     test_links_bound_to_material()
     test_verify_urls_material_order()
     test_verify_urls_fetches_github_hosts_only()

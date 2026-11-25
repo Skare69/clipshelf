@@ -527,18 +527,39 @@ def _url_form(url):
     return host.casefold().removeprefix("www.") + sep + tail
 
 
+def _strip_markdown_closers(blob, start, form):
+    """Strip a markdown closer only when its opener sits right before the
+    match: **url**, *url*, [url]. An unmatched trailing * or ] stays, so
+    repo slugs and file paths keep their characters. `_` never strips: the
+    regex's (?<![\w.]) lookbehind rejects a match preceded by `_` (a word
+    character), so a matched `_` opener is unreachable and a trailing `_`
+    always belongs to the url."""
+    trail = len(form) - len(form.rstrip("*"))
+    if trail:
+        opener = start
+        while opener and blob[opener - 1] == "*":
+            opener -= 1
+        form = form[:len(form) - min(trail, start - opener)]
+    if form.endswith("]") and start and blob[start - 1] == "[":
+        form = form[:-1]
+    return form
+
+
 def _verify_urls(state, warnings):
     """Fetch material URLs once; model output never affects public counters.
 
     Runs after the first model call returns, so an unreachable endpoint
     costs no fetches. Material alone selects and orders fetches. Bare slugs
     name no host. Candidates dedup on the stored canonical form (norm), so
-    markdown closers and case, fragment or tracking variants spend one slot.
+    case, fragment or tracking variants of one repo spend a single slot.
+    A markdown closer strips only when its opener sits before the match.
     Return failed URL forms for later local warnings.
     """
     urls, seen = [], set()
-    for m in _GITHUB_URL_RE.finditer(_material_blob(state)):
-        form = m.group(1).rstrip(".:!?*_]")
+    blob = _material_blob(state)
+    for m in _GITHUB_URL_RE.finditer(blob):
+        form = _strip_markdown_closers(blob, m.start(),
+                                       m.group(1).rstrip(".:!?"))
         scheme = "http" if form.casefold().startswith("http://") else "https"
         bare = _url_form(form)
         # Allowlist the final host: the fetch target is github.com or nothing.
