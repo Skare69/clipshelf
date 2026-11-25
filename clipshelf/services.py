@@ -239,10 +239,11 @@ def bind_import_request(user, request_id, record):
 # exists, imports.import_items re-checks it for import paths without the view.
 MAX_IMPORT_ITEMS = 5000
 # Legacy `seen` and `removed` URLs become up to three History rows each,
-# all written in the import's one write transaction. 10000 URLs (30000
-# rows) held the SQLite write lock for 2.3s in
-# scripts/bench_import_history.py, against the 30s busy_timeout that
-# other users' writes wait; 125000 URLs held it 32s and failed them.
+# all written in the import's one write transaction. The cap bounds the
+# history rows, not the lock time. In scripts/bench_import_history.py (no
+# links, local disk), 10000 URLs (30000 rows) held the SQLite write lock
+# for 2.3s, against the 30s busy_timeout that other users' writes wait;
+# 125000 URLs held it 32s and failed them.
 MAX_IMPORT_HISTORY = 2 * MAX_IMPORT_ITEMS
 
 

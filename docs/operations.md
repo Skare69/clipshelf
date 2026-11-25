@@ -74,11 +74,17 @@ users' writes (captures, job updates) wait up to the 30 s `busy_timeout`,
 then fail. A legacy `seen` or `removed` URL writes up to three `History`
 rows. Admission and the import engine refuse more than
 `MAX_IMPORT_HISTORY` (10000, clipshelf/services.py) `seen` and `removed`
-URLs together with a 400. Measured on 2026-11-25 with
-`python3 scripts/bench_import_history.py <urls>`: 10000 URLs (30000 rows)
-held the write lock for 2.3 s, and 125000 URLs (375000 rows) held it for
-32 s, so a concurrent capture failed. Run the script with
-`CLIPSHELF_DATA_DIR` set to a throwaway directory.
+URLs together with a 400. The cap limits the count of history rows, not
+the lock time. The same transaction also writes the links and prompts of
+the import, and the lock time depends on the storage.
+
+Measured on 2026-11-25 with
+`python3 scripts/bench_import_history.py <urls>` on the local disk of a
+development container, with an import that has no links or prompts:
+10000 URLs (30000 rows) held the write lock for 2.3 s to 2.9 s, and
+125000 URLs (375000 rows) held it for 32 s, so a concurrent capture
+failed. The script does not measure imports with links, or the deployed
+storage. Run it with `CLIPSHELF_DATA_DIR` set to a throwaway directory.
 
 ## Backup and restore
 
