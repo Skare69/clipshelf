@@ -74,10 +74,17 @@ _INVISIBLE_CHARS = frozenset(
 VERIFY_URLS_MAX, VERIFY_URL_BYTES_MAX = 20, 64 << 10
 # Host-qualified github urls in material text: the only fetch candidates.
 # The lookbehind rejects lookalike hosts (notgithub.com, sub.github.com);
-# a bare owner/name slug names no host and is never fetched.
+# a bare owner/name slug names no host and is never fetched. re.ASCII pins
+# word characters and case folding to ASCII, so non-ASCII lookalikes (the
+# dotless ı in "gıthub.com") never match.
 _GITHUB_URL_RE = re.compile(
     r"(?<![\w.])((?:https?://)?(?:www\.)?(?:gist\.)?github\.com/"
-    r"[^\s\"'<>(){}`;,]+)", re.IGNORECASE)
+    r"[^\s\"'<>(){}`;,]+)", re.IGNORECASE | re.ASCII)
+# The only hosts a material-derived fetch may target, after www. stripping.
+_FETCH_HOSTS = frozenset(("github.com", "gist.github.com"))
+# A leading scheme only: a scheme separator deeper in a match (the path in
+# "github.com/x://attacker.example/b") must never name the fetch host.
+_LEADING_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 SUGGEST_TAGS_MAX, SUGGEST_TITLES_MAX, SUGGEST_EXISTING_MAX = 5, 20, 200
 SUGGEST_OUTPUT_TOKENS = 300
 
@@ -504,7 +511,7 @@ def _bound_to_material(findings, state, warnings):
             # with a warning; add OCR text to the material if that bites.
             forms = [url.split("://", 1)[-1].casefold()]
             host, _, tail = forms[0].partition("/")
-            if host in ("github.com", "gist.github.com"):
+            if host in _FETCH_HOSTS:
                 forms.append(tail)
             if any(form in blob for form in forms if form):
                 kept.append(url)
@@ -515,7 +522,7 @@ def _bound_to_material(findings, state, warnings):
 
 def _url_form(url):
     """Normalize the host only; retain exact path and query case."""
-    host, sep, tail = url.split("://", 1)[-1].partition("/")
+    host, sep, tail = _LEADING_SCHEME_RE.sub("", url, count=1).partition("/")
     return host.casefold().removeprefix("www.") + sep + tail
 
 
@@ -531,9 +538,12 @@ def _verify_urls(state, warnings):
         form = m.group(1).rstrip(".:!?")
         scheme = "http" if form.casefold().startswith("http://") else "https"
         bare = _url_form(form)
-        if bare and bare not in seen:
-            seen.add(bare)
-            urls.append(f"{scheme}://{bare}")
+        # Allowlist the final host: the fetch target is github.com or nothing.
+        if (bare.partition("/")[0] not in _FETCH_HOSTS
+                or not bare or bare in seen):
+            continue
+        seen.add(bare)
+        urls.append(f"{scheme}://{bare}")
     failures = set()
     for url in urls[:VERIFY_URLS_MAX]:
         try:

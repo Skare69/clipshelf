@@ -1218,6 +1218,27 @@ def test_interpretation_regressions(tmp):
     assert len(findings["warnings"]) <= 100
 
 
+def test_verify_urls_fetches_github_hosts_only():
+    """Material text can only ever turn a verify fetch at github.com.
+
+    A scheme separator inside the path (github.com/x://attacker.example/b)
+    and a non-ASCII lookalike host (dotless ı) must never point the fetch
+    at a non-github host.
+    """
+    fetched = []
+    state = {"url": "", "title": "", "description": "",
+             "page_text": "github.com/x://attacker.example/b gıthub.com/o/r",
+             "links": []}
+    with mock.patch.object(net, "fetch_public",
+                           side_effect=lambda url, **k: fetched.append(url)):
+        failures = interp._verify_urls(state, [])
+    assert fetched == ["https://github.com/x://attacker.example/b"]
+    for url in fetched:
+        host = urllib.parse.urlsplit(url).hostname
+        assert host in ("github.com", "gist.github.com"), url
+    assert not failures
+
+
 def test_screening_warning_projection():
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "clipshelf.project.settings")
     import django
