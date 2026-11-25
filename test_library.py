@@ -1086,43 +1086,43 @@ class CollectionMembershipTests(ApiTestCase):
             403,
         )
 
+    def _pending_job(self, user, collection, state, **fields):
+        capture = Capture.objects.create(
+            user=user,
+            client_request_id=uuid.uuid4(),
+            raw_text="https://example.com/x",
+            requested_collection_id=collection.id,
+            collection=collection,
+            request_hash="h",
+            received_at=timezone.now(),
+            notice="",
+        )
+        defaults = dict(
+            state=state,
+            acquisition="pending",
+            interpretation="pending",
+            attempts=0,
+            warnings=[],
+        )
+        defaults.update(fields)
+        return Job.objects.create(
+            capture=capture,
+            collection=collection,
+            url="https://example.com/x",
+            **defaults,
+        )
+
     def test_member_removal_blocks_the_removed_members_pending_jobs(self):
         shared = self._shared()
         Membership.objects.create(collection=shared, user=self.bob)
 
-        def pending_job(user, collection, state, **fields):
-            capture = Capture.objects.create(
-                user=user,
-                client_request_id=uuid.uuid4(),
-                raw_text="https://example.com/x",
-                requested_collection_id=collection.id,
-                collection=collection,
-                request_hash="h",
-                received_at=timezone.now(),
-                notice="",
-            )
-            defaults = dict(
-                state=state,
-                acquisition="pending",
-                interpretation="pending",
-                attempts=0,
-                warnings=[],
-            )
-            defaults.update(fields)
-            return Job.objects.create(
-                capture=capture,
-                collection=collection,
-                url="https://example.com/x",
-                **defaults,
-            )
-
         # Revocation must block bob's queued and retry jobs for this
         # collection in the same request; his personal job and alice's
         # job in the same collection stay queued.
-        queued = pending_job(self.bob, shared, "queued")
-        retrying = pending_job(self.bob, shared, "retry", retry_at=timezone.now())
-        personal = pending_job(self.bob, self.bob_personal, "queued")
-        others = pending_job(self.alice, shared, "queued")
+        queued = self._pending_job(self.bob, shared, "queued")
+        retrying = self._pending_job(self.bob, shared, "retry", retry_at=timezone.now())
+        personal = self._pending_job(self.bob, self.bob_personal, "queued")
+        others = self._pending_job(self.alice, shared, "queued")
 
         response = self.alice_client.delete(
             f"/api/collections/{shared.id}/members/{self.bob.id}"
@@ -1140,6 +1140,34 @@ class CollectionMembershipTests(ApiTestCase):
         for job in (personal, others):
             job.refresh_from_db()
             self.assertEqual(job.state, "queued")
+
+    def test_member_removal_blocks_the_removed_members_config_blocked_jobs(self):
+        shared = self._shared()
+        Membership.objects.create(collection=shared, user=self.bob)
+        waiting = self._pending_job(
+            self.bob, shared, "blocked", error=worker.CONFIG_ERROR)
+
+        response = self.alice_client.delete(
+            f"/api/collections/{shared.id}/members/{self.bob.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        waiting.refresh_from_db()
+        self.assertEqual(waiting.state, "blocked")
+        self.assertEqual(waiting.error, "collection access revoked")
+        self.assertIsNone(waiting.retry_at)
+        self.assertTrue(waiting.needs_attention)
+
+        # The worker claims config-blocked jobs as soon as an LLM exists;
+        # the revoked member's job must not come back, or it would pause
+        # churn through the attempt budget to a misleading "paused" error.
+        cfg = services.get_settings()
+        cfg.llm_base_url = "http://llm.test/v1"
+        cfg.llm_model = "test-model"
+        cfg.save()
+        self.assertEqual([job.id for job in worker._claim_batch(4)], [])
+        waiting.refresh_from_db()
+        self.assertEqual(waiting.state, "blocked")
+        self.assertEqual(waiting.error, "collection access revoked")
 
     def test_personal_collection_has_no_member_management(self):
         response = self.alice_client.post(

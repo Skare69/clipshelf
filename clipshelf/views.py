@@ -20,6 +20,7 @@ from django.conf import settings
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.validators import validate_email
 from django.db import connection, transaction
+from django.db.models import Q
 from django.http import (
     FileResponse,
     Http404,
@@ -41,6 +42,7 @@ from allauth.core.internal import ratelimit
 from clipshelf.api import ApiError, json_body, json_error, vmessage
 from clipshelf import (
     accounts, acquisition, asset_files, follows, imports, interpretation, services,
+    worker,
 )
 from clipshelf.models import (
     Asset,
@@ -446,12 +448,16 @@ def api_collection_member(request, collection_id, user_id):
         membership.delete()
         # Revocation stops the pause churn immediately: the removed member's
         # pending jobs for this collection block in the same request instead
-        # of claim/deferring until the attempt budget runs out.
+        # of claim/deferring until the attempt budget runs out. Jobs already
+        # blocked on the missing-LLM marker block too: the worker claims
+        # exactly that marker once an LLM exists, so leaving them here would
+        # resume the same churn later.
         paused = (
             Job.objects.filter(
+                Q(state__in=("queued", "retry"))
+                | Q(state="blocked", error=worker.CONFIG_ERROR),
                 capture__user_id=user_id,
                 collection=collection,
-                state__in=("queued", "retry"),
             )
             .select_for_update()
         )
