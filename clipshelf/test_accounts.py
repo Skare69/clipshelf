@@ -270,6 +270,29 @@ class InvitationFlowTests(AccountTestCase):
             ).exists()
         )
 
+    def test_mixed_case_registered_email_blocks_invitation(self):
+        # Mailbox comparison is case-insensitive everywhere else (invite
+        # redemption, _email_held, create_admin). Rows written by a path
+        # that bypasses User.save() keep their original case — the CI
+        # unique constraint allows a lone mixed-case row — so the
+        # duplicate check must not compare exactly.
+        squatter = make_user("Admin@X.com")
+        get_user_model().objects.filter(pk=squatter.pk).update(
+            email="Admin@X.com"
+        )
+        EmailAddress.objects.filter(user=squatter).update(email="Admin@X.com")
+        self.client.force_login(self.admin)
+
+        response = self.admin_post(
+            "/api/admin/invitations", {"email": "admin@x.com"}, reauth=True
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(
+            response.json(), {"detail": "That email is already registered."}
+        )
+        self.assertEqual(Invitation.objects.count(), 0)
+
     def test_api_user_denies_unverified_and_allows_verified(self):
         token, _ = make_invitation("verify@clipshelf.test", self.admin)
         self.client.get(f"/invite/{token}")

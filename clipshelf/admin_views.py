@@ -223,7 +223,10 @@ def invitations(request, user):
         validate_email(email)
     except ValidationError:
         raise ApiError(400, detail="A valid email address is required.")
-    if _USER.objects.filter(email=email).exists():
+    # Signup, the setup wizard and allauth all treat mailbox names as
+    # case-insensitive; an exact match here would let an admin mint an
+    # invitation for an email that already belongs to another account.
+    if _USER.objects.filter(email__iexact=email).exists():
         raise ApiError(400, detail="That email is already registered.")
     now = timezone.now()
     with transaction.atomic():
