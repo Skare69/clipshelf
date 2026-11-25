@@ -24,12 +24,13 @@
 - Besides the sources you capture and the services you configure, the server
   makes these third-party requests. For each capture, interpretation fetches
   up to 20 github.com or gist.github.com URLs that occur in the page's
-  material, to re-verify links before the model answers; only a capture
+  material, to re-verify links after the first model call returns; an
+  unreachable model endpoint costs no fetches. Only a capture
   that screening flags at the action level (steer at or above 0.70) skips
   these fetches, and a lower review-level flag does not. The optional
   release check, enabled with `CLIPSHELF_UPDATE_CHECK=1`, asks api.github.com
-  for the latest release
-  when the version is numeric; a dev or prerelease build never asks. A good
+  for the latest release when the version is numeric; a dev or prerelease
+  build never asks. A good
   answer stops new requests for one hour; a failed check retries after 60
   seconds, so continued failures can ask several times in one hour. Each
   request shows the server IP and the time of the check to GitHub.

@@ -63,13 +63,14 @@ The container runs both roles from one image: `Dockerfile` `ENTRYPOINT deploy/en
    Mistral, xAI, Z.AI, Ollama, llama.cpp, LM Studio, vLLM, or anything else you type —
    and the model names are fetched from that endpoint rather than guessed.
 
-   Before the model call, the worker re-verifies the github.com and
-   gist.github.com URLs that occur in the acquired material: `_verify_urls`
-   (`clipshelf/interpretation.py`) fetches at most 20 of them, 64 KiB each,
-   and only the material selects and orders them — model output never
-   triggers a fetch. Only screening flags at or above the action threshold
-   (`judgment.ACTION_STEER`, 0.70) skip these fetches; a lower review-level
-   flag does not. After the model answers, `_warn_unverified_urls` adds an
+   The fetch pass starts after the first model call returns: the worker
+   re-verifies the github.com and gist.github.com URLs that occur in the
+   acquired material — `_verify_urls` (`clipshelf/interpretation.py`) fetches
+   at most 20 of them, 64 KiB each, and only the material selects and orders
+   them; model output never triggers a fetch, and an unreachable model
+   endpoint costs no fetches. Only screening flags at or above the action
+   threshold (`judgment.ACTION_STEER`, 0.70) skip these fetches; a lower
+   review-level flag does not. After the model answers, `_warn_unverified_urls` adds an
    "unverified" warning to every emitted link whose fetch failed, so a failed
    check warns instead of blocking; more than 20 matches add a
    "N URLs not re-verified" warning.
@@ -152,7 +153,7 @@ sequenceDiagram
 - **Services** — `clipshelf/services.py` `accept_capture`: validates text and URLs, resolves the destination collection, writes `Capture` plus one `Job` per URL atomically
 - **Worker** — `clipshelf/worker.py` `_process_job` → `_acquire_phase` → `_interpret_phase`
 - **Acq** — `clipshelf/acquisition.py` `acquire`; fetchers write into `staging/job-<id>`, then `clipshelf/asset_files.py` `publish` moves finished files to `assets/`
-- **Model** — `clipshelf/interpretation.py` `interpret` and `post`; the payload is untrusted material as JSON plus images, the answer is one validated findings dict (`_validated`; `_verify_urls` fetches material GitHub URLs before the model call, `_warn_unverified_urls` maps fetch failures to warnings after it)
+- **Model** — `clipshelf/interpretation.py` `interpret` and `post`; the payload is untrusted material as JSON plus images, the answer is one validated findings dict (`_validated`; `_verify_urls` fetches material GitHub URLs once, after the first model call returns, `_warn_unverified_urls` maps fetch failures to warnings after it)
 - **Services (publish)** — `clipshelf/services.py` `store_findings`: screening gate, tombstone check, then `clipshelf/publication.py` `contribute_link` and `publish_prompt`; job ends `done`
 - **Browser** — `clipshelf/views.py` `api_entries`, shell view `views.shell`
 
