@@ -2482,7 +2482,7 @@ def test_verify_urls_material_order():
     print("verify urls material order ok")
 
 
-def test_interpret_valid_reply_fetches_before_model():
+def test_interpret_valid_reply_fetches_after_first_model():
     source = {"url": "https://example.com/page", "title": "", "desc": "",
               "text": "https://github.com/o/r/releases/download/v1/first.zip "
                       "https://github.com/o/r/releases/download/v1/second.zip "
@@ -2510,11 +2510,13 @@ def test_interpret_valid_reply_fetches_before_model():
          mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
         findings = interp.interpret(source, {"base_url": "http://h/v1", "model": "m"}, [])
     assert fetched == expected, fetched
-    assert events == [("fetch", url) for url in expected] + [("post", None)], events
+    # one post returns, then the material's fetch set runs: the reply's
+    # reordered links never steer the fetch set or order (CLIP-138)
+    assert events == [("post", None)] + [("fetch", url) for url in expected], events
     assert findings["links"] == [expected[2], expected[0]], findings
 
 
-def test_interpret_malformed_replies_fetch_before_model():
+def test_interpret_malformed_replies_fetch_after_first_model():
     source = {"url": "https://example.com/page", "title": "", "desc": "",
               "text": "https://github.com/o/r/releases/download/v1/first.zip "
                       "https://github.com/o/r/releases/download/v1/second.zip "
@@ -2547,9 +2549,40 @@ def test_interpret_malformed_replies_fetch_before_model():
         else:
             raise AssertionError("two malformed replies were accepted")
     assert len(calls) == 2, calls
+    # a malformed first reply still triggers the one fetch pass, exactly
+    # once for both attempts: the fetch set does not depend on the reply
     assert fetched == expected, fetched
-    assert events == ([("fetch", url) for url in expected]
-                      + [("post", None), ("post", None)]), events
+    assert events == ([("post", None)] + [("fetch", url) for url in expected]
+                      + [("post", None)]), events
+
+
+def test_interpret_dead_endpoint_costs_no_fetches():
+    """CLIP-146: when the model endpoint is unreachable, url verification
+    fetches nothing; the fetch cost waits for a reply (valid or not)."""
+    source = {"url": "https://example.com/page", "title": "", "desc": "",
+              "text": "https://github.com/o/r/releases/download/v1/first.zip "
+                      "https://github.com/o/r/releases/download/v1/second.zip",
+              "links": [], "assets": [], "metadata": {}}
+    fetched = []
+
+    def fake_fetch(url, **kwargs):
+        fetched.append(url)
+        raise net.NetworkError("down")
+
+    def dead_post(base, key, payload, timeout):
+        raise interp.InterpretationError("endpoint unreachable: connection refused")
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=dead_post), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        try:
+            interp.interpret(source, {"base_url": "http://h/v1", "model": "m"}, [])
+        except interp.InterpretationError:
+            pass
+        else:
+            raise AssertionError("a dead endpoint was tolerated")
+    assert fetched == [], fetched
+    print("dead endpoint costs no fetches ok")
 
 
 def test_interpret_material_url_case():
@@ -3049,8 +3082,9 @@ def test():
     test_verify_urls_policy()
     test_links_bound_to_material()
     test_verify_urls_material_order()
-    test_interpret_valid_reply_fetches_before_model()
-    test_interpret_malformed_replies_fetch_before_model()
+    test_interpret_valid_reply_fetches_after_first_model()
+    test_interpret_malformed_replies_fetch_after_first_model()
+    test_interpret_dead_endpoint_costs_no_fetches()
     test_interpret_material_url_case()
     test_interpret_pipeline_contract()
     test_interpret_screening_thresholds()

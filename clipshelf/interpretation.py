@@ -518,10 +518,11 @@ def _url_form(url):
 
 
 def _verify_urls(state, warnings):
-    """Fetch material URLs once before model output can affect public counters.
+    """Fetch material URLs once; model output never affects public counters.
 
-    Material alone selects and orders fetches. Bare slugs name no host.
-    Return failed URL forms for later local warnings.
+    Runs after the first model call returns, so an unreachable endpoint
+    costs no fetches. Material alone selects and orders fetches. Bare slugs
+    name no host. Return failed URL forms for later local warnings.
     """
     urls, seen = [], set()
     for m in _GITHUB_URL_RE.finditer(_material_blob(state)):
@@ -594,11 +595,8 @@ def interpret(source, config, categories, screening_key=None):
     elif screened and steer >= judgment.REVIEW_STEER:
         warnings.append("screening: suspicious content flagged; proceeding")
 
-    failures = set()
-    if not (screened and steer >= judgment.ACTION_STEER):
-        failures = _verify_urls(state, warnings)
-
     reason = None
+    failures = None
     for attempt in range(2):  # exactly one malformed-output retry
         if reason:
             messages = messages + [{"role": "user",
@@ -606,6 +604,12 @@ def interpret(source, config, categories, screening_key=None):
         response = post(base, key, {"model": model, "messages": messages,
                                     "max_tokens": OUTPUT_TOKENS_MAX,
                                     "temperature": 0.2}, LLM_TIMEOUT)
+        if failures is None:
+            # CLIP-146: the one fetch pass starts after the first post()
+            # returns, so an unreachable endpoint costs no fetches; the
+            # fetch set still comes from the material alone, never the reply.
+            failures = (set() if screened and steer >= judgment.ACTION_STEER
+                        else _verify_urls(state, warnings))
         content = _content(response, key)
         try:
             findings = _validated(_parse_json_content(content), source["url"],
