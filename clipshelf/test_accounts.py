@@ -5,8 +5,10 @@ Invitation replay, native token login and session revocation, admin boundary
 """
 
 import json
+import random
 import re
 import secrets
+import time
 from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
@@ -314,6 +316,237 @@ class InvitationFlowTests(AccountTestCase):
             f"{reverse('account_signup')}?email=lost-link%40clipshelf.test",
             fetch_redirect_response=False,
         )
+
+    def test_unverified_secondary_email_does_not_block_invitation_signup(self):
+        for active in (True, False):
+            with self.subTest(active=active):
+                state = "active" if active else "inactive"
+                email = f"invitee-{state}@clipshelf.test"
+                squatter = make_user(f"squatter-{state}@clipshelf.test")
+                EmailAddress.objects.create(
+                    user=squatter, email=f"unrelated-{state}@clipshelf.test"
+                )
+                retained = list(
+                    EmailAddress.objects.filter(user=squatter).values_list(
+                        "pk", "email", "primary", "verified"
+                    )
+                )
+                squatter_client = Client()
+                squatter_client.force_login(squatter)
+                # Reauthentication resumes the parked email-add request.
+                response = squatter_client.post(
+                    reverse("account_email"),
+                    data={"action_add": "", "email": email},
+                )
+                self.assertEqual(response.status_code, 302)
+                response = squatter_client.post(
+                    response.url, data={"password": PASSWORD}
+                )
+                self.assertEqual(response.status_code, 302)
+                claim = EmailAddress.objects.get(user=squatter, email=email)
+                self.assertFalse(claim.verified)
+                self.assertFalse(claim.primary)
+                squatter.is_active = active
+                squatter.save(update_fields=["is_active"])
+                token, invitation = make_invitation(email, self.admin)
+                invitation.email = email.swapcase()
+                invitation.save(update_fields=["email"])
+                client = Client()
+                client.get(f"/invite/{token}")
+                mail.outbox.clear()
+
+                response = client.post(
+                    reverse("account_signup"),
+                    data={
+                        "email": email.title(),
+                        "password1": PASSWORD,
+                        "password2": PASSWORD,
+                    },
+                )
+
+                self.assertEqual(response.status_code, 302)
+                invitee = get_user_model().objects.get(email=email)
+                invitation.refresh_from_db()
+                self.assertEqual(invitation.used_by, invitee)
+                self.assertIsNotNone(invitation.used_at)
+                self.assertNotIn(SESSION_INVITATION_KEY, client.session)
+                self.assertEqual(
+                    list(
+                        EmailAddress.objects.filter(email__iexact=email).values_list(
+                            "user_id", "verified", "primary"
+                        )
+                    ),
+                    [(invitee.pk, False, True)],
+                )
+                self.assertEqual(
+                    list(
+                        EmailAddress.objects.filter(user=squatter).values_list(
+                            "pk", "email", "primary", "verified"
+                        )
+                    ),
+                    retained,
+                )
+                client.force_login(invitee)
+                self.assertEqual(client.get("/probe").status_code, 401)
+                before = len(mail.outbox)
+                # The earlier email-add send consumes the 180-second mailbox limit.
+                after_cooldown = time.time() + 181
+                login_client = Client()
+                with patch(
+                    "allauth.core.internal.ratelimit.time", wraps=time
+                ) as clock:
+                    clock.time.return_value = after_cooldown
+                    response = login_client.post(
+                        reverse("account_login"),
+                        data={"login": email, "password": PASSWORD},
+                    )
+                self.assertRedirects(
+                    response,
+                    reverse("account_email_verification_sent"),
+                    fetch_redirect_response=False,
+                )
+                self.assertNotIn("_auth_user_id", login_client.session)
+                self.assertTrue(
+                    any(
+                        message.to == [email] and "confirm" in message.subject.lower()
+                        for message in mail.outbox[before:]
+                    )
+                )
+                self.assertFalse(
+                    any(squatter.email in message.to for message in mail.outbox)
+                )
+
+    def test_protected_email_claims_still_block_invitation_signup(self):
+        for protection in ("verified", "primary", "user_email"):
+            with self.subTest(protection=protection):
+                email = f"protected-{protection}@clipshelf.test"
+                holder = make_user(f"holder-{protection}@clipshelf.test")
+                if protection == "primary":
+                    EmailAddress.objects.filter(user=holder).update(primary=False)
+                if protection == "user_email":
+                    holder.email = email
+                    holder.save(update_fields=["email"])
+                claim = EmailAddress.objects.create(
+                    user=holder,
+                    email=email,
+                    primary=protection == "primary",
+                    verified=protection == "verified",
+                )
+                token, invitation = make_invitation(email, self.admin)
+                client = Client()
+                client.get(f"/invite/{token}")
+                before = get_user_model().objects.count()
+
+                client.post(
+                    reverse("account_signup"),
+                    data={
+                        "email": email.swapcase(),
+                        "password1": PASSWORD,
+                        "password2": PASSWORD,
+                    },
+                )
+
+                self.assertEqual(get_user_model().objects.count(), before)
+                invitation.refresh_from_db()
+                self.assertIsNone(invitation.used_by)
+                self.assertIsNone(invitation.used_at)
+                self.assertTrue(EmailAddress.objects.filter(pk=claim.pk).exists())
+
+    def test_failed_invitation_consumption_preserves_secondary_claim(self):
+        holder = make_user("stale-holder@clipshelf.test")
+        for failure in ("expired", "used", "invalid_token"):
+            with self.subTest(failure=failure):
+                email = f"stale-{failure}@clipshelf.test"
+                claim = EmailAddress.objects.create(user=holder, email=email)
+                token, invitation = make_invitation(email, self.admin)
+                request = RequestFactory().post(reverse("account_signup"))
+                request.user = AnonymousUser()
+                request.session = {SESSION_INVITATION_KEY: token}
+                form = accounts.InviteSignupForm(
+                    data={
+                        "email": email,
+                        "password1": PASSWORD,
+                        "password2": PASSWORD,
+                    }
+                )
+                with accounts.allauth_context.request_context(request):
+                    self.assertTrue(form.is_valid(), form.errors)
+                    self.assertFalse(form.account_already_exists)
+                    # Invalidate the invitation after validation but before save.
+                    if failure == "expired":
+                        invitation.expires_at = timezone.now() - timedelta(seconds=1)
+                        invitation.save(update_fields=["expires_at"])
+                    elif failure == "used":
+                        invitation.used_by = self.admin
+                        invitation.used_at = timezone.now()
+                        invitation.save(update_fields=["used_by", "used_at"])
+                    else:
+                        request.session[SESSION_INVITATION_KEY] = "invalid-token"
+                    before = get_user_model().objects.count()
+                    mail.outbox.clear()
+                    with self.assertRaises(ValidationError):
+                        form.save(request)
+
+                self.assertEqual(get_user_model().objects.count(), before)
+                self.assertFalse(get_user_model().objects.filter(email=email).exists())
+                claim.refresh_from_db()
+                self.assertEqual(claim.user, holder)
+                self.assertFalse(claim.verified)
+                self.assertFalse(claim.primary)
+                self.assertEqual(mail.outbox, [])
+
+    def test_invited_email_uniqueness_matches_seeded_policy(self):
+        seed = 137
+        rng = random.Random(seed)
+        for case in range(128):
+            email = f"policy-{case}@clipshelf.test"
+            claim_count = rng.randrange(4)
+            # Each mailbox permits one verified claim and one User.email holder.
+            verified_holder = rng.randrange(-1, claim_count)
+            user_email_holder = rng.randrange(-1, claim_count)
+            claims = [
+                (
+                    index == verified_holder,
+                    rng.choice((False, True)),
+                    index == user_email_holder,
+                    rng.choice((False, True)),
+                )
+                for index in range(claim_count)
+            ]
+            with self.subTest(seed=seed, case=case, claims=claims):
+                for index, (verified, primary, user_email, active) in enumerate(claims):
+                    holder = get_user_model().objects.create(
+                        username=f"policy-{case}-{index}",
+                        email=(
+                            email if user_email
+                            else f"holder-{case}-{index}@clipshelf.test"
+                        ),
+                        is_active=active,
+                    )
+                    EmailAddress.objects.create(
+                        user=holder, email=email, verified=verified, primary=primary,
+                    )
+                token, invitation = make_invitation(email, self.admin)
+                invitation.email = email.swapcase()
+                invitation.save(update_fields=["email"])
+                request = RequestFactory().get(reverse("account_signup"))
+                request.user = AnonymousUser()
+                request.session = {SESSION_INVITATION_KEY: token}
+                form = accounts.InviteSignupForm(
+                    data={
+                        "email": email.title(),
+                        "password1": PASSWORD,
+                        "password2": PASSWORD,
+                    }
+                )
+                with accounts.allauth_context.request_context(request):
+                    self.assertTrue(form.is_valid(), form.errors)
+                blocked = any(
+                    verified or primary or user_email
+                    for verified, primary, user_email, _ in claims
+                )
+                self.assertEqual(form.account_already_exists, blocked)
+                self.assertEqual(form.cleaned_data["email"], email)
 
 
 class NativeTokenTests(AccountTestCase):

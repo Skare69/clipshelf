@@ -82,6 +82,23 @@ def _headless_client(request) -> str | None:
         return None
 
 
+def _squatted_addresses(email: str):
+    """Unverified secondary claims do not prove control of the mailbox."""
+    return EmailAddress.objects.filter(
+        email__iexact=email, verified=False, primary=False
+    )
+
+
+def _email_held(email: str) -> bool:
+    """Check User.email claims and verified or primary address rows."""
+    return (
+        get_user_model().objects.filter(email__iexact=email).exists()
+        or EmailAddress.objects.filter(email__iexact=email)
+        .exclude(verified=False, primary=False)
+        .exists()
+    )
+
+
 class InviteSignupForm(SignupForm):
     """Signup form enforcing the exact invited mailbox at form level.
 
@@ -90,17 +107,31 @@ class InviteSignupForm(SignupForm):
     instead of a late failure.
     """
 
-    def clean_email(self):
-        email = super().clean_email()
+    def _invitation_matches(self, email):
+        """Return None for an absent or authenticated request.
+
+        Otherwise, match the pending invitation to the address.
+        """
         # allauth does not hand the request to signup forms; use its own
         # request context so the mismatch is a form error, not a late 500.
         request = getattr(self, "request", None) or allauth_context.request
-        if request is not None and not request.user.is_authenticated:
-            invitation = _pending_invitation(request)
-            if invitation is None or invitation.email.lower() != email.lower():
-                raise ValidationError(
-                    str(get_adapter().error_messages["invitation"])
-                )
+        if request is None or request.user.is_authenticated:
+            return None
+        invitation = _pending_invitation(request)
+        return invitation is not None and invitation.email.lower() == email.lower()
+
+    def validate_unique_email(self, value):
+        # Another user's unverified secondary address must not block the
+        # invitee: allauth would answer account_already_exists and never
+        # create the account. save_user removes those claims.
+        if self._invitation_matches(value) and not _email_held(value):
+            return value
+        return super().validate_unique_email(value)
+
+    def clean_email(self):
+        email = super().clean_email()
+        if self._invitation_matches(email) is False:
+            raise ValidationError(str(get_adapter().error_messages["invitation"]))
         return email
 
 
@@ -338,6 +369,8 @@ class AccountAdapter(DefaultAccountAdapter):
                 # Lost a redemption race or lost the session stash: fail the
                 # signup atomically, leaving no account behind.
                 raise self.validation_error("invitation")
+            # Remove only unverified secondary claims after invitation consumption.
+            _squatted_addresses(email).exclude(user=saved).delete()
         request.session.pop(SESSION_INVITATION_KEY, None)
         return saved
 
