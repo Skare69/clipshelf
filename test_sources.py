@@ -2394,6 +2394,37 @@ def test_verify_urls_policy():
     print("verify urls ok")
 
 
+def test_verify_urls_candidate_dedup():
+    """Fetch candidates dedup on the stored canonical form (norm): markdown
+    emphasis and link closers never become fetches, and case, fragment or
+    tracking variants of one repo spend a single slot (CLIP-151)."""
+    fetched = []
+
+    def failing_fetch(url, **k):
+        fetched.append(url)
+        raise net.NetworkError("down")
+
+    real_fetch = net.fetch_public
+    net.fetch_public = failing_fetch
+    try:
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": "see **https://github.com/o/r** and "
+                              "[https://github.com/o/r] https://github.com/O/R "
+                              "https://github.com/o/r#readme "
+                              "https://github.com/o/r?utm_source=x",
+                 "links": []}
+        findings = {"repos": [], "links": [], "warnings": []}
+        warnings = []
+        failures = interp._verify_urls(state, warnings)
+        interp._warn_unverified_urls(findings, failures)
+        assert fetched == ["https://github.com/o/r"], fetched
+        assert warnings == [], warnings
+        assert findings["warnings"] == [], findings["warnings"]
+    finally:
+        net.fetch_public = real_fetch
+    print("verify urls candidate dedup ok")
+
+
 def test_links_bound_to_material():
     """Emitted URLs are stored only when they occur in the material; an
     injected off-material link is dropped, and stored links are never
@@ -3143,6 +3174,7 @@ def test():
     test_parse_json_content_forms()
     test_validated_findings_caps()
     test_verify_urls_policy()
+    test_verify_urls_candidate_dedup()
     test_links_bound_to_material()
     test_verify_urls_material_order()
     test_verify_urls_fetches_github_hosts_only()

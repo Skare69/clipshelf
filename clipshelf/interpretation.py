@@ -532,19 +532,23 @@ def _verify_urls(state, warnings):
 
     Runs after the first model call returns, so an unreachable endpoint
     costs no fetches. Material alone selects and orders fetches. Bare slugs
-    name no host. Return failed URL forms for later local warnings.
+    name no host. Candidates dedup on the stored canonical form (norm), so
+    markdown closers and case, fragment or tracking variants spend one slot.
+    Return failed URL forms for later local warnings.
     """
     urls, seen = [], set()
     for m in _GITHUB_URL_RE.finditer(_material_blob(state)):
-        form = m.group(1).rstrip(".:!?")
+        form = m.group(1).rstrip(".:!?*_]")
         scheme = "http" if form.casefold().startswith("http://") else "https"
         bare = _url_form(form)
         # Allowlist the final host: the fetch target is github.com or nothing.
-        if (bare.partition("/")[0] not in _FETCH_HOSTS
-                or not bare or bare in seen):
+        if not bare or bare.partition("/")[0] not in _FETCH_HOSTS:
             continue
-        seen.add(bare)
-        urls.append(f"{scheme}://{bare}")
+        candidate = f"{scheme}://{bare}"
+        key = norm(candidate) or candidate
+        if key not in seen:
+            seen.add(key)
+            urls.append(candidate)
     failures = set()
     for url in urls[:VERIFY_URLS_MAX]:
         try:
