@@ -1239,6 +1239,21 @@ def test_verify_urls_fetches_github_hosts_only():
     assert not failures
 
 
+def test_verify_urls_splits_on_unicode_space():
+    """Unicode whitespace still ends a verify candidate: two urls separated
+    by a non-breaking space each get their own verification, never one
+    merged candidate that drops the second url."""
+    fetched = []
+    state = {"url": "", "title": "", "description": "",
+             "page_text": "https://github.com/o/r\u00a0https://github.com/p/q",
+             "links": []}
+    with mock.patch.object(net, "fetch_public",
+                           side_effect=lambda url, **k: fetched.append(url)):
+        failures = interp._verify_urls(state, [])
+    assert fetched == ["https://github.com/o/r", "https://github.com/p/q"], fetched
+    assert not failures
+
+
 def test_screening_warning_projection():
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "clipshelf.project.settings")
     import django
@@ -3130,6 +3145,8 @@ def test():
     test_verify_urls_policy()
     test_links_bound_to_material()
     test_verify_urls_material_order()
+    test_verify_urls_fetches_github_hosts_only()
+    test_verify_urls_splits_on_unicode_space()
     test_interpret_valid_reply_fetches_after_first_model()
     test_interpret_malformed_replies_fetch_after_first_model()
     test_interpret_dead_endpoint_costs_no_fetches()

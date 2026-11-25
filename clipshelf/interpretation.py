@@ -74,12 +74,13 @@ _INVISIBLE_CHARS = frozenset(
 VERIFY_URLS_MAX, VERIFY_URL_BYTES_MAX = 20, 64 << 10
 # Host-qualified github urls in material text: the only fetch candidates.
 # The lookbehind rejects lookalike hosts (notgithub.com, sub.github.com);
-# a bare owner/name slug names no host and is never fetched. re.ASCII pins
-# word characters and case folding to ASCII, so non-ASCII lookalikes (the
-# dotless ı in "gıthub.com") never match.
+# a bare owner/name slug names no host and is never fetched. The scoped
+# ASCII flag pins the scheme and host match to ASCII, so non-ASCII
+# lookalikes (the dotless ı in "gıthub.com") never match; the path class
+# keeps unicode \s, so unicode spaces (NBSP) still end a candidate.
 _GITHUB_URL_RE = re.compile(
-    r"(?<![\w.])((?:https?://)?(?:www\.)?(?:gist\.)?github\.com/"
-    r"[^\s\"'<>(){}`;,]+)", re.IGNORECASE | re.ASCII)
+    r"(?<![\w.])((?a:(?:https?://)?(?:www\.)?(?:gist\.)?github\.com)/"
+    r"[^\s\"'<>(){}`;,]+)", re.IGNORECASE)
 # The only hosts a material-derived fetch may target, after www. stripping.
 _FETCH_HOSTS = frozenset(("github.com", "gist.github.com"))
 # A leading scheme only: a scheme separator deeper in a match (the path in
