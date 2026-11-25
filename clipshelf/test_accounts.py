@@ -518,6 +518,43 @@ class InvitationFlowTests(AccountTestCase):
                 self.assertFalse(claim.primary)
                 self.assertEqual(mail.outbox, [])
 
+    def test_confirmed_competing_claim_between_validation_and_save_rolls_back_signup(self):
+        holder = make_user("race-holder@clipshelf.test")
+        email = "race-invitee@clipshelf.test"
+        claim = EmailAddress.objects.create(user=holder, email=email)
+        token, invitation = make_invitation(email, self.admin)
+        request = RequestFactory().post(reverse("account_signup"))
+        request.user = AnonymousUser()
+        request.session = {SESSION_INVITATION_KEY: token}
+        form = accounts.InviteSignupForm(
+            data={
+                "email": email,
+                "password1": PASSWORD,
+                "password2": PASSWORD,
+            }
+        )
+        with accounts.allauth_context.request_context(request):
+            self.assertTrue(form.is_valid(), form.errors)
+            self.assertFalse(form.account_already_exists)
+            # The holder confirms the mailbox between validation and save of
+            # the invitee's request.
+            claim.verified = True
+            claim.save(update_fields=["verified"])
+            before = get_user_model().objects.count()
+            mail.outbox.clear()
+            with self.assertRaises(ValidationError):
+                form.save(request)
+
+        self.assertEqual(get_user_model().objects.count(), before)
+        invitation.refresh_from_db()
+        self.assertIsNone(invitation.used_by)
+        self.assertIsNone(invitation.used_at)
+        claim.refresh_from_db()
+        self.assertEqual(claim.user, holder)
+        self.assertTrue(claim.verified)
+        self.assertFalse(claim.primary)
+        self.assertEqual(mail.outbox, [])
+
     def test_invited_email_uniqueness_matches_seeded_policy(self):
         seed = 137
         rng = random.Random(seed)

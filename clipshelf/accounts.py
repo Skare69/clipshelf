@@ -89,14 +89,16 @@ def _squatted_addresses(email: str):
     )
 
 
-def _email_held(email: str) -> bool:
+def _email_held(email: str, *, except_user=None) -> bool:
     """Check User.email claims and verified or primary address rows."""
-    return (
-        get_user_model().objects.filter(email__iexact=email).exists()
-        or EmailAddress.objects.filter(email__iexact=email)
-        .exclude(verified=False, primary=False)
-        .exists()
+    users = get_user_model().objects.filter(email__iexact=email)
+    addresses = EmailAddress.objects.filter(email__iexact=email).exclude(
+        verified=False, primary=False
     )
+    if except_user is not None:
+        users = users.exclude(pk=except_user.pk)
+        addresses = addresses.exclude(user=except_user)
+    return users.exists() or addresses.exists()
 
 
 class InviteSignupForm(SignupForm):
@@ -371,6 +373,11 @@ class AccountAdapter(DefaultAccountAdapter):
                 raise self.validation_error("invitation")
             # Remove only unverified secondary claims after invitation consumption.
             _squatted_addresses(email).exclude(user=saved).delete()
+            # Form validation and this save are separate operations: another
+            # account can claim the mailbox in between and verify it. The
+            # IMMEDIATE transaction makes this re-check final.
+            if _email_held(email, except_user=saved):
+                raise self.validation_error("invitation")
         request.session.pop(SESSION_INVITATION_KEY, None)
         return saved
 
