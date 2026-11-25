@@ -2,6 +2,10 @@
 
 - Invitation-only: an admin issues a single-use link; the recipient picks the
   password and verifies the mailbox.
+- A successful invited signup deletes other accounts' unverified secondary
+  claims on the invited address: address rows that are neither verified nor
+  primary. The other account gets no notice, because an unverified claim
+  proves no control of the mailbox.
 - Personal collections are private and non-transferable. Shared collections have
   owners and members; members remove only their own contributions. Membership is
   granted by owner invitation: the owner sends an invite by email and the invitee
@@ -17,9 +21,13 @@
   content, memberships and ownership.
 - Tailscale is transport only. LAN and remote requests get identical checks, and
   forwarded/identity headers never authenticate anyone.
-- The server makes no third-party request by default. The optional release
-  check, enabled with `CLIPSHELF_UPDATE_CHECK=1`, asks api.github.com for the
-  latest release when the version is numeric; a dev or prerelease build never
-  asks. A good answer stops new requests for one hour; a failed check retries
-  after 60 seconds, so continued failures can ask several times in one hour.
-  Each request shows the server IP and the time of the check to GitHub.
+- Besides the sources you capture and the services you configure, the server
+  makes these third-party requests. For each capture, interpretation fetches
+  up to 20 github.com or gist.github.com URLs that occur in the page's
+  material, to re-verify links before the model answers; a capture that
+  screening flags skips these fetches. The optional release check, enabled
+  with `CLIPSHELF_UPDATE_CHECK=1`, asks api.github.com for the latest release
+  when the version is numeric; a dev or prerelease build never asks. A good
+  answer stops new requests for one hour; a failed check retries after 60
+  seconds, so continued failures can ask several times in one hour. Each
+  request shows the server IP and the time of the check to GitHub.

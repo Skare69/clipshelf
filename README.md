@@ -17,7 +17,7 @@
   <a href="https://github.com/ottr-ai/ottr"><img src="https://raw.githubusercontent.com/ottr-ai/ottr/main/.github/assets/built-with-ottr.png" alt="Built with Ottr"></a>
 </p>
 
-Share a link from your phone and your own server fetches what is actually in the post: TikTok photo carousels slide by slide with their audio, video with its ASR captions, pages as text. A vision model that you host turns that into typed link and prompt entries (a repo is a link) with a summary and a category, not only tags. The Android app queues shares while offline and delivers them when it can. Self-hosted and account-based. A local model needs no third-party service when optional screening is off.
+Share a link from your phone and your own server fetches what is actually in the post: TikTok photo carousels slide by slide with their audio, video with its ASR captions, pages as text. A vision model that you host turns that into typed link and prompt entries (a repo is a link) with a summary and a category, not only tags. The Android app queues shares while offline and delivers them when it can. Self-hosted and account-based. A local model needs no third-party model service when optional screening is off. The worker still re-verifies github.com links that occur in captured pages (see [docs/privacy.md](docs/privacy.md)).
 
 ![clipshelf](screenshot.jpg)
 
@@ -32,9 +32,11 @@ Share a link from your phone and your own server fetches what is actually in the
 - Run one container on the NAS, with the SQLite database and the retained media on one data volume.
 
 Data lives in one directory (`CLIPSHELF_DATA_DIR`): `db.sqlite3` plus `assets/`
-(retained pages, images, video). The worker fetches sources and calls the model
-endpoint you configure. Optional TypeSafe screening also sends capture material
-and findings to its service.
+(retained pages, images, video). The worker fetches sources, calls the model
+endpoint you configure, and re-verifies up to 20 github.com or gist.github.com
+URLs found in each captured page (see [docs/privacy.md](docs/privacy.md)).
+Optional TypeSafe screening also sends capture material and findings to its
+service.
 
 ## Install
 

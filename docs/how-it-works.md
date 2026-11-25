@@ -62,6 +62,16 @@ The container runs both roles from one image: `Dockerfile` `ENTRYPOINT deploy/en
    Pick a provider from the list — OpenAI, Anthropic, Gemini, OpenRouter, Groq,
    Mistral, xAI, Z.AI, Ollama, llama.cpp, LM Studio, vLLM, or anything else you type —
    and the model names are fetched from that endpoint rather than guessed.
+
+   Before the model call, the worker re-verifies the github.com and
+   gist.github.com URLs that occur in the acquired material: `_verify_urls`
+   (`clipshelf/interpretation.py`) fetches at most 20 of them, 64 KiB each,
+   and only the material selects and orders them — model output never
+   triggers a fetch. When screening flags the capture, the worker skips these
+   fetches. After the model answers, `_warn_unverified_urls` adds an
+   "unverified" warning to every emitted link whose fetch failed, so a failed
+   check warns instead of blocking; more than 20 matches add a
+   "N URLs not re-verified" warning.
 4. **Browse** — Library and Inbox per collection, search, categories, source
    viewing, retry. Collections are the access boundary: everyone has a private
    Personal collection, shared collections have explicit members.
@@ -141,7 +151,7 @@ sequenceDiagram
 - **Services** — `clipshelf/services.py` `accept_capture`: validates text and URLs, resolves the destination collection, writes `Capture` plus one `Job` per URL atomically
 - **Worker** — `clipshelf/worker.py` `_process_job` → `_acquire_phase` → `_interpret_phase`
 - **Acq** — `clipshelf/acquisition.py` `acquire`; fetchers write into `staging/job-<id>`, then `clipshelf/asset_files.py` `publish` moves finished files to `assets/`
-- **Model** — `clipshelf/interpretation.py` `interpret` and `post`; the payload is untrusted material as JSON plus images, the answer is one validated findings dict (`_validated`, `_verify_urls`)
+- **Model** — `clipshelf/interpretation.py` `interpret` and `post`; the payload is untrusted material as JSON plus images, the answer is one validated findings dict (`_validated`; `_verify_urls` fetches material GitHub URLs before the model call, `_warn_unverified_urls` maps fetch failures to warnings after it)
 - **Services (publish)** — `clipshelf/services.py` `store_findings`: screening gate, tombstone check, then `clipshelf/publication.py` `contribute_link` and `publish_prompt`; job ends `done`
 - **Browser** — `clipshelf/views.py` `api_entries`, shell view `views.shell`
 
