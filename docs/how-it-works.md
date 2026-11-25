@@ -67,8 +67,9 @@ The container runs both roles from one image: `Dockerfile` `ENTRYPOINT deploy/en
    gist.github.com URLs that occur in the acquired material: `_verify_urls`
    (`clipshelf/interpretation.py`) fetches at most 20 of them, 64 KiB each,
    and only the material selects and orders them — model output never
-   triggers a fetch. When screening flags the capture, the worker skips these
-   fetches. After the model answers, `_warn_unverified_urls` adds an
+   triggers a fetch. Only screening flags at or above the action threshold
+   (`judgment.ACTION_STEER`, 0.70) skip these fetches; a lower review-level
+   flag does not. After the model answers, `_warn_unverified_urls` adds an
    "unverified" warning to every emitted link whose fetch failed, so a failed
    check warns instead of blocking; more than 20 matches add a
    "N URLs not re-verified" warning.
