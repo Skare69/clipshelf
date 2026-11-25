@@ -1193,8 +1193,8 @@ def test_interpretation_regressions(tmp):
                       "page_text": "see http://github.com/o/large and "
                                    "http://github.com/o/unavailable", "links": []}
     try:
-        failures = interp._verify_urls(material_state, [])
-        interp._warn_unverified_urls(findings, failures)
+        failures, uncapped = interp._verify_urls(material_state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
     finally:
         net.socket = original
     assert fake.connected == [PUBLIC, PUBLIC], fake.connected
@@ -1231,12 +1231,13 @@ def test_verify_urls_fetches_github_hosts_only():
              "links": []}
     with mock.patch.object(net, "fetch_public",
                            side_effect=lambda url, **k: fetched.append(url)):
-        failures = interp._verify_urls(state, [])
+        failures, uncapped = interp._verify_urls(state)
     assert fetched == ["https://github.com/x://attacker.example/b"]
     for url in fetched:
         host = urllib.parse.urlsplit(url).hostname
         assert host in ("github.com", "gist.github.com"), url
     assert not failures
+    assert not uncapped
 
 
 def test_verify_urls_splits_on_unicode_space():
@@ -1249,9 +1250,10 @@ def test_verify_urls_splits_on_unicode_space():
              "links": []}
     with mock.patch.object(net, "fetch_public",
                            side_effect=lambda url, **k: fetched.append(url)):
-        failures = interp._verify_urls(state, [])
+        failures, uncapped = interp._verify_urls(state)
     assert fetched == ["https://github.com/o/r", "https://github.com/p/q"], fetched
     assert not failures
+    assert not uncapped
 
 
 def test_screening_warning_projection():
@@ -2315,9 +2317,10 @@ def test_validated_findings_caps():
 def test_verify_urls_policy():
     """The fetch set and its order come from the material alone: every
     host-qualified github url in the capture is fetched once in material
-    order, capped at 20 with an honest count, whether or not the model
-    emitted it. Emissions never select or order fetches; bare slug mentions
-    fetch nothing; only emitted urls among the fetches get unverified flags."""
+    order, capped at 20, whether or not the model emitted it. Emissions
+    never select or order fetches; bare slug mentions fetch nothing; only
+    emitted urls among the fetches get unverified flags, and only emitted
+    cap-dropped urls get a not-re-verified count."""
     fetched = []
 
     def failing_fetch(url, **k):
@@ -2338,16 +2341,14 @@ def test_verify_urls_policy():
                     "links": ["https://b.example/2", "https://gitlab.com/x/y",
                               "owner/name", "https://github.com/z/repo"],
                     "warnings": []}
-        warnings = []
-        failures = interp._verify_urls(state, warnings)
-        interp._warn_unverified_urls(findings, failures)
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == ["https://gist.github.com/o/g", "https://github.com/z/repo",
                            "https://github.com/extra/repo",
                            "https://github.com/a/repo"], fetched
         assert sorted(findings["warnings"]) == ["unverified: https://gist.github.com/o/g",
                                                 "unverified: https://github.com/a/repo",
                                                 "unverified: https://github.com/z/repo"]
-        assert warnings == [], warnings
 
         # emissions without host-qualified material urls fetch nothing: a
         # bare slug names no host, and the model must not select fetches
@@ -2355,27 +2356,24 @@ def test_verify_urls_policy():
         findings = {"repos": ["https://github.com/o/a", "https://github.com/o/z"],
                     "links": [f"https://h/{i}" for i in range(21)],
                     "warnings": []}
-        warnings = []
-        failures = interp._verify_urls(
+        failures, uncapped = interp._verify_urls(
             {"url": "", "title": "", "description": "",
-             "page_text": "o/z then o/a", "links": []}, warnings)
-        interp._warn_unverified_urls(findings, failures)
+             "page_text": "o/z then o/a", "links": []})
+        interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == [], fetched
         assert findings["warnings"] == [], findings["warnings"]
-        assert warnings == [], warnings
 
-        # the cap counts material-ordered fetch candidates only
+        # the cap counts material-ordered fetch candidates only; with nothing
+        # emitted, no count warning appears (list pages stay quiet)
         fetched.clear()
         state = {"url": "", "title": "", "description": "",
                  "page_text": " ".join(f"https://github.com/o/{i}"
                                        for i in range(21)),
                  "links": []}
         findings = {"repos": [], "links": [], "warnings": []}
-        warnings = []
-        failures = interp._verify_urls(state, warnings)
-        interp._warn_unverified_urls(findings, failures)
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == [f"https://github.com/o/{i}" for i in range(20)], fetched
-        assert warnings == ["1 URLs not re-verified"], warnings
         assert findings["warnings"] == [], findings["warnings"]
 
         # lookalike hosts stay unfetched; the dedup fetches a repeated url once
@@ -2385,9 +2383,8 @@ def test_verify_urls_policy():
                               "https://www.github.com/w/1 and https://www.github.com/w/1",
                  "links": []}
         findings = {"repos": [], "links": [], "warnings": []}
-        warnings = []
-        failures = interp._verify_urls(state, warnings)
-        interp._warn_unverified_urls(findings, failures)
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == ["https://github.com/w/1"], fetched
     finally:
         net.fetch_public = real_fetch
@@ -2414,11 +2411,9 @@ def test_verify_urls_candidate_dedup():
                               "https://github.com/o/r?utm_source=x",
                  "links": []}
         findings = {"repos": [], "links": [], "warnings": []}
-        warnings = []
-        failures = interp._verify_urls(state, warnings)
-        interp._warn_unverified_urls(findings, failures)
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == ["https://github.com/o/r"], fetched
-        assert warnings == [], warnings
         assert findings["warnings"] == [], findings["warnings"]
     finally:
         net.fetch_public = real_fetch
@@ -2444,9 +2439,8 @@ def test_verify_urls_closers_matched():
                  "page_text": "see https://github.com/o/r_ now", "links": []}
         findings = {"repos": ["https://github.com/o/r_"], "links": [],
                     "warnings": []}
-        warnings = []
-        failures = interp._verify_urls(state, warnings)
-        interp._warn_unverified_urls(findings, failures)
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == ["https://github.com/o/r_"], fetched
         assert findings["warnings"] == [
             "unverified: https://github.com/o/r_"], findings["warnings"]
@@ -2459,7 +2453,8 @@ def test_verify_urls_closers_matched():
                               "https://github.com/o/r_",
                  "links": []}
         findings = {"repos": [], "links": [], "warnings": []}
-        interp._verify_urls(state, [])
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == ["https://github.com/o/r/blob/Main/file_",
                            "https://github.com/o/r",
                            "https://github.com/o/r_"], fetched
@@ -2472,13 +2467,182 @@ def test_verify_urls_closers_matched():
                               "and [https://github.com/o/r2]",
                  "links": []}
         findings = {"repos": [], "links": [], "warnings": []}
-        interp._verify_urls(state, [])
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == ["https://github.com/o/r*",
                            "https://github.com/o/r",
                            "https://github.com/o/r2"], fetched
     finally:
         net.fetch_public = real_fetch
     print("verify urls closers matched ok")
+
+
+def test_verify_urls_cap_warns_only_emitted():
+    """Cap-dropped material URLs warn only when the model emitted them, with
+    a correct singular/plural count, the capture's own github url never
+    takes a fetch slot even when the page text repeats it, and a
+    cap-dropped alias of a fetched url warns nothing."""
+    fetched = []
+
+    def failing_fetch(url, **k):
+        fetched.append(url)
+        raise net.NetworkError("down")
+
+    real_fetch = net.fetch_public
+    net.fetch_public = failing_fetch
+    try:
+        # a toggleable recorder: the fixed failing_fetch above always
+        # raises, but the alias cases need a fetch that succeeds
+        raises = {"flag": True}
+
+        def recording_fetch(url, **k):
+            fetched.append(url)
+            if raises["flag"]:
+                raise net.NetworkError("down")
+
+        net.fetch_public = recording_fetch
+        urls = [f"https://github.com/o/{i}" for i in range(25)]
+        # the capture's own url is urls[0]; the page text repeats it, and the
+        # remaining 24 urls stay candidates: 20 fetched, 4 cap-dropped
+        state = {"url": urls[0], "title": "", "description": "",
+                 "page_text": " ".join(urls), "links": []}
+        findings = {"repos": [urls[0]], "links": [], "warnings": []}
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
+        assert fetched == urls[1:21], fetched
+        assert findings["warnings"] == [], findings["warnings"]
+
+        # emitting a cap-dropped url warns once, singular
+        fetched.clear()
+        findings = {"repos": [urls[24]], "links": [], "warnings": []}
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
+        assert fetched == urls[1:21], fetched
+        assert findings["warnings"] == ["1 URL not re-verified"], findings["warnings"]
+
+        # two cap-dropped emissions warn plural
+        fetched.clear()
+        findings = {"repos": [urls[24]], "links": [urls[23]], "warnings": []}
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
+        assert findings["warnings"] == ["2 URLs not re-verified"], findings["warnings"]
+
+        # emitting an in-cap url beside a cap-dropped one flags the fetch
+        # failure but counts only the cap-dropped one
+        fetched.clear()
+        findings = {"repos": [urls[24], urls[5]], "links": [], "warnings": []}
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
+        assert findings["warnings"] == ["unverified: https://github.com/o/5",
+                                        "1 URL not re-verified"], findings["warnings"]
+
+        # a fragment alias beyond the cap of a fetched url warns nothing:
+        # the fetch of the first url already covered it
+        raises["flag"] = False
+        fetched.clear()
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": " ".join(
+                     ["https://github.com/o/r"]
+                     + [f"https://github.com/o/{i}" for i in range(1, 24)]
+                     + ["https://github.com/o/r#readme"]),
+                 "links": []}
+        findings = {"repos": ["https://github.com/o/r"], "links": [], "warnings": []}
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
+        assert fetched[0] == "https://github.com/o/r" and len(fetched) == 20, fetched
+        assert uncapped == {f"github.com/o/{i}" for i in range(20, 24)}, uncapped
+        assert findings["warnings"] == [], findings["warnings"]
+
+        # scheme spelling must not split the identity either: the http fetch
+        # covers the https fragment alias beyond the cap, and the https
+        # emission of the fetched url warns nothing
+        fetched.clear()
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": " ".join(
+                     ["http://github.com/o/r"]
+                     + [f"https://github.com/o/{i}" for i in range(1, 24)]
+                     + ["https://github.com/o/r#readme"]),
+                 "links": []}
+        findings = {"repos": ["https://github.com/o/r"], "links": [], "warnings": []}
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
+        assert fetched[0] == "http://github.com/o/r" and len(fetched) == 20, fetched
+        assert uncapped == {f"github.com/o/{i}" for i in range(20, 24)}, uncapped
+        assert findings["warnings"] == [], findings["warnings"]
+
+        # a www spelling with mixed-case owner/repo beyond the cap still
+        # counts: emitted and dropped identities fold the same way
+        raises["flag"] = True
+        fetched.clear()
+        state = {"url": "", "title": "", "description": "",
+                 "page_text": " ".join(
+                     [f"https://github.com/o/{i}" for i in range(1, 25)]
+                     + ["https://www.github.com/Microsoft/TypeScript"]),
+                 "links": []}
+        findings = {"repos": ["https://www.github.com/Microsoft/TypeScript"],
+                    "links": [], "warnings": []}
+        failures, uncapped = interp._verify_urls(state)
+        interp._warn_unverified_urls(findings, failures, uncapped)
+        assert fetched == [f"https://github.com/o/{i}" for i in range(1, 21)], fetched
+        assert findings["warnings"] == ["1 URL not re-verified"], findings["warnings"]
+    finally:
+        net.fetch_public = real_fetch
+    print("cap warns emitted only ok")
+
+
+def test_verify_urls_skips_capture_url_aliases():
+    """The capture's own url never takes a fetch slot, whatever spelling the
+    page text repeats it in: acquisition's normalized form matches the
+    original case and a trailing slash by canonical identity, while other
+    material urls still fetch."""
+    fetched = []
+
+    def failing_fetch(url, **k):
+        fetched.append(url)
+        raise net.NetworkError("down")
+
+    real_fetch = net.fetch_public
+    net.fetch_public = failing_fetch
+    try:
+        # acquisition stored the lowercased form; the page repeats the
+        # original spelling
+        state = {"url": "https://github.com/microsoft/typescript", "title": "",
+                 "description": "",
+                 "page_text": "see https://github.com/Microsoft/TypeScript "
+                              "and https://github.com/o/other", "links": []}
+        interp._verify_urls(state)
+        assert fetched == ["https://github.com/o/other"], fetched
+
+        # a trailing slash on the capture url matches the bare text form
+        fetched.clear()
+        state = {"url": "https://github.com/o/r/", "title": "", "description": "",
+                 "page_text": "start from https://github.com/o/r here",
+                 "links": []}
+        interp._verify_urls(state)
+        assert fetched == [], fetched
+
+        # a www capture url with mixed-case owner/repo matches its exact
+        # repetition in the page text: www folds before norm, so the
+        # owner/repo case folding applies on both sides
+        fetched.clear()
+        state = {"url": "https://www.github.com/Microsoft/TypeScript",
+                 "title": "", "description": "",
+                 "page_text": "see https://www.github.com/Microsoft/TypeScript "
+                              "and https://github.com/o/other", "links": []}
+        interp._verify_urls(state)
+        assert fetched == ["https://github.com/o/other"], fetched
+
+        # acquisition may retain an http capture after an https redirect:
+        # scheme spelling never splits the identity
+        fetched.clear()
+        state = {"url": "http://github.com/o/r", "title": "", "description": "",
+                 "page_text": "start from https://github.com/o/r here",
+                 "links": []}
+        interp._verify_urls(state)
+        assert fetched == [], fetched
+    finally:
+        net.fetch_public = real_fetch
+    print("capture url aliases skipped ok")
 
 
 def test_links_bound_to_material():
@@ -3232,6 +3396,8 @@ def test():
     test_verify_urls_policy()
     test_verify_urls_candidate_dedup()
     test_verify_urls_closers_matched()
+    test_verify_urls_cap_warns_only_emitted()
+    test_verify_urls_skips_capture_url_aliases()
     test_links_bound_to_material()
     test_verify_urls_material_order()
     test_verify_urls_fetches_github_hosts_only()

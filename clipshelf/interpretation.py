@@ -527,6 +527,20 @@ def _url_form(url):
     return host.casefold().removeprefix("www.") + sep + tail
 
 
+def _url_identity(url):
+    """One alias-folding form for fetch dedup, the capture-url skip and
+    warning matching.
+
+    Folds scheme (acquisition may retain http after an https redirect),
+    www, github owner/repo case, fragment and trailing slash; None when
+    norm rejects the url. Every input runs the same _url_form then norm
+    pipeline, and www comes off before norm so the owner/repo case
+    folding also applies to a www.github.com spelling.
+    """
+    canon = norm(f"https://{_url_form(url)}")
+    return None if canon is None else canon.split("://", 1)[-1]
+
+
 def _strip_markdown_closers(blob, start, form):
     """Strip a markdown closer only when its opener sits right before the
     match: **url**, *url*, [url]. An unmatched trailing * or ] stays, so
@@ -545,16 +559,16 @@ def _strip_markdown_closers(blob, start, form):
     return form
 
 
-def _verify_urls(state, warnings):
-    """Fetch material URLs once; model output never affects public counters.
+def _fetch_candidates(state):
+    """Material-ordered fetch candidate urls.
 
-    Runs after the first model call returns, so an unreachable endpoint
-    costs no fetches. Material alone selects and orders fetches. Bare slugs
-    name no host. Candidates dedup on the stored canonical form (norm), so
-    case, fragment or tracking variants of one repo spend a single slot.
+    The capture's own url is skipped by identity: acquisition fetched it
+    already. Bare slugs name no host. The final host must be allowlisted.
     A markdown closer strips only when its opener sits before the match.
-    Return failed URL forms for later local warnings.
+    Candidates dedup on the alias-folding identity, so case, fragment,
+    tracking, scheme or www variants of one repo spend a single slot.
     """
+    skip = _url_identity(state.get("url") or "")
     urls, seen = [], set()
     blob = _material_blob(state)
     for m in _GITHUB_URL_RE.finditer(blob):
@@ -566,10 +580,45 @@ def _verify_urls(state, warnings):
         if not bare or bare.partition("/")[0] not in _FETCH_HOSTS:
             continue
         candidate = f"{scheme}://{bare}"
-        key = norm(candidate) or candidate
-        if key not in seen:
-            seen.add(key)
-            urls.append(candidate)
+        key = _url_identity(candidate) or candidate
+        if key == skip or key in seen:
+            continue
+        seen.add(key)
+        urls.append(candidate)
+    return urls
+
+
+def _cap_dropped_identities(urls):
+    """Identities of candidates the 20-url cap dropped, fetched aliases
+    excluded: the fetch already covered the alias. Network-free, so a
+    later attempt can rebuild the set from the material scan alone."""
+    fetched = set()
+    for url in urls[:VERIFY_URLS_MAX]:
+        identity = _url_identity(url)
+        if identity is not None:
+            fetched.add(identity)
+    dropped = set()
+    for url in urls[VERIFY_URLS_MAX:]:
+        identity = _url_identity(url)
+        if identity is None or identity not in fetched:
+            dropped.add(identity or _url_form(url))
+    return dropped
+
+
+def _verify_urls(state):
+    """Fetch material URLs once; model output never affects public counters.
+
+    Runs after the first model call returns, so an unreachable endpoint
+    costs no fetches. Material alone selects and orders fetches; the
+    capture's own url is skipped by _url_identity, because acquisition
+    fetched it already. Bare slugs name no host. Candidates dedup on the
+    alias-folding identity, so case, fragment, tracking, scheme or www
+    variants of one repo spend a single slot. A markdown closer strips
+    only when its opener sits before the match. Return (failed URL
+    identities, cap-dropped URL identities) for the local warnings that
+    _warn_unverified_urls maps to emitted URLs.
+    """
+    urls = _fetch_candidates(state)
     failures = set()
     for url in urls[:VERIFY_URLS_MAX]:
         try:
@@ -577,26 +626,35 @@ def _verify_urls(state, warnings):
         except Exception as exc:
             if isinstance(exc, network.TooLarge):
                 continue
-            failures.add(_url_form(url))
-    if len(urls) > VERIFY_URLS_MAX:
-        warnings.append(f"{len(urls) - VERIFY_URLS_MAX} URLs not re-verified")
-    return failures
+            failures.add(_url_identity(url) or _url_form(url))
+    return failures, _cap_dropped_identities(urls)
 
 
-def _warn_unverified_urls(findings, failures):
-    """Map cached fetch failures to emitted URLs without network calls."""
-    # Validation canonicalizes owner/repo segments, but not asset path case.
-    failures = {_url_form(canonical) for form in failures
-                if (canonical := norm(f"https://{form}"))}
+def _warn_unverified_urls(findings, failures, uncapped=()):
+    """Map cached fetch results to emitted URLs without network calls.
+
+    The not-re-verified count covers only emitted URLs that the cap
+    dropped, so a list-page capture with few emissions warns nothing.
+    Both sides match by _url_identity, the same form the fetch and skip
+    sets use.
+    """
+    failures = {i for form in failures if (i := _url_identity(f"https://{form}"))}
+    uncapped = {i for form in uncapped if (i := _url_identity(f"https://{form}"))}
     emitted = {}
     for url in findings["repos"] + findings["links"]:
         if re.match(r"^https?://", url):
-            emitted.setdefault(_url_form(url), url)
+            identity = _url_identity(url)
+            if identity:
+                emitted.setdefault(identity, url)
     for form, url in emitted.items():
         if form in failures:
             flag = f"unverified: {url}"[:300]
             if flag not in findings["warnings"]:
                 findings["warnings"].append(flag)
+    missed = sum(1 for form in emitted if form in uncapped)
+    if missed:
+        findings["warnings"].append(
+            f"{missed} URL{'s' if missed > 1 else ''} not re-verified")
 
 # ------------------------------------------------------------------ API
 
@@ -641,8 +699,10 @@ def interpret(source, config, categories, screening_key=None, url_failures=None,
     elif screened and steer >= judgment.REVIEW_STEER:
         warnings.append("screening: suspicious content flagged; proceeding")
 
+
     reason = None
     failures = None
+    uncapped = set()
     for attempt in range(2):  # exactly one malformed-output retry
         if reason:
             messages = messages + [{"role": "user",
@@ -657,10 +717,14 @@ def interpret(source, config, categories, screening_key=None, url_failures=None,
             if url_failures is not None:
                 # one fetch round per job: reuse the stored failure set
                 failures = set(url_failures)
+                # the cap comes from the material scan alone, so the
+                # dropped identities rebuild network-free and the count
+                # stays honest on this attempt too
+                uncapped = _cap_dropped_identities(_fetch_candidates(state))
             elif screened and steer >= judgment.ACTION_STEER:
                 failures = set()
             else:
-                failures = _verify_urls(state, warnings)
+                failures, uncapped = _verify_urls(state)
                 if record_url_failures is not None:
                     record_url_failures(sorted(failures))
         content = _content(response, key)
@@ -675,7 +739,7 @@ def interpret(source, config, categories, screening_key=None, url_failures=None,
                 warnings.append(
                     "screening: suspicious interpreter-directed content; "
                     "repos and installs withheld")
-            _warn_unverified_urls(findings, failures)
+            _warn_unverified_urls(findings, failures, uncapped)
             # runtime diagnostics (skipped images, dropped categories, ...) are
             # evidence too: keep them beside the model's own warnings
             findings["warnings"] = list(dict.fromkeys(
