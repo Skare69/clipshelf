@@ -2396,13 +2396,15 @@ def test_verify_urls_candidate_dedup():
     emphasis and link closers never become fetches, and case, fragment or
     tracking variants of one repo spend a single slot (CLIP-151)."""
     fetched = []
+    raises = {"flag": True}
 
-    def failing_fetch(url, **k):
+    def recording_fetch(url, **k):
         fetched.append(url)
-        raise net.NetworkError("down")
+        if raises["flag"]:
+            raise net.NetworkError("down")
 
     real_fetch = net.fetch_public
-    net.fetch_public = failing_fetch
+    net.fetch_public = recording_fetch
     try:
         state = {"url": "", "title": "", "description": "",
                  "page_text": "see **https://github.com/o/r** and "
