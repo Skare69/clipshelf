@@ -2571,7 +2571,7 @@ def test_verify_urls_cap_warns_only_emitted():
         assert fetched[0] == "http://github.com/o/r" and len(fetched) == 20, fetched
         assert uncapped == {f"github.com/o/{i}" for i in range(20, 24)}, uncapped
         assert findings["warnings"] == [], findings["warnings"]
-<<<<<<< HEAD
+
 
         # a www spelling with mixed-case owner/repo beyond the cap still
         # counts: emitted and dropped identities fold the same way
@@ -2588,8 +2588,6 @@ def test_verify_urls_cap_warns_only_emitted():
         interp._warn_unverified_urls(findings, failures, uncapped)
         assert fetched == [f"https://github.com/o/{i}" for i in range(1, 21)], fetched
         assert findings["warnings"] == ["1 URL not re-verified"], findings["warnings"]
-=======
->>>>>>> b59eb12 (fix: fold url aliases with one shared identity)
     finally:
         net.fetch_public = real_fetch
     print("cap warns emitted only ok")
@@ -2626,7 +2624,15 @@ def test_verify_urls_skips_capture_url_aliases():
         interp._verify_urls(state)
         assert fetched == [], fetched
 
-<<<<<<< HEAD
+        # a www capture url matches the www-less text form: candidates fold
+        # www, the stored capture url keeps it
+        fetched.clear()
+        state = {"url": "https://www.github.com/o/r", "title": "", "description": "",
+                 "page_text": "start from https://github.com/o/r "
+                              "and https://github.com/o/other", "links": []}
+        interp._verify_urls(state)
+        assert fetched == ["https://github.com/o/other"], fetched
+
         # a www capture url with mixed-case owner/repo matches its exact
         # repetition in the page text: www folds before norm, so the
         # owner/repo case folding applies on both sides
@@ -2634,13 +2640,6 @@ def test_verify_urls_skips_capture_url_aliases():
         state = {"url": "https://www.github.com/Microsoft/TypeScript",
                  "title": "", "description": "",
                  "page_text": "see https://www.github.com/Microsoft/TypeScript "
-=======
-        # a www capture url matches the www-less text form: candidates fold
-        # www, the stored capture url keeps it
-        fetched.clear()
-        state = {"url": "https://www.github.com/o/r", "title": "", "description": "",
-                 "page_text": "start from https://github.com/o/r "
->>>>>>> b59eb12 (fix: fold url aliases with one shared identity)
                               "and https://github.com/o/other", "links": []}
         interp._verify_urls(state)
         assert fetched == ["https://github.com/o/other"], fetched
