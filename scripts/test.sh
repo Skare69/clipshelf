@@ -9,6 +9,11 @@ cd "$(dirname "$0")/.."
 PY=${PY:-python3}
 # Page renders start the GitHub release check; tests never reach the network.
 export CLIPSHELF_UPDATE_CHECK=0
+# CI (ci.yml env) and the agents' Verified block both set CLIPSHELF_DEBUG=1.
+# Export it here too, so the documented local command also works on hosts
+# whose SQLite is below the verified-WAL floor (settings.py raises
+# ImproperlyConfigured there when DEBUG is off).
+export CLIPSHELF_DEBUG=1
 $PY clipshelf.py check
 # --noinput: a leftover test-db.sqlite3 must never hang the run on Django's
 # "delete the test database?" prompt (CLIP-104 merge-turn incident).
