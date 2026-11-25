@@ -420,8 +420,10 @@ def _validated(raw, source_url, categories, warnings):
 
     repos = []
     for text in _clean_list(raw["repos"], REPOS_MAX, 300, "repos"):
-        slug = repo_url(text)          # owner/name or full URL -> canonical URL
-        url = norm(slug) or slug
+        # repo_url returns norm()'s canonical URL, already None for a rejected
+        # entry; re-normalizing that None crashed with AttributeError instead
+        # of reaching this ValueError and its malformed-output retry.
+        url = repo_url(text)
         if not url:
             raise ValueError(f"invalid repository entry: {text[:100]!r}")
         repos.append(url)

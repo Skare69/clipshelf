@@ -2754,6 +2754,33 @@ def test_interpret_retry_reason_bound():
     print("interpret retry reason bound ok")
 
 
+def test_interpret_invalid_repo_retries_once():
+    """A repo entry norm() rejects (ftp://...) is a ValueError that takes the
+    one malformed-output retry, never an AttributeError crash."""
+    bad = json.dumps({"summary": "s", "repos": ["ftp://x"], "prompts": [],
+                      "links": [], "categories": [], "installs": [],
+                      "warnings": []})
+    ok = json.dumps({"summary": "s", "repos": [], "prompts": [], "links": [],
+                     "categories": [], "installs": [], "warnings": []})
+    replies = [bad, ok]
+    calls = []
+
+    def fake_post(base, key, payload, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": replies[len(calls) - 1]}}]}
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=fake_post):
+        findings = interp.interpret({"url": "https://example.com/p", "text": "b",
+                                     "assets": [], "links": [], "metadata": {}},
+                                    {"base_url": "http://h/v1", "model": "m"}, [])
+    assert len(calls) == 2, len(calls)  # exactly one malformed-output retry
+    note = calls[1]["messages"][-1]["content"]
+    assert "invalid repository entry" in note and "ftp://x" in note, note
+    assert findings["repos"] == [], findings
+    print("interpret invalid repo retry ok")
+
+
 def test_interpret_screening_failure_is_reported():
     """A failed screening call becomes a warning; interpretation continues."""
     config = {"base_url": "http://h/v1", "model": "m"}
@@ -3090,6 +3117,7 @@ def test():
     test_interpret_screening_thresholds()
     test_interpret_screening_failure_is_reported()
     test_interpret_retry_reason_bound()
+    test_interpret_invalid_repo_retries_once()
     test_check_connection_contract()
     test_list_models()
     test_list_models_sends_no_body()

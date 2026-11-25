@@ -480,8 +480,8 @@ def prop_public_ip(rng):
 def prop_validated(rng):
     """_validated raises only ValueError, and every kept category label is
     short and visible (no combining-only strings, no blank letters)."""
-    def shape(categories):
-        return {"summary": "s", "repos": [], "links": [],
+    def shape(categories, repos=()):
+        return {"summary": "s", "repos": list(repos), "links": [],
                 "categories": categories, "prompts": [], "installs": [],
                 "warnings": []}
 
@@ -491,12 +491,30 @@ def prop_validated(rng):
         shape(["\ud83d\ude00 cat"]), shape(rand_json(rng, 1)),
         "not a dict", [], None, 5,
         shape(["\u200b", " \u2800 ", "ok"]),
+        # repo entries norm() rejects: each must surface as ValueError (the
+        # malformed-output retry), never as a crash. repo_url() already
+        # returns None for a rejected URL.
+        shape(["ok"], ["ftp://x"]),
+        shape(["ok"], ["https://u:p@github.com/o/r"]),
+        shape(["ok"], ["https://github.com:99999/o/r"]),
+        shape(["ok"], [5, None, ""]),
     ]
     for _ in range(RUNS):
         raw = shape(rand_json(rng, 1))
         if not isinstance(raw["categories"], list):
             raw["categories"] = []
         corpus.append(raw)
+        entries = []
+        for _ in range(rng.randint(0, 3)):
+            if rng.random() < 0.5:
+                entries.append(rng.choice(
+                    ["ftp://x", "o/r", "github.com/O/R",
+                     "https://github.com/o/r/blob/main/x", "",
+                     "https://x.test/p?utm_source=a"]))
+            else:
+                entries.append("".join(rng.choice(":/@.%[]azAZ09-")
+                                       for _ in range(rng.randint(0, 24))))
+        corpus.append(shape(["ok"], entries))
     bad = []
     for raw in corpus:
         try:
