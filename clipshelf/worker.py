@@ -299,13 +299,17 @@ def _interpret_phase(job):
     try:
         findings = interpretation.interpret(
             _material(job), cfg.llm_config(), _categories(job.collection),
-            screening_key=services.screening_key())
+            screening_key=services.screening_key(),
+            url_failures=job.url_failures)
     except interpretation.GuardrailBlocked as exc:
         # deterministic block: no attempts, no retry
         job.mark_blocked(error=str(exc)[:2000],
                          interpretation=models.Job.InterpretationStatus.BLOCKED)
         return
     except (interpretation.ConfigurationError, interpretation.InterpretationError) as exc:
+        failures = getattr(exc, "url_failures", None)
+        if failures is not None:
+            job.url_failures = failures
         _fail(job, exc)
         return
     # store_findings owns the transaction and final job state, including access loss.

@@ -2,6 +2,7 @@
 import base64
 from contextlib import redirect_stdout
 import io
+import json
 import os
 import shutil
 import threading
@@ -134,6 +135,55 @@ class HarvestedLinkLengthTests(WorkerMixin, TransactionTestCase):
         referenced = {asset.path.split("/")[1] for asset in models.Asset.objects.all()}
         self.assertEqual(on_disk, referenced)
         self.assertEqual(models.Asset.objects.count(), 1)
+
+
+class MaterialUrlFetchOncePerJobTests(WorkerMixin, TransactionTestCase):
+    """The material URL fetch round runs once per job: interpretation retries
+    reuse the stored failure set instead of re-fetching (fetch counters are
+    public signals a hostile page must not be able to move)."""
+
+    def test_model_failures_do_not_refetch_material_urls(self):
+        job = self.make_job(
+            url="https://example.com/page",
+            acquisition="complete",
+            source={"url": "https://example.com/page", "title": "t", "desc": "d",
+                    "text": "see https://github.com/owner/one and https://github.com/owner/two",
+                    "links": [], "assets": [], "metadata": {}, "warnings": [],
+                    "acquisition": "complete"})
+        calls, post_calls = [], []
+
+        def fake_fetch(url, **kw):
+            calls.append(url)
+            return {"url": url, "body": b"<html>ok</html>", "content_type": "text/html"}
+
+        def fake_post(base, key, payload, timeout):
+            post_calls.append(payload)
+            # interpret() retries one malformed reply per job attempt (2 post
+            # calls each), so calls 1-4 fail job attempts 1 and 2; attempt 3
+            # gets valid JSON on its first post call.
+            content = ("this is not json" if len(post_calls) <= 4
+                       else json.dumps({"summary": "ok", "repos": [], "prompts": [],
+                                        "links": [], "categories": [], "installs": [],
+                                        "warnings": []}))
+            return {"choices": [{"message": {"content": content}}]}
+
+        # one patch context spans all three attempts, so `calls` counts every
+        # fetch the job ever made
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.network.fetch_public", side_effect=fake_fetch), \
+                mock.patch("clipshelf.interpretation.post", side_effect=fake_post):
+            worker.main(once=True)
+            for _ in range(2):  # attempts 2 and 3: release the backoff, run again
+                models.Job.objects.filter(pk=job.pk).update(
+                    retry_at=timezone.now() - timedelta(seconds=1))
+                worker.main(once=True)
+
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.attempts), ("done", 2))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sorted(calls), ["https://github.com/owner/one",
+                                         "https://github.com/owner/two"])
+        self.assertEqual(len(post_calls), 5)
 
 
 class JobTransitionTests(WorkerMixin, TestCase):

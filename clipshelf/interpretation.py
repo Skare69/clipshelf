@@ -600,8 +600,12 @@ def _warn_unverified_urls(findings, failures):
 
 # ------------------------------------------------------------------ API
 
-def interpret(source, config, categories, screening_key=None):
-    """Interpret one acquired source into the single findings dict."""
+def interpret(source, config, categories, screening_key=None, url_failures=None):
+    """Interpret one acquired source into the single findings dict.
+
+    url_failures holds cached failed URL forms from an earlier attempt's
+    single fetch round; None fetches material URLs once this attempt.
+    """
     base, model, key = _config(config)
     if not isinstance(source, dict) or not source.get("url"):
         raise InterpretationError("source dict with a url is required")
@@ -633,8 +637,10 @@ def interpret(source, config, categories, screening_key=None):
     elif screened and steer >= judgment.REVIEW_STEER:
         warnings.append("screening: suspicious content flagged; proceeding")
 
+
     reason = None
     failures = None
+    fetched_here = False
     for attempt in range(2):  # exactly one malformed-output retry
         if reason:
             messages = messages + [{"role": "user",
@@ -646,8 +652,14 @@ def interpret(source, config, categories, screening_key=None):
             # CLIP-146: the one fetch pass starts after the first post()
             # returns, so an unreachable endpoint costs no fetches; the
             # fetch set still comes from the material alone, never the reply.
-            failures = (set() if screened and steer >= judgment.ACTION_STEER
-                        else _verify_urls(state, warnings))
+            if url_failures is not None:
+                # one fetch round per job: reuse the stored failure set
+                failures = set(url_failures)
+            elif screened and steer >= judgment.ACTION_STEER:
+                failures = set()
+            else:
+                failures = _verify_urls(state, warnings)
+                fetched_here = True
         content = _content(response, key)
         try:
             findings = _validated(_parse_json_content(content), source["url"],
@@ -669,8 +681,11 @@ def interpret(source, config, categories, screening_key=None):
         except (ValueError, json.JSONDecodeError) as exc:
             reason = str(exc)[:300]
     excerpt = _redact(content[:300], key)
-    raise InterpretationError(f"model output invalid after retry ({reason}); "
+    exc = InterpretationError(f"model output invalid after retry ({reason}); "
                               f"preserved excerpt: {excerpt}")
+    if fetched_here:
+        exc.url_failures = sorted(failures)
+    raise exc
 
 
 def check_connection(config):

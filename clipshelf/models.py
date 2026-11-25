@@ -190,6 +190,10 @@ class Job(models.Model):
     source = models.JSONField(default=dict, blank=True)
     findings = models.JSONField(default=dict, blank=True)
     warnings = models.JSONField(default=list, blank=True)
+    # Material URL fetch state for this acquisition: None until the one fetch
+    # round ran; afterwards the sorted failed URL forms, reused on later
+    # attempts instead of re-fetching (fetch counters are public signals).
+    url_failures = models.JSONField(default=None, null=True, blank=True)
     error = models.TextField(blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -332,6 +336,7 @@ class Job(models.Model):
         if self.acquisition in {self.AcquisitionStatus.BLOCKED, self.AcquisitionStatus.ERROR}:
             self.acquisition = self.AcquisitionStatus.PENDING
         self.interpretation = self.InterpretationStatus.PENDING
+        self.url_failures = None
         self.save()
 
     def __str__(self):
