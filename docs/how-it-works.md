@@ -72,8 +72,11 @@ The container runs both roles from one image: `Dockerfile` `ENTRYPOINT deploy/en
    threshold (`judgment.ACTION_STEER`, 0.70) skip these fetches; a lower
    review-level flag does not. After the model answers, `_warn_unverified_urls` adds an
    "unverified" warning to every emitted link whose fetch failed, so a failed
-   check warns instead of blocking; more than 20 matches add a
-   "N URLs not re-verified" warning.
+   check warns instead of blocking. Emitted URLs that the 20-URL cap
+   dropped get a "N URL(s) not re-verified" warning with the exact count;
+   the capture's own URL never takes a fetch slot, because acquisition
+   fetched it already, and alias spellings (case, scheme, www, fragment,
+   trailing slash) of one URL share a slot.
 4. **Browse** — Library and Inbox per collection, search, categories, source
    viewing, retry. Collections are the access boundary: everyone has a private
    Personal collection, shared collections have explicit members.
