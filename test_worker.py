@@ -185,6 +185,99 @@ class MaterialUrlFetchOncePerJobTests(WorkerMixin, TransactionTestCase):
                                          "https://github.com/owner/two"])
         self.assertEqual(len(post_calls), 5)
 
+    def test_blank_reply_keeps_the_fetch_result_for_the_retry(self):
+        job = self.make_job(
+            url="https://example.com/page",
+            acquisition="complete",
+            source={"url": "https://example.com/page", "title": "t", "desc": "d",
+                    "text": "see https://github.com/owner/one and https://github.com/owner/two",
+                    "links": [], "assets": [], "metadata": {}, "warnings": [],
+                    "acquisition": "complete"})
+        calls, posts = [], []
+
+        def fake_fetch(url, **kw):
+            calls.append(url)
+            if "owner/two" in url:
+                raise network.NetworkError("down")
+            return {"url": url, "body": b"<html>ok</html>", "content_type": "text/html"}
+
+        def fake_post(base, key, payload, timeout):
+            posts.append(payload)
+            # attempt 1 gets a blank reply (interpretation rejects it at once
+            # and the attempt fails); attempt 2 gets valid findings JSON.
+            content = ("" if len(posts) == 1
+                       else json.dumps({"summary": "ok", "repos": [], "prompts": [],
+                                        "links": [], "categories": [], "installs": [],
+                                        "warnings": []}))
+            return {"choices": [{"message": {"content": content}}]}
+
+        # one patch context spans both attempts, so `calls` counts every
+        # fetch the job ever made
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.network.fetch_public", side_effect=fake_fetch), \
+                mock.patch("clipshelf.interpretation.post", side_effect=fake_post):
+            worker.main(once=True)
+            models.Job.objects.filter(pk=job.pk).update(
+                retry_at=timezone.now() - timedelta(seconds=1))
+            worker.main(once=True)
+
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.attempts), ("done", 1))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(sorted(calls), ["https://github.com/owner/one",
+                                         "https://github.com/owner/two"])
+        self.assertEqual(job.url_failures, ["github.com/owner/two"])
+        self.assertEqual(len(posts), 2)
+
+    def test_storage_failure_does_not_restart_the_fetch_round(self):
+        job = self.make_job(
+            url="https://example.com/page",
+            acquisition="complete",
+            source={"url": "https://example.com/page", "title": "t", "desc": "d",
+                    "text": "see https://github.com/owner/one and https://github.com/owner/two",
+                    "links": [], "assets": [], "metadata": {}, "warnings": [],
+                    "acquisition": "complete"})
+        calls, posts = [], []
+
+        def fake_fetch(url, **kw):
+            calls.append(url)
+            return {"url": url, "body": b"<html>ok</html>", "content_type": "text/html"}
+
+        def fake_post(base, key, payload, timeout):
+            posts.append(payload)
+            content = json.dumps({"summary": "ok", "repos": [], "prompts": [],
+                                  "links": [], "categories": [], "installs": [],
+                                  "warnings": []})
+            return {"choices": [{"message": {"content": content}}]}
+
+        # the first storage write crashes (worker fails the attempt); the
+        # second write runs the real store_findings, which owns mark_done;
+        # the retry must reuse the stored fetch result, not fetch again
+        real_store_findings = services.store_findings
+        store_calls = [0]
+
+        def flaky_store(job_, findings_):
+            if store_calls[0] == 0:
+                store_calls[0] += 1
+                raise RuntimeError("disk full")
+            return real_store_findings(job_, findings_)
+
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.network.fetch_public", side_effect=fake_fetch), \
+                mock.patch("clipshelf.interpretation.post", side_effect=fake_post), \
+                mock.patch("clipshelf.services.store_findings",
+                           side_effect=flaky_store):
+            worker.main(once=True)
+            models.Job.objects.filter(pk=job.pk).update(
+                retry_at=timezone.now() - timedelta(seconds=1))
+            worker.main(once=True)
+
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.attempts), ("done", 1))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(job.url_failures, [])
+        self.assertEqual(len(posts), 2)
+
 
 class JobTransitionTests(WorkerMixin, TestCase):
     """The lifecycle methods are the one owner of state rewrites; pin their

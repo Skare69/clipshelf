@@ -600,11 +600,15 @@ def _warn_unverified_urls(findings, failures):
 
 # ------------------------------------------------------------------ API
 
-def interpret(source, config, categories, screening_key=None, url_failures=None):
+def interpret(source, config, categories, screening_key=None, url_failures=None,
+              record_url_failures=None):
     """Interpret one acquired source into the single findings dict.
 
     url_failures holds cached failed URL forms from an earlier attempt's
     single fetch round; None fetches material URLs once this attempt.
+    record_url_failures is called with the sorted failure list right after
+    the one fetch round, so the worker can persist it before anything
+    else can fail.
     """
     base, model, key = _config(config)
     if not isinstance(source, dict) or not source.get("url"):
@@ -638,9 +642,9 @@ def interpret(source, config, categories, screening_key=None, url_failures=None)
         warnings.append("screening: suspicious content flagged; proceeding")
 
 
+
     reason = None
     failures = None
-    fetched_here = False
     for attempt in range(2):  # exactly one malformed-output retry
         if reason:
             messages = messages + [{"role": "user",
@@ -659,7 +663,8 @@ def interpret(source, config, categories, screening_key=None, url_failures=None)
                 failures = set()
             else:
                 failures = _verify_urls(state, warnings)
-                fetched_here = True
+                if record_url_failures is not None:
+                    record_url_failures(sorted(failures))
         content = _content(response, key)
         try:
             findings = _validated(_parse_json_content(content), source["url"],
@@ -681,11 +686,8 @@ def interpret(source, config, categories, screening_key=None, url_failures=None)
         except (ValueError, json.JSONDecodeError) as exc:
             reason = str(exc)[:300]
     excerpt = _redact(content[:300], key)
-    exc = InterpretationError(f"model output invalid after retry ({reason}); "
+    raise InterpretationError(f"model output invalid after retry ({reason}); "
                               f"preserved excerpt: {excerpt}")
-    if fetched_here:
-        exc.url_failures = sorted(failures)
-    raise exc
 
 
 def check_connection(config):

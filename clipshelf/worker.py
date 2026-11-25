@@ -296,20 +296,24 @@ def _interpret_phase(job):
     if not (cfg.llm_base_url and cfg.llm_model):
         job.mark_blocked(error=CONFIG_ERROR)
         return
+    def _record(failures):
+        # persist before the model call: a blank or unparsable reply, a
+        # transport error, or a storage crash must not restart the fetch round
+        job.url_failures = failures
+        job.save(update_fields=["url_failures"])
+
     try:
         findings = interpretation.interpret(
             _material(job), cfg.llm_config(), _categories(job.collection),
             screening_key=services.screening_key(),
-            url_failures=job.url_failures)
+            url_failures=job.url_failures,
+            record_url_failures=_record)
     except interpretation.GuardrailBlocked as exc:
         # deterministic block: no attempts, no retry
         job.mark_blocked(error=str(exc)[:2000],
                          interpretation=models.Job.InterpretationStatus.BLOCKED)
         return
     except (interpretation.ConfigurationError, interpretation.InterpretationError) as exc:
-        failures = getattr(exc, "url_failures", None)
-        if failures is not None:
-            job.url_failures = failures
         _fail(job, exc)
         return
     # store_findings owns the transaction and final job state, including access loss.
