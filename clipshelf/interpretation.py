@@ -641,8 +641,6 @@ def interpret(source, config, categories, screening_key=None, url_failures=None,
     elif screened and steer >= judgment.REVIEW_STEER:
         warnings.append("screening: suspicious content flagged; proceeding")
 
-
-
     reason = None
     failures = None
     for attempt in range(2):  # exactly one malformed-output retry
