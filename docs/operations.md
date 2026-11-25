@@ -67,6 +67,19 @@ with CPython 3.13.5: arrays 4 MiB body 108 MiB peak RSS, 8 MiB 216 MiB,
 16 MiB 433 MiB, 32 MiB 833 MiB; poisoned strings 4 MiB 34 MiB, 8 MiB
 70 MiB, 16 MiB 142 MiB, 32 MiB 286 MiB.
 
+## Import write-lock budget
+
+An import writes all its rows in one SQLite write transaction. Other
+users' writes (captures, job updates) wait up to the 30 s `busy_timeout`,
+then fail. A legacy `seen` or `removed` URL writes up to three `History`
+rows. Admission and the import engine refuse more than
+`MAX_IMPORT_HISTORY` (10000, clipshelf/services.py) `seen` and `removed`
+URLs together with a 400. Measured on 2026-11-25 with
+`python3 scripts/bench_import_history.py <urls>`: 10000 URLs (30000 rows)
+held the write lock for 2.3 s, and 125000 URLs (375000 rows) held it for
+32 s, so a concurrent capture failed. Run the script with
+`CLIPSHELF_DATA_DIR` set to a throwaway directory.
+
 ## Backup and restore
 
 `backup` writes a new directory (the path must not exist yet): a SQLite

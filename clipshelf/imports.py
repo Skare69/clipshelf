@@ -375,7 +375,19 @@ def parse_upload(data):
     if count > services.MAX_IMPORT_ITEMS:
         raise ValidationError(
             f"too many items ({count} > {services.MAX_IMPORT_ITEMS})")
+    if fmt == "legacy":
+        _check_history_cap(args["seen"], args["removed"])
     return fmt, args
+
+
+def _check_history_cap(seen, removed):
+    """Refuse legacy history maps past MAX_IMPORT_HISTORY: each URL writes
+    up to three History rows inside the import's one write transaction."""
+    count = len(seen) + len(removed)
+    if count > services.MAX_IMPORT_HISTORY:
+        raise ValidationError(
+            f"too many seen and removed URLs ({count} > "
+            f"{services.MAX_IMPORT_HISTORY})")
 
 
 def _cli_record_destination(user, digest):
@@ -430,6 +442,7 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     removed = {} if removed is None else removed
     if not isinstance(seen, dict) or not isinstance(removed, dict):
         raise ValidationError("legacy seen and removed must be JSON objects")
+    _check_history_cap(seen, removed)
     for urls in (seen, removed):
         if any(not isinstance(url, str) or not url.strip()
                or len(url) > lib.MAX_URL_LENGTH for url in urls):

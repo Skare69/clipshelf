@@ -2269,6 +2269,33 @@ class ImportTests(ApiTestCase):
             "pending",
         )
 
+    def test_import_rejects_over_cap_history_at_admission(self):
+        # Legacy seen and removed URLs write up to three History rows each
+        # in the import's one write transaction: 125000 URLs held the SQLite
+        # write lock past the 30s busy_timeout and failed other users'
+        # writes (scripts/bench_import_history.py). Both maps count.
+        alice = self._login(self.alice)
+
+        def legacy(seen, removed):
+            return json.dumps({
+                "links": {},
+                "seen": {f"https://s.example/{i}": "d" for i in range(seen)},
+                "removed": {f"https://r.example/{i}": "d" for i in range(removed)},
+            }).encode()
+
+        over = self._post_import(alice, legacy(6000, 4001))
+        self.assertEqual(over.status_code, 400)
+        self.assertEqual(over.json()["detail"],
+                         "too many seen and removed URLs (10001 > 10000)")
+        self.assertFalse(ImportRecord.objects.filter(user=self.alice).exists())
+        self.assertEqual(
+            os.listdir(os.path.join(os.path.realpath(self._data_dir()), "staging")),
+            [],
+        )
+        at_cap = self._post_import(alice, legacy(6000, 4000))
+        self.assertEqual(at_cap.status_code, 201)
+        self.assertEqual(at_cap.json()["import"]["status"], "pending")
+
     def test_import_rejects_element_flood_before_parsing(self):
         # json.load builds ~64 bytes of objects per element, a measured ~26
         # MiB of RSS per MiB of body (scripts/bench_import_parse.py): a 32

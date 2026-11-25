@@ -153,6 +153,18 @@ class ManifestTests(MigrationMixin, TestCase):
         self.assertNotEqual(baseline, changed_seen)
         self.assertNotEqual(baseline, changed_removed)
 
+    def test_engine_refuses_over_cap_history_without_writes(self):
+        # The CLI import reaches import_items without the view's admission:
+        # the engine re-checks the history cap before any History row. The
+        # fixture's one removed URL makes this one over the cap.
+        seen = {f"https://s.example/{i}": "d"
+                for i in range(services.MAX_IMPORT_HISTORY)}
+        with self.assertRaisesMessage(
+                ValidationError, "too many seen and removed URLs (10001 > 10000)"):
+            self.direct_import(seen=seen)
+        self.assertFalse(models.History.objects.exists())
+        self.assertFalse(models.ImportRecord.objects.exists())
+
     def test_changed_media_bytes_make_a_new_import(self):
         first = self.direct_import()
         media_path = self.cache_dir / Path(CACHE_NAME).name
