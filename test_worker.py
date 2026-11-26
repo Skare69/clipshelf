@@ -279,6 +279,76 @@ class MaterialUrlFetchOncePerJobTests(WorkerMixin, TransactionTestCase):
         self.assertEqual(len(posts), 2)
 
 
+class JobTokenUsageTests(WorkerMixin, TransactionTestCase):
+    """The job row holds the LLM token spend summed over every model call of
+    every attempt, failed calls included, and the full-row saves of the
+    failure and success paths never write a stale sum back."""
+
+    OK = json.dumps({"summary": "ok", "repos": [], "prompts": [], "links": [],
+                     "categories": [], "installs": [], "warnings": []})
+
+    def make_interpret_job(self):
+        return self.make_job(
+            url="https://example.com/page", acquisition="complete",
+            source={"url": "https://example.com/page", "title": "t", "desc": "d",
+                    "text": "body", "links": [], "assets": [], "metadata": {},
+                    "warnings": [], "acquisition": "complete"})
+
+    def run_attempt(self, job, replies):
+        posts = []
+
+        def fake_post(base, key, payload, timeout):
+            posts.append(payload)
+            return replies[len(posts) - 1]
+
+        models.Job.objects.filter(pk=job.pk).update(
+            retry_at=timezone.now() - timedelta(seconds=1))
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch("clipshelf.interpretation.post", side_effect=fake_post):
+            worker._process(worker._claim(job.pk))
+        return posts
+
+    def reply(self, content, prompt, completion, finish="stop"):
+        return {"choices": [{"message": {"content": content}, "finish_reason": finish}],
+                "usage": {"prompt_tokens": prompt, "completion_tokens": completion}}
+
+    def test_success_sums_every_call_including_the_length_retry(self):
+        job = self.make_interpret_job()
+        posts = self.run_attempt(job, [self.reply("", 100, 4000, finish="length"),
+                                       self.reply(self.OK, 100, 900)])
+        self.assertEqual([p["max_tokens"] for p in posts], [4000, 8000])
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.prompt_tokens, job.completion_tokens),
+                         ("done", 200, 4900))
+        from clipshelf import views
+        self.assertEqual(views._job_json(job)["tokens"],
+                         {"prompt": 200, "completion": 4900})
+
+    def test_failed_attempt_keeps_its_spend_and_attempts_accumulate(self):
+        job = self.make_interpret_job()
+        # attempt 1: two malformed replies fail the attempt (fail() saves the
+        # full row); their spend must survive that save
+        self.run_attempt(job, [self.reply("not json", 50, 10),
+                               self.reply("still not json", 60, 20)])
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.attempts), ("retry", 1))
+        self.assertEqual((job.prompt_tokens, job.completion_tokens), (110, 30))
+
+        # attempt 2 succeeds through store_findings/mark_done and adds to the sum
+        self.run_attempt(job, [self.reply(self.OK, 70, 40)])
+        job = self.refresh(job)
+        self.assertEqual(job.state, "done")
+        self.assertEqual((job.prompt_tokens, job.completion_tokens), (180, 70))
+
+    def test_missing_usage_counts_zero(self):
+        job = self.make_interpret_job()
+        self.run_attempt(job, [{"choices": [{"message": {"content": self.OK}}],
+                                "usage": "garbage"}])
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.prompt_tokens, job.completion_tokens),
+                         ("done", 0, 0))
+
+
 class JobTransitionTests(WorkerMixin, TestCase):
     """The lifecycle methods are the one owner of state rewrites; pin their
     policy boundaries here."""

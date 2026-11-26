@@ -1,9 +1,11 @@
 """DB-free interpretation via ONE trusted admin-configured OpenAI-compatible
-endpoint. config = {base_url, model, api_key}; a missing key is allowed when
-base_url/model are valid (trusted LAN endpoint). The LLM connection is a
-separate trust path from public fetch policy; only the current capture's
-material is sent. Findings shape, types, sizes, and URL validity are enforced;
-one malformed retry; never invents findings on configuration failure.
+endpoint. config = {base_url, model, api_key, output_tokens}; a missing key is
+allowed when base_url/model are valid (trusted LAN endpoint); output_tokens is
+interpret()'s output limit. The LLM connection is a separate trust path from
+public fetch policy; only the current capture's material is sent. Findings
+shape, types, sizes, and URL validity are enforced; one malformed retry and
+one doubled-limit retry on finish_reason=length; never invents findings on
+configuration failure.
 
 Transport seam: _request() below is the ONE http adapter; post() and
 list_models() wrap it. Tests fake _request instead of reaching further in;
@@ -60,7 +62,10 @@ LINKS_MATERIAL_MAX = 50
 LLM_TIMEOUT = 900
 CHECK_TIMEOUT = 120
 LLM_RESPONSE_MAX = 16 << 20
-OUTPUT_TOKENS_MAX = 2000
+OUTPUT_TOKENS_MAX = 4000        # interpret default when config has no valid limit
+OUTPUT_TOKENS_MIN, OUTPUT_TOKENS_RETRY_MAX = 500, 8000
+CHECK_OUTPUT_TOKENS = 2000
+USAGE_TOKENS_MAX = 10 ** 9      # per call; larger usage counts are garbage
 REPOS_MAX, LINKS_MAX, PROMPTS_MAX, INSTALLS_MAX, WARNINGS_MAX, CATEGORIES_MAX = \
     10, 20, 20, 20, 10, 10
 # Invisible characters that str.isprintable() lets through: hangul fillers,
@@ -137,6 +142,14 @@ def _config(config):
     if key is not None and not isinstance(key, str):
         raise ConfigurationError("config api_key must be a string or omitted")
     return base, model.strip(), (key or None)
+
+
+def _output_tokens(config):
+    """The admin output limit, clamped; a missing or invalid one is the default."""
+    value = config.get("output_tokens")
+    if not isinstance(value, int) or isinstance(value, bool):
+        return OUTPUT_TOKENS_MAX
+    return max(OUTPUT_TOKENS_MIN, min(value, OUTPUT_TOKENS_RETRY_MAX))
 
 
 # ------------------------------------------------------------- HTTP core
@@ -236,6 +249,30 @@ def list_models(config, timeout=30):
 
 
 
+def _finish_reason(response):
+    try:
+        return response["choices"][0].get("finish_reason")
+    except (KeyError, IndexError, TypeError, AttributeError):
+        return None
+
+
+def _usage(response):
+    """(prompt, completion) token counts; the endpoint is untrusted, so a
+    missing or malformed count is 0, never an error."""
+    usage = response.get("usage") if isinstance(response, dict) else None
+    if not isinstance(usage, dict):
+        return 0, 0
+
+    def count(name):
+        value = usage.get(name)
+        if (isinstance(value, int) and not isinstance(value, bool)
+                and 0 <= value <= USAGE_TOKENS_MAX):
+            return value
+        return 0
+
+    return count("prompt_tokens"), count("completion_tokens")
+
+
 def _content(response, key):
     try:
         content = response["choices"][0]["message"]["content"]
@@ -243,12 +280,7 @@ def _content(response, key):
             raise ValueError("empty content")
         return content
     except (KeyError, IndexError, TypeError, ValueError):
-        finish = None
-        try:
-            finish = response["choices"][0].get("finish_reason")
-        except (KeyError, IndexError, TypeError):
-            pass
-        if finish == "length":
+        if _finish_reason(response) == "length":
             raise InterpretationError(
                 "model hit the output ceiling before answering (finish_reason=length); "
                 "the answer needs more output tokens than allowed") from None
@@ -659,16 +691,18 @@ def _warn_unverified_urls(findings, failures, uncapped=()):
 # ------------------------------------------------------------------ API
 
 def interpret(source, config, categories, screening_key=None, url_failures=None,
-              record_url_failures=None):
+              record_url_failures=None, record_usage=None):
     """Interpret one acquired source into the single findings dict.
 
     url_failures holds cached failed URL forms from an earlier attempt's
     single fetch round; None fetches material URLs once this attempt.
     record_url_failures is called with the sorted failure list right after
     the one fetch round, so the worker can persist it before anything
-    else can fail.
+    else can fail. record_usage(prompt_tokens, completion_tokens) is called
+    after every model reply, before parsing, so failed calls count too.
     """
     base, model, key = _config(config)
+    limit = _output_tokens(config)
     if not isinstance(source, dict) or not source.get("url"):
         raise InterpretationError("source dict with a url is required")
     warnings = []
@@ -700,16 +734,23 @@ def interpret(source, config, categories, screening_key=None, url_failures=None,
         warnings.append("screening: suspicious content flagged; proceeding")
 
 
+    def call():
+        response = post(base, key, {"model": model, "messages": messages,
+                                    "max_tokens": limit,
+                                    "temperature": 0.2}, LLM_TIMEOUT)
+        if record_usage is not None:
+            record_usage(*_usage(response))
+        return response
+
     reason = None
     failures = None
     uncapped = set()
+    length_retried = False
     for attempt in range(2):  # exactly one malformed-output retry
         if reason:
             messages = messages + [{"role": "user",
                                     "content": _RETRY_NOTE.format(reason=reason)}]
-        response = post(base, key, {"model": model, "messages": messages,
-                                    "max_tokens": OUTPUT_TOKENS_MAX,
-                                    "temperature": 0.2}, LLM_TIMEOUT)
+        response = call()
         if failures is None:
             # CLIP-146: the one fetch pass starts after the first post()
             # returns, so an unreachable endpoint costs no fetches; the
@@ -727,6 +768,14 @@ def interpret(source, config, categories, screening_key=None, url_failures=None,
                 failures, uncapped = _verify_urls(state)
                 if record_url_failures is not None:
                     record_url_failures(sorted(failures))
+        raised = min(2 * limit, OUTPUT_TOKENS_RETRY_MAX)
+        if (_finish_reason(response) == "length" and not length_retried
+                and raised > limit):
+            # one doubled-limit retry of the same request, apart from the
+            # malformed-output retry: reasoning models can spend the whole
+            # limit before they answer
+            length_retried, limit = True, raised
+            response = call()
         content = _content(response, key)
         try:
             findings = _validated(_parse_json_content(content), source["url"],
@@ -771,7 +820,7 @@ def check_connection(config):
             image]}]
     try:
         response = post(base, key, {"model": model, "messages": messages,
-                                     "max_tokens": OUTPUT_TOKENS_MAX,
+                                     "max_tokens": CHECK_OUTPUT_TOKENS,
                                      "temperature": 0}, CHECK_TIMEOUT)
         raw = _content(response, key)
         parsed = _parse_json_content(raw)

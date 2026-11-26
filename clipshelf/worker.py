@@ -28,7 +28,7 @@ from pathlib import Path
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -302,12 +302,22 @@ def _interpret_phase(job):
         job.url_failures = failures
         job.save(update_fields=["url_failures"])
 
+    def _usage(prompt, completion):
+        # atomic DB sum, plus the in-memory copy, so the full-row save in
+        # fail()/mark_blocked() writes the same sum back instead of a stale one
+        models.Job.objects.filter(pk=job.pk).update(
+            prompt_tokens=F("prompt_tokens") + prompt,
+            completion_tokens=F("completion_tokens") + completion)
+        job.prompt_tokens += prompt
+        job.completion_tokens += completion
+
     try:
         findings = interpretation.interpret(
             _material(job), cfg.llm_config(), _categories(job.collection),
             screening_key=services.screening_key(),
             url_failures=job.url_failures,
-            record_url_failures=_record)
+            record_url_failures=_record,
+            record_usage=_usage)
     except interpretation.GuardrailBlocked as exc:
         # deterministic block: no attempts, no retry
         job.mark_blocked(error=str(exc)[:2000],

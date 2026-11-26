@@ -170,6 +170,7 @@ def _job_json(job, user=None):
         "warnings": list(dict.fromkeys(job.warnings or [])),
         "error": job.error,
         "attempts": job.attempts,
+        "tokens": {"prompt": job.prompt_tokens, "completion": job.completion_tokens},
         # Authoritative policy booleans (models.Job): the browser renders
         # activity/error/retry decisions from these instead of re-deriving
         # state rules; colors and labels stay presentation.

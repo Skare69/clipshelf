@@ -1530,7 +1530,7 @@ def test_interpretation_bounds():
     finally:
         interp.post = real_post
 
-    # the check gives reasoning models output headroom (same ceiling as interpret)
+    # the check gives reasoning models output headroom (its own fixed ceiling)
     def spy_post(base, key, payload, timeout):
         calls.append(payload)
         return {"choices": [{"message": {"content": '{"ok": true, "color": "red"}'},
@@ -1542,7 +1542,7 @@ def test_interpretation_bounds():
         assert report == {"ok": True, "message": "image+JSON ok via m (saw: red)"}, report
         assert calls[-1]["temperature"] == 0  # deterministic probe
         assert [m["role"] for m in calls[-1]["messages"]] == ["system", "user"]
-        assert calls[-1]["max_tokens"] == interp.OUTPUT_TOKENS_MAX
+        assert calls[-1]["max_tokens"] == interp.CHECK_OUTPUT_TOKENS == 2000
     finally:
         interp.post = real_post
 
@@ -3100,6 +3100,150 @@ def test_interpret_screening_failure_is_reported():
     print("interpret screening failure ok")
 
 
+_LENGTH_SOURCE = {"url": "https://example.com/p", "text": "body", "assets": [],
+                  "links": [], "metadata": {}}
+_LENGTH_OK = json.dumps({"summary": "s", "repos": [], "prompts": [], "links": [],
+                         "categories": [], "installs": [], "warnings": []})
+_LENGTH_REPLY = {"choices": [{"message": {"content": "", "reasoning_content": "t"},
+                              "finish_reason": "length"}]}
+
+
+def _interpret_with(replies, config, **kwargs):
+    """Run interpret() against scripted replies; returns (result-or-exc, calls)."""
+    calls = []
+
+    def fake_post(base, key, payload, timeout):
+        calls.append(payload)
+        return replies[len(calls) - 1]
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=fake_post):
+        try:
+            return interp.interpret(_LENGTH_SOURCE, config, [], **kwargs), calls
+        except interp.InterpretationError as exc:
+            return exc, calls
+
+
+def test_interpret_output_tokens_setting():
+    """config output_tokens sets max_tokens, clamped to 500..8000; a missing
+    or invalid value falls back to the 4000 default."""
+    ok = {"choices": [{"message": {"content": _LENGTH_OK}}]}
+    for value, sent in ((6000, 6000), (100, 500), (99999, 8000), (None, 4000),
+                        ("6000", 4000), (True, 4000), (5.5, 4000)):
+        config = {"base_url": "http://h/v1", "model": "m"}
+        if value is not None:
+            config["output_tokens"] = value
+        result, calls = _interpret_with([ok], config)
+        assert isinstance(result, dict), result
+        assert [c["max_tokens"] for c in calls] == [sent], (value, calls)
+    assert interp.OUTPUT_TOKENS_MAX == 4000
+    print("interpret output tokens setting ok")
+
+
+def test_interpret_length_retry_doubles_once():
+    """finish_reason=length retries the same request once with a doubled
+    limit (capped at 8000); the malformed-output retry stays separate."""
+    config = {"base_url": "http://h/v1", "model": "m", "output_tokens": 3000}
+    ok = {"choices": [{"message": {"content": _LENGTH_OK}}]}
+    result, calls = _interpret_with([_LENGTH_REPLY, ok], config)
+    assert isinstance(result, dict) and result["summary"] == "s", result
+    assert [c["max_tokens"] for c in calls] == [3000, 6000], calls
+    assert calls[0]["messages"] == calls[1]["messages"]  # the same request
+
+    config["output_tokens"] = 5000
+    _, calls = _interpret_with([_LENGTH_REPLY, ok], config)
+    assert [c["max_tokens"] for c in calls] == [5000, 8000], calls
+
+    # both replies hit the ceiling: the length error, exactly two requests
+    result, calls = _interpret_with([_LENGTH_REPLY, _LENGTH_REPLY], config)
+    assert isinstance(result, interp.InterpretationError), result
+    assert "output ceiling" in str(result) and "finish_reason=length" in str(result)
+    assert len(calls) == 2, calls
+
+    # already at the 8000 ceiling: no doubled retry, the length error at once
+    config["output_tokens"] = 8000
+    result, calls = _interpret_with([_LENGTH_REPLY, ok], config)
+    assert isinstance(result, interp.InterpretationError), result
+    assert "output ceiling" in str(result)
+    assert [c["max_tokens"] for c in calls] == [8000], calls
+
+    # the length retry does not use up the malformed-output retry
+    config["output_tokens"] = 2000
+    bad = {"choices": [{"message": {"content": "not json"}}]}
+    result, calls = _interpret_with([_LENGTH_REPLY, bad, ok], config)
+    assert isinstance(result, dict), result
+    assert [c["max_tokens"] for c in calls] == [2000, 4000, 4000], calls
+    assert calls[2]["messages"][-1]["role"] == "user"
+    assert "not valid" in calls[2]["messages"][-1]["content"]
+    print("interpret length retry ok")
+
+
+def test_interpret_length_retry_fetches_once():
+    """CLIP-146 order holds with the length retry: the one fetch round runs
+    after the first post returns, never again for the doubled request."""
+    source = {**_LENGTH_SOURCE, "text": "see https://github.com/o/r"}
+    events = []
+
+    def fake_fetch(url, **kwargs):
+        events.append("fetch")
+        raise net.NetworkError("down")
+
+    replies = [_LENGTH_REPLY, {"choices": [{"message": {"content": _LENGTH_OK}}]}]
+
+    def fake_post(base, key, payload, timeout):
+        events.append("post")
+        return replies[events.count("post") - 1]
+
+    with mock.patch.object(interp.judgment, "available", return_value=False), \
+         mock.patch.object(interp, "post", side_effect=fake_post), \
+         mock.patch.object(net, "fetch_public", side_effect=fake_fetch):
+        interp.interpret(source, {"base_url": "http://h/v1", "model": "m"}, [])
+    assert events == ["post", "fetch", "post"], events
+    print("interpret length retry fetch order ok")
+
+
+def test_interpret_records_usage():
+    """record_usage gets every call's usage, failed calls included; missing
+    or garbage usage fields record 0 and never raise."""
+    config = {"base_url": "http://h/v1", "model": "m"}
+    length = {**_LENGTH_REPLY, "usage": {"prompt_tokens": 100, "completion_tokens": 4000}}
+    bad = {"choices": [{"message": {"content": "not json"}}],
+           "usage": {"prompt_tokens": 120, "completion_tokens": 30}}
+    ok = {"choices": [{"message": {"content": _LENGTH_OK}}],
+          "usage": {"prompt_tokens": 150, "completion_tokens": 40, "total_tokens": 190}}
+    recorded = []
+    result, calls = _interpret_with([length, bad, ok], config,
+                                    record_usage=lambda p, c: recorded.append((p, c)))
+    assert isinstance(result, dict), result
+    assert recorded == [(100, 4000), (120, 30), (150, 40)], recorded
+
+    # a failed interpretation still records each call's spend
+    recorded = []
+    result, _ = _interpret_with([bad, bad], config,
+                                record_usage=lambda p, c: recorded.append((p, c)))
+    assert isinstance(result, interp.InterpretationError), result
+    assert recorded == [(120, 30), (120, 30)], recorded
+
+    for usage in (None, "lots", [], {"prompt_tokens": -5, "completion_tokens": "9"},
+                  {"prompt_tokens": True, "completion_tokens": 1.5},
+                  {"prompt_tokens": 10 ** 30, "completion_tokens": 7}):
+        reply = {"choices": [{"message": {"content": _LENGTH_OK}}]}
+        if usage is not None:
+            reply["usage"] = usage
+        recorded = []
+        result, _ = _interpret_with([reply], config,
+                                    record_usage=lambda p, c: recorded.append((p, c)))
+        assert isinstance(result, dict), (usage, result)
+        expected = (0, 7) if isinstance(usage, dict) and usage.get("completion_tokens") == 7 \
+            else (0, 0)
+        assert recorded == [expected], (usage, recorded)
+
+    # no recorder: usage is ignored
+    result, _ = _interpret_with([ok], config)
+    assert isinstance(result, dict), result
+    print("interpret usage recording ok")
+
+
 def test_check_connection_contract():
     """The probe ships a system contract + color question + inline PNG; the
     report shape is honest in all outcomes and never leaks the key."""
@@ -3136,7 +3280,7 @@ def test_check_connection_contract():
         assert ("via " + cfg["model"]) in report["message"], report["message"]
         assert report["message"].endswith(")"), report["message"]
         assert calls[0]["model"] == cfg["model"]
-        assert calls[0]["max_tokens"] == interp.OUTPUT_TOKENS_MAX
+        assert calls[0]["max_tokens"] == interp.CHECK_OUTPUT_TOKENS
         messages = calls[0]["messages"]
         assert messages[0]["role"] == "system"
         assert messages[0]["content"].endswith("}")
@@ -3423,6 +3567,10 @@ def test():
     test_interpret_screening_failure_is_reported()
     test_interpret_retry_reason_bound()
     test_interpret_invalid_repo_retries_once()
+    test_interpret_output_tokens_setting()
+    test_interpret_length_retry_doubles_once()
+    test_interpret_length_retry_fetches_once()
+    test_interpret_records_usage()
     test_check_connection_contract()
     test_list_models()
     test_list_models_sends_no_body()

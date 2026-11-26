@@ -194,6 +194,10 @@ class Job(models.Model):
     # round ran; afterwards the sorted failed URL forms, reused on later
     # attempts instead of re-fetching (fetch counters are public signals).
     url_failures = models.JSONField(default=None, null=True, blank=True)
+    # LLM token spend summed over every model call of every attempt, from
+    # the endpoint's usage fields (0 when the endpoint reports none).
+    prompt_tokens = models.PositiveBigIntegerField(default=0)
+    completion_tokens = models.PositiveBigIntegerField(default=0)
     error = models.TextField(blank=True, default="")
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -461,6 +465,9 @@ class ServerSettings(models.Model):
     typesafe_api_key = models.CharField(max_length=2048, blank=True, default="")
     follow_poll_seconds = models.PositiveIntegerField(default=21600)
     follow_backfill_cap = models.PositiveSmallIntegerField(default=50)
+    llm_output_tokens = models.PositiveIntegerField(
+        default=4000, validators=[MinValueValidator(500), MaxValueValidator(8000)]
+    )
 
     def save(self, *args, **kwargs):
         """Verification invalidation and endpoint key isolation live here, so
@@ -540,6 +547,7 @@ class ServerSettings(models.Model):
             "base_url": self.llm_base_url,
             "model": self.llm_model,
             "api_key": self.llm_api_key,
+            "output_tokens": self.llm_output_tokens,
         }
 
     def __str__(self):

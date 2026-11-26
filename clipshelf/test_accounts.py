@@ -1056,6 +1056,24 @@ class LlmModelPickerTests(AccountTestCase):
         s.refresh_from_db()
         self.assertIsNone(s.llm_verified_at)
 
+    def test_output_tokens_setting(self):
+        r = self.client.get("/api/admin/llm")
+        self.assertEqual(r.json()["llm"]["output_tokens"], 4000)
+        s = ServerSettings.objects.get(pk=1)
+        s.llm_verified_at = timezone.now()
+        s.save()
+        r = self.admin_post("/api/admin/llm", {"output_tokens": 6000}, reauth=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["llm"]["output_tokens"], 6000)
+        s.refresh_from_db()
+        self.assertEqual(s.llm_output_tokens, 6000)
+        self.assertIsNotNone(s.llm_verified_at)
+        for bad in (499, 8001, "x", None):
+            r = self.admin_post("/api/admin/llm", {"output_tokens": bad}, reauth=True)
+            self.assertEqual(r.status_code, 400, bad)
+            s.refresh_from_db()
+            self.assertEqual(s.llm_output_tokens, 6000)
+
     def test_direct_model_save_never_carries_a_key_to_a_new_host(self):
         self.admin_post("/api/admin/llm", {"base_url": "http://saved/v1", "api_key": "stored"},
                         reauth=True)

@@ -199,6 +199,7 @@ function adminLlm(llm, err, scr, scrErr) {
   };
   const load = el("button", { class: "btn", type: "button", text: "Load models" });
   const conc = el("input", { type: "number", id: "llmConc", min: 1, max: 8, value: llm.concurrency ?? 2 });
+  const outTok = el("input", { type: "number", id: "llmOutTok", min: 500, max: 8000, step: 100, value: llm.output_tokens ?? 4000 });
   const key = el("input", { type: "password", id: "llmKey", placeholder: llm.has_api_key ? "Saved — leave blank to keep" : "No key set (optional for local endpoints)", autocomplete: "new-password" });
   const clear = el("input", { type: "checkbox", id: "llmClearKey" });
   const withKey = b => { if (clear.checked) b.api_key = ""; else if (key.value) b.api_key = key.value; return b; };
@@ -233,6 +234,8 @@ function adminLlm(llm, err, scr, scrErr) {
       el("div", { class: "row" }, modelCtl, load),
       el("p", { class: "help", text: "Load models asks the endpoint which models it has and turns this into a list to pick from." })),
     el("div", { class: "field" }, el("label", { for: "llmConc", text: "Concurrent requests" }), conc),
+    el("div", { class: "field" }, el("label", { for: "llmOutTok", text: "Max output tokens" }), outTok,
+      el("p", { class: "help", text: "Reasoning models think before they answer and need more tokens. Raise this when captures fail at the output limit." })),
     el("div", { class: "field" }, el("label", { for: "llmKey", text: "API key" }), key,
       el("p", { class: "help", text: "Write-only: never returned by the server. Leave blank to keep a key for this endpoint; changing the URL clears it." })),
     el("div", { class: "field" },
@@ -258,7 +261,8 @@ function adminLlm(llm, err, scr, scrErr) {
     finally { load.disabled = false; load.textContent = "Load models"; }
   });
   const body = () => ({ base_url: base.value.trim(), model: modelValue(),
-    concurrency: Math.min(8, Math.max(1, parseInt(conc.value, 10) || 1)) });
+    concurrency: Math.min(8, Math.max(1, parseInt(conc.value, 10) || 1)),
+    output_tokens: Math.min(8000, Math.max(500, parseInt(outTok.value, 10) || 4000)) });
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     const b = withKey(body());

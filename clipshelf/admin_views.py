@@ -339,6 +339,7 @@ def _llm_dict(s) -> dict:
         "base_url": s.llm_base_url or "",
         "model": s.llm_model or "",
         "concurrency": s.llm_concurrency,
+        "output_tokens": s.llm_output_tokens,
         "has_api_key": bool(s.llm_api_key),
         "verified_at": s.llm_verified_at.isoformat() if s.llm_verified_at else None,
     }
@@ -387,6 +388,14 @@ def llm_config(request, user):
         if not 1 <= concurrency <= 8:
             raise ApiError(400, detail="concurrency must be between 1 and 8.")
         s.llm_concurrency = concurrency
+    if "output_tokens" in body:
+        try:
+            output_tokens = int(body["output_tokens"])
+        except (TypeError, ValueError):
+            raise ApiError(400, detail="output_tokens must be an integer.")
+        if not 500 <= output_tokens <= 8000:
+            raise ApiError(400, detail="output_tokens must be between 500 and 8000.")
+        s.llm_output_tokens = output_tokens
     kwargs = _resolve_kwargs(body)
     base_url, model, api_key = s.resolve(**kwargs)
     s.llm_base_url, s.llm_model, s.llm_api_key = base_url, model, api_key or ""
