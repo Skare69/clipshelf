@@ -6,18 +6,19 @@ from django.db import migrations, models
 from django.utils import timezone
 
 
-def bind_mailed_rows(apps, schema_editor):
-    """Bind each live mailed row to the active account that holds its address
-    now, as the primary email or as a verified secondary address, so member
-    removal can burn links that were mailed before this field existed. A row
+def bind_live_rows(apps, schema_editor):
+    """Bind each live row to the active account that holds its address now,
+    as the primary email or as a verified secondary address, so member
+    removal can burn links that were issued before this field existed. A row
     that no such account holds is expired: its address left the account the
-    link was mailed to, so no removal could find it."""
+    link was addressed to, so no removal could find it. Unmailed rows count
+    too: a failed SMTP send cleared mailed_at, but the message can still
+    have reached the mailbox."""
     CollectionInvitation = apps.get_model("clipshelf", "CollectionInvitation")
     EmailAddress = apps.get_model("account", "EmailAddress")
     User = apps.get_model(*settings.AUTH_USER_MODEL.split("."))
     now = timezone.now()
     rows = CollectionInvitation.objects.filter(
-        mailed_at__isnull=False,
         mailed_to__isnull=True,
         accepted_by__isnull=True,
         expires_at__gt=now,
@@ -50,5 +51,5 @@ class Migration(migrations.Migration):
             name='mailed_to',
             field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='member_invitations_mailed', to=settings.AUTH_USER_MODEL),
         ),
-        migrations.RunPython(bind_mailed_rows, migrations.RunPython.noop),
+        migrations.RunPython(bind_live_rows, migrations.RunPython.noop),
     ]

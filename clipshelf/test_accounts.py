@@ -1594,9 +1594,10 @@ class MemberRemovalSecondaryAddressTests(MemberRemovalFlow, TestCase):
 
 @override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
 class MemberRemovalUpgradeTests(MemberRemovalFlow, TransactionTestCase):
-    """A live link mailed before migration 0010 (no mailed_to yet) to an
-    address that is a verified secondary address at upgrade time must not
-    re-admit the member after the address leaves and comes back."""
+    """A live link issued before migration 0010 (no mailed_to yet) must not
+    re-admit the member after its address leaves the account and comes back.
+    This holds for a link to a verified secondary address and for a link
+    whose SMTP send failed (mailed_at cleared) but whose message arrived."""
 
     BEFORE = [("clipshelf", "0009_job_tokens_serversettings_llm_output_tokens")]
 
@@ -1608,17 +1609,17 @@ class MemberRemovalUpgradeTests(MemberRemovalFlow, TransactionTestCase):
         executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())
 
-    def test_upgrade_binds_legacy_link_to_a_secondary_address(self):
+    def _upgrade_then_rejoin(self, *, mailed, dropped, kept):
         legacy = MigrationExecutor(connection).loader.project_state(self.BEFORE).apps
         token = secrets.token_urlsafe(32)
         now = timezone.now()
         legacy.get_model("clipshelf", "CollectionInvitation").objects.create(
             collection_id=self.shared.id,
-            email="member-a@clipshelf.test",
+            email=dropped,
             token_hash=invitation_token_hash(token),
             created_by_id=self.owner.id,
             expires_at=now + timedelta(days=7),
-            mailed_at=now,
+            mailed_at=now if mailed else None,
         )
         MigrationExecutor(connection).migrate(
             [("clipshelf", "0010_collectioninvitation_mailed_to")]
@@ -1634,8 +1635,24 @@ class MemberRemovalUpgradeTests(MemberRemovalFlow, TransactionTestCase):
         )
         self._assert_rejoin_through_dropped_address_fails(
             reverse("clipshelf_collection_invite", args=[token]),
+            dropped=dropped,
+            kept=kept,
+        )
+
+    def test_upgrade_binds_legacy_link_to_a_secondary_address(self):
+        self._upgrade_then_rejoin(
+            mailed=True,
             dropped="member-a@clipshelf.test",
             kept="member-b@clipshelf.test",
+        )
+
+    def test_upgrade_binds_legacy_link_whose_send_failed(self):
+        # The delivery job cleared mailed_at after an SMTP error, but the
+        # message reached the member's primary address B.
+        self._upgrade_then_rejoin(
+            mailed=False,
+            dropped="member-b@clipshelf.test",
+            kept="member-a@clipshelf.test",
         )
 
 

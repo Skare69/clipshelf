@@ -1175,12 +1175,14 @@ class LegacyBindingBackfillTests(TransactionTestCase):
 
 
 class MailedToBackfillTests(TransactionTestCase):
-    """The 0010 bind_mailed_rows backfill: a live link mailed before the
+    """The 0010 bind_live_rows backfill: a live link issued before the
     mailed_to field existed is bound to the active account that holds its
     address as primary or verified secondary, so member removal can burn it.
-    A live mailed link that no such account holds is expired."""
+    A live link that no such account holds is expired. Unmailed rows count
+    too: a failed SMTP send cleared mailed_at, but the message can still
+    have arrived."""
 
-    def test_0010_binds_live_mailed_rows_to_the_active_holder(self):
+    def test_0010_binds_live_rows_to_the_active_holder(self):
         executor = MigrationExecutor(connection)
         before = [("clipshelf", "0009_job_tokens_serversettings_llm_output_tokens")]
         executor.migrate(before)
@@ -1209,6 +1211,7 @@ class MailedToBackfillTests(TransactionTestCase):
         secondary = row("H2@example.com")  # verified secondary address
         unverified = row("claim@example.com")  # unverified claim binds nothing
         unmailed = row("nobody@example.com", mailed=False)
+        unmailed_held = row("h2@example.com", mailed=False)
         accepted = row("nobody@example.com", accepted_by=holder.id)
         dead = row("nobody@example.com", expires_at=now - timedelta(days=1))
         inactive = row("gone@example.com")
@@ -1228,7 +1231,8 @@ class MailedToBackfillTests(TransactionTestCase):
             bound.id: (holder.id, True),
             secondary.id: (holder.id, True),
             unverified.id: (None, False),
-            unmailed.id: (None, True),
+            unmailed.id: (None, False),
+            unmailed_held.id: (holder.id, True),
             accepted.id: (None, True),
             dead.id: (None, False),
             inactive.id: (None, False),
