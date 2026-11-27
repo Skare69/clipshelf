@@ -2466,6 +2466,46 @@ class ImportTests(ApiTestCase):
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["entry"]["tags"], [])
 
+    def test_import_refuses_non_http_url(self):
+        # tel:, intent:, javascript: and file: URLs rode imports into Entry
+        # keys verbatim and reached every member's Android app as an
+        # ACTION_VIEW target. The engine's per-item rule now refuses them
+        # before any acquisition or write.
+        with mock.patch("clipshelf.acquisition.import_export") as ie:
+            with self.assertRaises(services.ValidationError):
+                imports.import_items(
+                    user=self.alice, collection_id=None,
+                    items=[{"url": "tel:+15551234"}])
+        self.assertFalse(ie.called)
+        self.assertFalse(Entry.objects.filter(key="tel:+15551234").exists())
+
+    def test_parse_upload_refuses_non_http_legacy_link(self):
+        # Admission shares the same per-item rule: a legacy library.json
+        # link key that is not an http(s) URL is a 400 the uploader sees,
+        # never a staged record the worker would store later.
+        with self.assertRaises(services.ValidationError):
+            imports.parse_upload({"links": {"tel:+15551234": {}}})
+
+    def test_entries_api_never_returns_non_http_url(self):
+        # A pre-fix row can still carry a non-http key in the database.
+        # Entry reads hide it like the web safeUrl gate instead of handing
+        # an ACTION_VIEW target to every member.
+        shared = self._shared_with_member()
+        entry = Entry.objects.create(
+            collection=shared, kind=Entry.Kind.LINK, key="tel:+15551234")
+        Contribution.objects.create(
+            entry=entry, user=self.bob, origin="legacy-import", data={})
+        alice = self._login(self.alice)
+        response = alice.get("/api/entries")
+        self.assertEqual(response.status_code, 200)
+        for listed in response.json()["entries"]:
+            self.assertTrue(
+                listed["url"] == ""
+                or listed["url"].startswith(("http://", "https://")))
+        detail = alice.get(f"/api/entries/{entry.id}")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["entry"]["url"], "")
+
     def test_import_request_id_unique_across_payloads(self):
         # The database constraint is the race backstop: the pre-insert check
         # can pass in two processes, only one insert may win.

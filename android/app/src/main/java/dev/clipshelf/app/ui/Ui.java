@@ -1,9 +1,11 @@
 package dev.clipshelf.app.ui;
 
+import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
 import android.content.Intent;
+import android.net.Uri;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.LinearLayout;
@@ -199,5 +201,27 @@ final class Ui {
         lp.setMarginEnd(h);
         tv.setLayoutParams(lp);
         return tv;
+    }
+
+    /** Entry links open only as http(s); other schemes never arm an intent. */
+    static boolean isEntryUrl(String url) {
+        if (url == null) {
+            return false;
+        }
+        String scheme = Uri.parse(url).getScheme();
+        return "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
+    }
+
+    /** Opens an http(s) entry URL; a scheme outside http(s) or a missing
+     *  handler never crashes the entry screen. */
+    static void openEntry(Context context, String url) {
+        if (!isEntryUrl(url)) {
+            return;
+        }
+        try {
+            context.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (ActivityNotFoundException e) {
+            // nothing on the device handles http(s): ignore the tap
+        }
     }
 }

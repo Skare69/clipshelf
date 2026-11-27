@@ -252,9 +252,10 @@ def legacy_payload(data):
 
 
 def _url_item(item):
-    """The engine's one per-item rule: a dict carrying a url."""
+    """The engine's one per-item rule: a dict carrying an http(s) url."""
     if not isinstance(item, dict) or not item.get("url"):
         raise ValidationError("every import item needs a dict with a url")
+    services._require_url(str(item["url"]))
 
 
 # json.load() is not a streaming parser: it builds every element before the

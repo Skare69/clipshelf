@@ -549,10 +549,17 @@ def serialize_entry(entry, user):
         if contributor["is_self"] or entry.collection.owner_id == user.id:
             contributor["email"] = contribution.user.email
         contributors.append(contributor)
+    url = ""
+    if entry.kind == Entry.Kind.LINK:
+        try:
+            _require_url(entry.key)
+            url = entry.key
+        except ValidationError:
+            url = ""  # pre-fix junk key: hidden like the web safeUrl gate
     return {
         "id": str(entry.id),
         "kind": entry.kind,
-        "url": entry.key if entry.kind == Entry.Kind.LINK else "",
+        "url": url,
         "title": title,
         "desc": desc,
         "summary": summary,  # interpretation summary; desc stays the stored description

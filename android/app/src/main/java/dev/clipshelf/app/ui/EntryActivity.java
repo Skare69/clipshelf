@@ -1,7 +1,6 @@
 package dev.clipshelf.app.ui;
 
 import android.content.Intent;
-import android.net.Uri;
 import android.os.Bundle;
 import android.view.View;
 import android.view.ViewGroup;
@@ -93,8 +92,7 @@ public class EntryActivity extends AppCompatActivity {
         } else {
             from.setText(getString(R.string.from_format, e.url));
             from.setVisibility(View.VISIBLE);
-            from.setOnClickListener(v ->
-                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(e.url))));
+            from.setOnClickListener(v -> Ui.openEntry(this, e.url));
         }
 
         StringBuilder sb = new StringBuilder(!e.summary.isEmpty() ? e.summary : e.desc);
@@ -139,7 +137,7 @@ public class EntryActivity extends AppCompatActivity {
 
         containers.removeAllViews();
         open.setVisibility(e.url.isEmpty() ? View.GONE : View.VISIBLE);
-        open.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(e.url))));
+        open.setOnClickListener(v -> Ui.openEntry(this, e.url));
         remove.setVisibility(e.canRemove ? View.VISIBLE : View.GONE);
         remove.setOnClickListener(v -> new MaterialAlertDialogBuilder(this)
                 .setMessage(R.string.entry_remove_confirm)
