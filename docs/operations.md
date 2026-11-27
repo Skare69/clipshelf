@@ -112,6 +112,13 @@ fetches its page. The last row of the table is the largest import that
 admission accepts. The 10000 history URLs that admission also accepts add
 2 s to 3 s (measured separately, see above).
 
+After the fetch, the import engine counts the assets that it actually
+acquired, and refuses the import before any write when they pass the same
+caps. An inline page fetch and a cached page can add assets that the
+payload does not reference. `test_migration.ImportWriteLockTests` runs the
+largest import that admission accepts with a concurrent capture in the
+normal suite: the capture must get through.
+
 `tiktok-extract.js` and `whatsapp-extract.js` stop one run at the same
 caps. The next run exports the remaining posts or messages.
 

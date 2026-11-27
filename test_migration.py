@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -23,7 +24,7 @@ from unittest import mock
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
-from django.db import connection
+from django.db import OperationalError, connection, connections
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.recorder import MigrationRecorder
 from django.test import Client, TestCase, TransactionTestCase, override_settings
@@ -1101,6 +1102,110 @@ class ImportWriteLockTests(MigrationMixin, TransactionTestCase):
         self.assertFalse(models.ImportRecord.objects.exists())
         self.assertFalse(models.Asset.objects.exists())
         self.assertFalse((self.tmp / "assets").exists())
+
+    def test_engine_refuses_fetched_assets_past_the_caps(self):
+        # Admission counts payload references. An inline page fetch
+        # (interpreted or cached legacy items) and the cached page itself add
+        # assets that the references do not show; the engine counts the
+        # acquired assets again before it publishes or commits anything.
+        def acquire_page(url, directory):
+            source = fake_acquire(url, directory)
+            acquisition.store_bytes(source, directory, "page.html",
+                                    b"<html>fetched</html>", "page", "text/html")
+            return source
+
+        slides = {"url": "https://example.com/slides",
+                  "images": [{"b64": png_b64("red")}, {"b64": png_b64("blue")}]}
+        cases = (
+            # 2 referenced files + 1 interpreted item: admitted at a cap of 2,
+            # but the inline fetch adds a third asset.
+            ("interpreted", [slides, {"url": "https://example.com/i",
+                                      "interpreted": "2024-02-01"}],
+             2, "too many media files after fetching (3 > 2)"),
+            # 1 referenced cached page: the inline fetch adds one more asset.
+            ("cached page", [{"url": "https://example.com/c", "cache": CACHE_NAME}],
+             1, "too many media files after fetching (2 > 1)"),
+        )
+        for name, items, cap, detail in cases:
+            with self.subTest(name), override_settings(DATA_DIR=str(self.tmp)), \
+                    mock.patch("clipshelf.acquisition.acquire", side_effect=acquire_page), \
+                    mock.patch.object(services, "MAX_IMPORT_MEDIA_FILES", cap):
+                imports._check_media_cap(items)  # the payload count admits it
+                with self.assertRaisesMessage(ValidationError, detail):
+                    imports.import_items(user=self.user, collection_id=None,
+                                         items=items, cache_dir=str(self.cache_dir))
+        self.assertFalse(models.ImportRecord.objects.exists())
+        self.assertFalse(models.Job.objects.exists())
+        self.assertFalse(models.Asset.objects.exists())
+        self.assertFalse((self.tmp / "assets").exists())
+
+    def test_largest_admitted_import_lets_a_concurrent_capture_through(self):
+        # The lead's acceptance check, at the largest import that admission
+        # accepts: MAX_IMPORT_MEDIA_ITEMS items with MAX_IMPORT_MEDIA_FILES
+        # images, the rest of MAX_IMPORT_ITEMS link-only. A capture by
+        # another user starts while the import holds the write lock and
+        # must get through inside the 30 s busy_timeout. Before the caps,
+        # 5000 items x 16 images held the lock 52.8 s and the capture failed.
+        per_item = services.MAX_IMPORT_MEDIA_FILES // services.MAX_IMPORT_MEDIA_ITEMS
+        images = [{"b64": png_b64((k, k, k))} for k in range(per_item)]
+        items = [{"url": f"https://example.com/m/{i}", "images": images}
+                 for i in range(services.MAX_IMPORT_MEDIA_ITEMS)]
+        items += [{"url": f"https://example.com/l/{i}"}
+                  for i in range(services.MAX_IMPORT_ITEMS - len(items))]
+        imports.parse_upload(items)  # admission accepts this payload
+        other = models.User.objects.create_user(username="cap", email="cap@example.com")
+        in_lock, capture, hold = threading.Event(), {}, {}
+        real_history = publication.record_import_history
+        real_commit = services.commit_import_rows
+        real_open_target = acquisition._open_target
+
+        def history(**kw):
+            in_lock.set()  # the commit transaction is open: the lock is held
+            return real_history(**kw)
+
+        def timed_commit(*a, **kw):
+            start = time.monotonic()
+            try:
+                return real_commit(*a, **kw)
+            finally:
+                hold["s"] = time.monotonic() - start
+
+        def unique_open_target(directory, filename, source):
+            # Staging probes slideNN names one by one in one directory, which
+            # is quadratic in the item count (CLIP-175). It runs before the
+            # transaction, so a unique name changes nothing the lock covers.
+            return real_open_target(directory, f"{uuid.uuid4().hex}-{filename}", source)
+
+        def concurrent_capture():
+            in_lock.wait()
+            start = time.monotonic()
+            try:
+                services.accept_capture(other, str(uuid.uuid4()),
+                                        "https://capture.example/a", None)
+                capture["result"] = "ok"
+            except OperationalError as exc:
+                capture["result"] = f"failed: {exc}"
+            finally:
+                connections.close_all()
+            capture["wait"] = time.monotonic() - start
+
+        thread = threading.Thread(target=concurrent_capture)
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch.object(publication, "record_import_history", side_effect=history), \
+                mock.patch.object(services, "commit_import_rows", side_effect=timed_commit), \
+                mock.patch.object(acquisition, "_open_target", side_effect=unique_open_target):
+            thread.start()
+            try:
+                result = imports.import_items(user=self.user, collection_id=None, items=items)
+            finally:
+                in_lock.set()
+                thread.join()
+        print(f"\nlargest admitted import: write lock held {hold['s']:.2f}s, "
+              f"concurrent capture {capture['result']} after {capture['wait']:.2f}s",
+              file=sys.stderr)
+        self.assertEqual(result["counts"]["assets"], services.MAX_IMPORT_MEDIA_FILES)
+        self.assertEqual(capture["result"], "ok")
+        self.assertLess(hold["s"], 30)
 
 
 class DeferredFetchTests(MigrationMixin, TestCase):

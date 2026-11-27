@@ -412,6 +412,25 @@ def _check_media_cap(items):
             f"{services.MAX_IMPORT_MEDIA_FILES})")
 
 
+def _check_acquired_media(plans):
+    """The media caps again, on the assets that acquisition actually
+    produced: an inline page fetch (interpreted or cached legacy items) and
+    the cached page itself add assets that the payload references do not
+    show. Runs before publishing and before the commit transaction."""
+    counts = [min(len(p["source"].get("assets") or []), asset_files.MAX_ASSETS)
+              for p in plans]
+    media_items = sum(1 for n in counts if n)
+    media_files = sum(counts)
+    if media_items > services.MAX_IMPORT_MEDIA_ITEMS:
+        raise ValidationError(
+            f"too many items with media after fetching ({media_items} > "
+            f"{services.MAX_IMPORT_MEDIA_ITEMS})")
+    if media_files > services.MAX_IMPORT_MEDIA_FILES:
+        raise ValidationError(
+            f"too many media files after fetching ({media_files} > "
+            f"{services.MAX_IMPORT_MEDIA_FILES})")
+
+
 def _cli_record_destination(user, digest):
     """Stored destination of a CLI-created import record, or None.
 
@@ -528,6 +547,7 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
         if len(sources) != len(staged):
             raise ValidationError("import validation returned mismatched results")
         plans = _plans(staged, sources)
+        _check_acquired_media(plans)
         prompt_plans = _prompt_plans(prompts)
         result = _commit_import(user, collection, plans, prompt_plans, digest, origin,
                                 client_request_id, record, notice, staging, files_record,
