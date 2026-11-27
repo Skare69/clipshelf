@@ -1878,7 +1878,10 @@ def _read_request(conn):
     for line in head.split(b"\r\n")[1:]:
         name, _, value = line.partition(b":")
         if name.strip().lower() == b"content-length":
-            length = int(value)
+            try:
+                length = int(value)
+            except ValueError:
+                return
     while len(body) < length:
         chunk = conn.recv(4096)
         if not chunk:
@@ -2053,30 +2056,6 @@ def test_redirect_refuses_non_http_targets():
             conn, _ = srv.accept()
             _read_request(conn)
             with conn:
-                # Drain the request (headers, then Content-Length bytes)
-                # before the reply. Closing with unread request bytes in the
-                # receive buffer sends RST, which can beat the client's read
-                # of the 302 and surface as a connection-reset failure.
-                buf = b""
-                while b"\r\n\r\n" not in buf:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        return
-                    buf += chunk
-                req_head, _, body = buf.partition(b"\r\n\r\n")
-                length = 0
-                for line in req_head.decode("latin-1").split("\r\n"):
-                    name, sep, value = line.partition(":")
-                    if sep and name.strip().lower() == "content-length":
-                        try:
-                            length = int(value.strip())
-                        except ValueError:
-                            return
-                while len(body) < length:
-                    chunk = conn.recv(4096)
-                    if not chunk:
-                        return
-                    body += chunk
                 head = (f"HTTP/1.1 302 found\r\n"
                         f"Location: ftp://127.0.0.1:{port}/f\r\n"
                         f"Content-Length: 0\r\n\r\n")
