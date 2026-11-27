@@ -86,6 +86,34 @@ development container, with an import that has no links or prompts:
 failed. The script does not measure imports with links, or the deployed
 storage. Run it with `CLIPSHELF_DATA_DIR` set to a throwaway directory.
 
+## LLM spend ceilings
+
+Interpretation bills the operator's LLM key, so the endpoints that create
+work run under per-user budgets.
+
+One capture POST creates one job per URL in the text
+(`clipshelf/services.py`), and the budget counts POSTs, not URLs. One
+job attempt makes at most 3 model calls: the first call, one
+doubled-limit retry after a length cap, and one malformed-output retry.
+A job makes at most 5 attempts (`Job.MAX_ATTEMPTS`
+in `clipshelf/models.py`). The worst case is 15 model calls per job, each
+with up to 8000 output tokens (admin setting, default 4000), plus the
+prompt tokens. The worker adds each attempt's usage to `Job.prompt_tokens`
+and `Job.completion_tokens`.
+
+Two budgets use the process-local cache (per process, reset on restart;
+the same machinery as the invitation and tag-suggestion budgets):
+
+- Captures: `CLIPSHELF_CAPTURE_RATE`, default `30/h/user`, one count per
+  capture POST.
+- Retries: `CLIPSHELF_JOB_RETRY_RATE`, default `20/h/user`, one count per
+  "Try again" press.
+
+An over-budget request answers HTTP 429 and creates no job. The values
+are code defaults read with `getattr` in `clipshelf/views.py`. The token
+counters have no spending limit; sum the job rows yourself when you need
+a per-user daily figure.
+
 ## Backup and restore
 
 `backup` writes a new directory (the path must not exist yet): a SQLite

@@ -694,6 +694,19 @@ def api_captures(request):
             "count": captures.count(),
         })
 
+    # Every capture creates a Job the worker bills to the operator's LLM
+    # key, so each POST spends one per-user budget before any body is
+    # parsed. Same machinery as the invite and tag-suggestion budgets.
+    allowed = ratelimit.consume(
+        request,
+        app="clipshelf",
+        action="capture",
+        config={"capture": getattr(
+            settings, "CLIPSHELF_CAPTURE_RATE", "30/h/user")},
+        user=user,
+    )
+    if not allowed:
+        raise ApiError(429, detail="too many captures; try again soon")
     body = json_body(request)
     request_id = _uuid_or_400(body.get("client_request_id"), "client_request_id")
     _check_identity(body, user)
@@ -728,6 +741,19 @@ def api_job_retry(request, job_id):
         raise Http404("no such job")
     if not services.accessible_collections(user).filter(id=job.collection_id).exists():
         raise Http404("no such job")
+    # A requeue can cost another attempt budget of model calls on the
+    # operator's key, so each press spends the same kind of per-user
+    # budget as a capture POST, before the eligibility check.
+    allowed = ratelimit.consume(
+        request,
+        app="clipshelf",
+        action="job_retry",
+        config={"job_retry": getattr(
+            settings, "CLIPSHELF_JOB_RETRY_RATE", "20/h/user")},
+        user=user,
+    )
+    if not allowed:
+        raise ApiError(429, detail="too many retries; try again soon")
     # Atomic conditional requeue: a job that became queued/running between the
     # eligibility projection and this write is refused, never double-queued.
     with transaction.atomic():

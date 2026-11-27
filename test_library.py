@@ -1597,6 +1597,12 @@ class MalformedRequestTests(ApiTestCase):
 
 
 class CaptureTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        # The capture and retry budgets count in the process-local cache,
+        # whose fixed location persists across tests in one process.
+        cache.clear()
+
     def _post_capture(self, client, body):
         return client.post(
             "/api/captures",
@@ -1945,6 +1951,55 @@ class CaptureTests(ApiTestCase):
             ["screening dropped 1 unrelated entry"])
         detail = projected("blocked", error="upstream refused")
         self.assertFalse(detail["guardrail"])
+
+    def test_capture_budget_answers_429_without_a_job(self):
+        # One capture creates one job billed to the operator's LLM key, so
+        # the per-user budget bounds the loop: the last POST in the window
+        # answers 429 and creates no capture, the GET listing stays open,
+        # and another user's budget is untouched.
+        with override_settings(CLIPSHELF_CAPTURE_RATE="2/m/user"):
+            alice = self._login(self.alice)
+            for _ in range(2):
+                self.assertEqual(
+                    self._post_capture(
+                        alice, self._capture_body(self.alice)
+                    ).status_code,
+                    201,
+                )
+            over = self._post_capture(alice, self._capture_body(self.alice))
+            listing = alice.get("/api/captures")
+            bob = self._login(self.bob)
+            other = self._post_capture(bob, self._capture_body(self.bob))
+        self.assertEqual(over.status_code, 429)
+        self.assertEqual(over.json()["detail"],
+                         "too many captures; try again soon")
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(Capture.objects.filter(user=self.alice).count(), 2)
+        self.assertEqual(other.status_code, 201)
+        self.assertEqual(Capture.objects.filter(user=self.bob).count(), 1)
+
+    def test_retry_budget_answers_429_without_requeue(self):
+        alice = self._login(self.alice)
+        response = self._post_capture(
+            alice, self._capture_body(self.alice, self.alice_personal)
+        )
+        job_id = Job.objects.get(capture_id=response.json()["receipt"]["id"]).id
+
+        def blocked():
+            Job.objects.filter(id=job_id).update(
+                state="blocked", error="upstream blocked", retry_at=None
+            )
+
+        with override_settings(CLIPSHELF_JOB_RETRY_RATE="1/m/user"):
+            blocked()
+            first = self._retry(alice, job_id)
+            self.assertEqual(first.status_code, 200)
+            blocked()
+            over = self._retry(alice, job_id)
+        self.assertEqual(over.status_code, 429)
+        self.assertEqual(over.json()["detail"], "too many retries; try again soon")
+        # The over-budget press requeued nothing.
+        self.assertEqual(Job.objects.get(id=job_id).state, "blocked")
 
 
 class EntryApiTests(ApiTestCase):
