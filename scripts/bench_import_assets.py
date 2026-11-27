@@ -91,8 +91,10 @@ def main():
           f"png_bytes={len(base64.b64decode(pool[0])) if pool else 0}")
     if (n_items > services.MAX_IMPORT_MEDIA_ITEMS
             or n_items * n_images > services.MAX_IMPORT_MEDIA_FILES):
+        # Both checks: the payload count and the count of acquired assets.
         imports._check_media_cap = lambda items: None
-        print("over the media caps: cap check disabled for the run")
+        imports._check_acquired_media = lambda plans: None
+        print("over the media caps: both cap checks disabled for the run")
 
     in_lock = threading.Event()
     capture = {}
