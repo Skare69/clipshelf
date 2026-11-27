@@ -7,10 +7,18 @@ write transaction. This benchmark migrates a scratch database, imports a
 legacy payload with N `seen` URLs (no links, so nothing is fetched), and
 runs one concurrent capture from another user while the import holds the
 write lock. It reports the transaction hold time and how long the capture
-waited, or the refusal when the payload is over the import cap.
+waited.
 
-Usage: python3 scripts/bench_import_history.py [seen_urls] (default 125000)
-Always run it with CLIPSHELF_DATA_DIR set to a throwaway directory.
+The default size is services.MAX_IMPORT_HISTORY, the largest payload that
+admission accepts. Larger sizes were legal before the cap, and the cap was
+chosen against their measurements: for those runs the script disables the
+shared cap check and calls the unchanged engine, so the commit path stays
+the one the cap protects.
+
+Usage: python3 scripts/bench_import_history.py [seen_urls]
+       (default: services.MAX_IMPORT_HISTORY)
+Always run it with CLIPSHELF_DATA_DIR set to a fresh throwaway directory.
+A directory that already holds a database is refused, never benchmarked.
 """
 import os
 import sys
@@ -20,8 +28,11 @@ import uuid
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-if not os.environ.get("CLIPSHELF_DATA_DIR"):
+data_dir = os.environ.get("CLIPSHELF_DATA_DIR")
+if not data_dir:
     sys.exit("set CLIPSHELF_DATA_DIR to a throwaway directory")
+if list(Path(data_dir).glob("db.sqlite3*")):
+    sys.exit(f"{data_dir} already holds a database; use a fresh directory")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "clipshelf.project.settings")
 
 import django  # noqa: E402
@@ -36,7 +47,7 @@ from clipshelf import imports, models, publication, services  # noqa: E402
 
 
 def main():
-    n = int(sys.argv[1]) if len(sys.argv) > 1 else 125_000
+    n = int(sys.argv[1]) if len(sys.argv) > 1 else services.MAX_IMPORT_HISTORY
     call_command("migrate", verbosity=0)
     stamp = uuid.uuid4().hex[:8]
     importer = models.User.objects.create_user(
@@ -50,11 +61,22 @@ def main():
             for i in range(n)}
     data = {"links": {}, "seen": seen}
     print(f"busy_timeout: {connection.cursor().execute('PRAGMA busy_timeout').fetchone()[0]} ms")
-    try:
+    real_cap = imports._check_history_cap
+    if n > services.MAX_IMPORT_HISTORY:
+        # Admission and the engine both refuse over-cap payloads today. The
+        # cap was chosen against the pre-cap path, so the run disables the
+        # refusal alone and keeps the commit path intact.
+        fmt = "legacy"
+        args = imports.legacy_payload(data)
+
+        def uncapped(seen, removed):
+            return None
+
+        imports._check_history_cap = uncapped
+        print(f"seen={n} over cap {services.MAX_IMPORT_HISTORY}: "
+              "cap check disabled for the run")
+    else:
         fmt, args = imports.parse_upload(data)
-    except ValidationError as exc:
-        print(f"seen={n} refused at upload: {exc.messages[0]}")
-        return
 
     in_lock = threading.Event()
     capture = {}
@@ -96,6 +118,8 @@ def main():
     except ValidationError as exc:
         print(f"seen={n} refused at commit: {exc.messages[0]}")
         in_lock.set()
+    finally:
+        imports._check_history_cap = real_cap
     thread.join()
     if "s" in hold:
         rows = models.History.objects.filter(user=importer).count()

@@ -49,7 +49,8 @@ TEMP_ROOT = Path(tempfile.gettempdir()) / "clipshelf-mutation"
 # Scope policy: pure-logic domain modules first. Request handlers, command
 # modules and the gate scripts (scripts/, deploy/, check_licenses.py) join the
 # scope per change via --diff; wiring (settings, urls, migrations, tests, this
-# harness) is never mutated.
+# harness) and one-off benchmarks (scripts/bench_*, no test drives them) are
+# never mutated.
 DEFAULT_TARGETS = [
     "clipshelf/lib.py",
     "clipshelf/judgment.py",
@@ -58,7 +59,7 @@ DEFAULT_TARGETS = [
     "clipshelf/interpretation.py",
 ]
 EXCLUDED_PARTS = ("migrations/", "project/wsgi", "project/apps", "project/signals",
-                  "project/settings", "clipshelf/urls")
+                  "project/settings", "clipshelf/urls", "scripts/bench_")
 SCOPE_ROOTS = ("clipshelf/", "scripts/", "deploy/")
 GATE_SCRIPTS = ("check_licenses.py",)  # repo root; the launcher and this harness stay out
 
@@ -784,6 +785,7 @@ def self_check():
         "clipshelf/project/settings.py": "DEBUG = True\n",
         "clipshelf/migrations/0001_init.py": "operations = []\n",
         "scripts/lock_deps.py": "PINNED = {}\n",
+        "scripts/bench_import_history.py": "N = 1\n",
         "deploy/check_build_tools.py": "TOOLS = []\n",
         "check_licenses.py": "LICENSES = ()\n",
         "test_thing.py": "X = 1\n",
