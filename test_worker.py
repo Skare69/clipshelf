@@ -729,7 +729,7 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
 
         # Exercise the real interpreter; only the HTTP transport is replaced.
         with override_settings(DATA_DIR=str(self.tmp)), \
-                mock.patch("urllib.request.urlopen", side_effect=refused) as upstream:
+                mock.patch("clipshelf.interpretation._urlopen", side_effect=refused) as upstream:
             for attempt in range(1, models.Job.MAX_ATTEMPTS + 1):
                 claimed = worker._claim_batch(1)
                 self.assertEqual([j.pk for j in claimed], [job.pk])
@@ -750,7 +750,7 @@ class WorkerPipelineTests(WorkerMixin, TransactionTestCase):
 
         # Connection failures use the same policy, without hidden HTTP retries.
         job = self.make_job(acquisition="complete", source={"url": "https://example.com/a"})
-        with mock.patch("urllib.request.urlopen", side_effect=URLError("offline")) as upstream:
+        with mock.patch("clipshelf.interpretation._urlopen", side_effect=URLError("offline")) as upstream:
             worker._process(worker._claim(job.id))
         self.assertEqual(upstream.call_count, 1)
         self.assertEqual(self.refresh(job).attempts, 1)

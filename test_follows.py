@@ -725,7 +725,7 @@ class SuggestTagsApiTests(FollowMixin, TestCase):
         error = urllib.error.URLError(f"refused for {FAKE_LLM_KEY}")
         with mock.patch.object(acquisition, "list_profile_posts",
                                return_value=self.LISTING), \
-                mock.patch.object(interpretation.urllib.request, "urlopen",
+                mock.patch.object(interpretation, "_urlopen",
                                   side_effect=error):
             response = self._post_json(self._login(self.alice), self.ROUTE,
                                        {"url": PROFILE})

@@ -1652,28 +1652,28 @@ def test_post_transport_and_http_errors():
     key-redacted HTTP errors; responses above the size bound are refused."""
     calls = []
 
-    def fake_open(req, timeout=None):
+    def fake_open(req, timeout=None, deadline=None):
         calls.append((req.full_url, req.get_method(),
                       req.get_header("Authorization"),
                       req.get_header("Content-type")))
         return io.BytesIO(b'{"choices": []}')
 
-    real_open = interp.urllib.request.urlopen
-    interp.urllib.request.urlopen = fake_open
+    real_open = interp._urlopen
+    interp._urlopen = fake_open
     try:
         assert interp.post("http://h/v1", "sk-test", {"q": 1}, 5) == {"choices": []}
         assert calls[-1] == ("http://h/v1/chat/completions", "POST", "Bearer sk-test",
                              "application/json")
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
 
     # HTTP 401: credentials surfaced, key never leaks; body has undecodable
     # bytes so the detail decode actually runs its error handler
-    def denied(req, timeout=None):
+    def denied(req, timeout=None, deadline=None):
         raise interp.urllib.error.HTTPError(req.full_url, 401, "no", {},
                                             io.BytesIO(b"bad key sk-test \xff\xfe"))
 
-    interp.urllib.request.urlopen = denied
+    interp._urlopen = denied
     try:
         try:
             interp.post("http://h/v1", "sk-test", {}, 5)
@@ -1681,15 +1681,15 @@ def test_post_transport_and_http_errors():
         except interp.InterpretationError as exc:
             assert "credentials" in str(exc) and "sk-test" not in str(exc)
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
 
     # HTTP 500: detail is redacted and truncated at its 300-char bound
-    def err500(req, timeout=None):
+    def err500(req, timeout=None, deadline=None):
         body = b"X" * 10 + b" sk-test " + b"B" * 400
         raise interp.urllib.error.HTTPError(req.full_url, 500, "boom", {},
                                             io.BytesIO(body))
 
-    interp.urllib.request.urlopen = err500
+    interp._urlopen = err500
     try:
         try:
             interp.post("http://h/v1", "sk-test", {}, 5)
@@ -1699,15 +1699,15 @@ def test_post_transport_and_http_errors():
             assert "500" in msg and "sk-test" not in msg and "***" in msg, msg
             assert len(msg) <= len("endpoint rejected request (HTTP 500): ") + 300, msg
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
 
     # a response above the size bound is refused, not parsed
-    def huge(req, timeout=None):
+    def huge(req, timeout=None, deadline=None):
         return io.BytesIO(b"x" * 40)
 
     real_max = interp.LLM_RESPONSE_MAX
     interp.LLM_RESPONSE_MAX = 16
-    interp.urllib.request.urlopen = huge
+    interp._urlopen = huge
     try:
         try:
             interp.post("http://h/v1", None, {}, 5)
@@ -1716,7 +1716,7 @@ def test_post_transport_and_http_errors():
             assert "size bound" in str(exc)
     finally:
         interp.LLM_RESPONSE_MAX = real_max
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
 
     # the error body read is bounded at 4096, never unbounded
     class RecordingFp(io.BytesIO):
@@ -1730,10 +1730,10 @@ def test_post_transport_and_http_errors():
 
     rec = RecordingFp()
 
-    def err_read(req, timeout=None):
+    def err_read(req, timeout=None, deadline=None):
         raise interp.urllib.error.HTTPError(req.full_url, 503, "busy", Message(), rec)
 
-    interp.urllib.request.urlopen = err_read
+    interp._urlopen = err_read
     try:
         try:
             interp.post("http://h/v1", None, {}, 5)
@@ -1743,13 +1743,13 @@ def test_post_transport_and_http_errors():
         assert rec.sizes and all(
             n is not None and n <= 4096 for n in rec.sizes), rec.sizes
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
 
     # a URLError with a very long reason: detail truncated at its 300-char bound
-    def unreachable_long(req, timeout=None):
+    def unreachable_long(req, timeout=None, deadline=None):
         raise interp.urllib.error.URLError("R" * 500)
 
-    interp.urllib.request.urlopen = unreachable_long
+    interp._urlopen = unreachable_long
     try:
         try:
             interp.post("http://h/v1", None, {}, 5)
@@ -1759,13 +1759,13 @@ def test_post_transport_and_http_errors():
             assert msg.startswith("endpoint unreachable: "), msg
             assert len(msg) == len("endpoint unreachable: ") + 300, msg  # 516-char reason cut at 300
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
 
     # list_models on an unreachable endpoint: transport reported, key redacted
-    def unreachable(req, timeout=None):
+    def unreachable(req, timeout=None, deadline=None):
         raise interp.urllib.error.URLError("refused")
 
-    interp.urllib.request.urlopen = unreachable
+    interp._urlopen = unreachable
     try:
         try:
             interp.list_models({"base_url": "http://h/v1", "api_key": "sk-test"})
@@ -1774,7 +1774,7 @@ def test_post_transport_and_http_errors():
             assert "endpoint unreachable: <" in str(exc)
             assert "sk-test" not in str(exc)
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
     print("post transport ok")
 
 
@@ -1802,7 +1802,7 @@ def test_response_read_bound():
         def __exit__(self, *a):
             return False
 
-    real_open = interp.urllib.request.urlopen
+    real_open = interp._urlopen
     try:
         # (callable, JSON tail, call args, parsed result, refusal exception)
         cases = [
@@ -1815,13 +1815,13 @@ def test_response_read_bound():
             # a body of exactly the bound is accepted; the leading spaces mean
             # any short read cuts the JSON tail and breaks parsing
             resp = RecordingResp(b" " * (limit - len(tail)) + tail.encode())
-            interp.urllib.request.urlopen = lambda req, timeout=None: resp
+            interp._urlopen = lambda req, timeout=None, deadline=None: resp
             assert func(*args) == parsed
             assert resp.sizes and max(resp.sizes) <= limit + 1, resp.sizes
 
             # one byte above the bound is refused, not parsed
             resp = RecordingResp(b" " * (limit + 1 - len(tail)) + tail.encode())
-            interp.urllib.request.urlopen = lambda req, timeout=None: resp
+            interp._urlopen = lambda req, timeout=None, deadline=None: resp
             try:
                 func(*args)
                 raise AssertionError(f"{func.__name__} accepted an oversized body")
@@ -1829,7 +1829,7 @@ def test_response_read_bound():
                 assert "size bound" in str(exc), str(exc)
             assert resp.sizes and max(resp.sizes) <= limit + 1, resp.sizes
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
     print("response read bound ok")
 
 
@@ -1873,10 +1873,11 @@ def test_request_deadline_bounded_read():
     finally:
         srv.close()
 
-    # the same deadline bounds the error body: urlopen raises HTTPError before
-    # any wrapper applies, so the error stream needs the wrap too. Without it
-    # this 503 held the request until the dribble reached EOF (~2.2 s at
-    # timeout=1); a full 4096-byte dribble would hold it without limit.
+    # the same deadline bounds the error body: exc.fp's stream comes
+    # pre-wrapped by response_class, so exc.read(4096) re-tightens per recv.
+    # Without the deadline this 503 held the request until the dribble
+    # reached EOF (~2.2 s at timeout=1); a full 4096-byte dribble would hold
+    # it without limit.
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)
@@ -1906,6 +1907,76 @@ def test_request_deadline_bounded_read():
             elapsed = time.monotonic() - start
             assert exc.kind == "http" and exc.code == 503, (exc.kind, exc.code)
             assert elapsed < 2.0, f"slow error body held the request {elapsed:.2f}s"
+    finally:
+        srv.close()
+
+    # a 302 body is drained inside urlopen by the redirect handler (python
+    # 3.13 http_error_302 calls fp.read() first), before _request ever sees a
+    # response object; the dribbled body must die at the deadline
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def trickle_302():
+        try:
+            conn, _ = srv.accept()
+            with conn:
+                head = ("HTTP/1.1 302 found\r\nLocation: /final\r\n"
+                        "Content-Type: text/plain\r\nConnection: close\r\n\r\n")
+                conn.sendall(head.encode())
+                for byte in b"x" * 16:   # dribbled redirect body, drained to EOF
+                    time.sleep(0.2)      # by the redirect handler itself
+                    conn.sendall(bytes([byte]))
+        except OSError:
+            pass
+
+    threading.Thread(target=trickle_302, daemon=True).start()
+    start = time.monotonic()
+    try:
+        try:
+            interp._request("POST", f"http://127.0.0.1:{port}/chat/completions",
+                            None, {}, timeout=1)
+            raise AssertionError("trickled redirect body accepted past deadline")
+        except interp._TransportError as exc:
+            elapsed = time.monotonic() - start
+            assert exc.kind == "unreachable", exc.kind
+            assert exc.detail == "deadline exceeded", exc.detail
+            assert elapsed < 2.0, f"slow redirect held the request {elapsed:.2f}s"
+    finally:
+        srv.close()
+
+    # the status line is read inside urlopen too (HTTPResponse.begin), after
+    # any interim 100 Continue replies are consumed there; a dribbled status
+    # line resets a per-recv timeout forever
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def trickle_100():
+        try:
+            conn, _ = srv.accept()
+            with conn:
+                conn.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")  # consumed at once
+                for byte in b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok":
+                    time.sleep(0.2)  # final status + body dribbled to EOF framing
+                    conn.sendall(bytes([byte]))
+        except OSError:
+            pass
+
+    threading.Thread(target=trickle_100, daemon=True).start()
+    start = time.monotonic()
+    try:
+        try:
+            interp._request("POST", f"http://127.0.0.1:{port}/chat/completions",
+                            None, {}, timeout=1)
+            raise AssertionError("trickled status accepted past deadline")
+        except interp._TransportError as exc:
+            elapsed = time.monotonic() - start
+            assert exc.kind == "unreachable", exc.kind
+            assert exc.detail == "deadline exceeded", exc.detail
+            assert elapsed < 2.0, f"slow status held the request {elapsed:.2f}s"
     finally:
         srv.close()
     print("request deadline ok")
@@ -3454,13 +3525,13 @@ def test_list_models():
     """The admin picker's source of truth: what the endpoint says it has."""
     calls = []
 
-    def fake_open(req, timeout=None):
+    def fake_open(req, timeout=None, deadline=None):
         calls.append((req.full_url, req.get_header("Authorization"), req.get_method()))
         return io.BytesIO(json.dumps({"data": [{"id": "b"}, {"id": "a"}, {"id": "a"},
                                                 {"id": 7}, {"id": " "}, {}, None, "junk"]}).encode())
 
-    real_open = interp.urllib.request.urlopen
-    interp.urllib.request.urlopen = fake_open
+    real_open = interp._urlopen
+    interp._urlopen = fake_open
     try:
         # sorted, deduped, non-string ids dropped; trailing slash not doubled
         assert interp.list_models({"base_url": "http://h/v1/", "api_key": "sekret"}) == ["a", "b"]
@@ -3470,22 +3541,22 @@ def test_list_models():
         assert calls[1][1] is None
 
         # an endpoint offering more than 500 distinct ids is capped at exactly 500
-        def flood(req, timeout=None):
+        def flood(req, timeout=None, deadline=None):
             return io.BytesIO(json.dumps(
                 {"data": [{"id": f"m{i:04d}"} for i in range(501)]}).encode())
 
-        interp.urllib.request.urlopen = flood
+        interp._urlopen = flood
         try:
             ids = interp.list_models({"base_url": "http://h/v1"})
             assert len(ids) == 500, len(ids)
             assert ids == sorted(ids) and ids[0] == "m0000" and ids[-1] == "m0499"
         finally:
-            interp.urllib.request.urlopen = fake_open
+            interp._urlopen = fake_open
 
-        def denied(req, timeout=None):
+        def denied(req, timeout=None, deadline=None):
             raise interp.urllib.error.HTTPError(req.full_url, 401, "no", {}, io.BytesIO(b""))
 
-        interp.urllib.request.urlopen = denied
+        interp._urlopen = denied
         try:
             interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
             raise AssertionError("401 accepted")
@@ -3494,11 +3565,11 @@ def test_list_models():
             assert "sekret" not in str(exc)
 
         # 403 is also read as a credentials rejection, key not leaked
-        def forbidden(req, timeout=None):
+        def forbidden(req, timeout=None, deadline=None):
             raise interp.urllib.error.HTTPError(req.full_url, 403, "no", Message(),
                                                 io.BytesIO(b"no sekret for you"))
 
-        interp.urllib.request.urlopen = forbidden
+        interp._urlopen = forbidden
         try:
             interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
             raise AssertionError("403 accepted")
@@ -3507,10 +3578,10 @@ def test_list_models():
             assert "sekret" not in str(exc), exc
 
         # unreachable: the reason part is truncated at its 200-char bound
-        def unreachable_long(req, timeout=None):
+        def unreachable_long(req, timeout=None, deadline=None):
             raise interp.urllib.error.URLError("U" * 400)
 
-        interp.urllib.request.urlopen = unreachable_long
+        interp._urlopen = unreachable_long
         try:
             interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
             raise AssertionError("unreachable accepted")
@@ -3520,10 +3591,10 @@ def test_list_models():
             assert len(msg) == len("endpoint unreachable: ") + 200, msg  # 416-char reason cut at 200
             assert "sekret" not in msg
 
-        def broken(req, timeout=None):
+        def broken(req, timeout=None, deadline=None):
             raise interp.urllib.error.HTTPError(req.full_url, 500, "no", {}, io.BytesIO(b""))
 
-        interp.urllib.request.urlopen = broken
+        interp._urlopen = broken
         try:
             interp.list_models({"base_url": "http://h/v1"})
             raise AssertionError("500 accepted")
@@ -3536,10 +3607,10 @@ def test_list_models():
         class Stalled(io.BytesIO):
             def read(self, n=-1): raise TimeoutError("body stalled")
 
-        def stalled(req, timeout=None):
+        def stalled(req, timeout=None, deadline=None):
             raise interp.urllib.error.HTTPError(req.full_url, 404, "no", {}, Stalled())
 
-        interp.urllib.request.urlopen = stalled
+        interp._urlopen = stalled
         try:
             interp.list_models({"base_url": "http://h/v1"})
             raise AssertionError("stalled error body accepted")
@@ -3548,21 +3619,21 @@ def test_list_models():
 
         # chat transport: both auth refusals read as credential errors
         for code in (401, 403):
-            def refused(req, timeout=None, code=code):
+            def refused(req, timeout=None, deadline=None, code=code):
                 raise interp.urllib.error.HTTPError(
                     req.full_url, code, "no", {}, io.BytesIO(b"sekret detail"))
 
-            interp.urllib.request.urlopen = refused
+            interp._urlopen = refused
             try:
                 interp.post("http://h/v1", "sekret", {}, 5)
                 raise AssertionError(f"{code} accepted")
             except interp.InterpretationError as exc:
                 assert str(exc) == f"endpoint rejected credentials (HTTP {code})", exc
 
-        def unreachable(req, timeout=None):
+        def unreachable(req, timeout=None, deadline=None):
             raise interp.urllib.error.URLError("refused by sekret")
 
-        interp.urllib.request.urlopen = unreachable
+        interp._urlopen = unreachable
         try:
             interp.list_models({"base_url": "http://h/v1", "api_key": "sekret"})
             raise AssertionError("unreachable accepted")
@@ -3571,13 +3642,13 @@ def test_list_models():
 
         # a server that answers but not with a model list is a config error,
         # never an empty picker that looks like "no models installed"
-        interp.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b"<html>nope</html>")
+        interp._urlopen = lambda req, timeout=None, deadline=None: io.BytesIO(b"<html>nope</html>")
         try:
             interp.list_models({"base_url": "http://h/v1"})
             raise AssertionError("garbage accepted")
         except interp.ConfigurationError:
             pass
-        interp.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b'{"data":{}}')
+        interp._urlopen = lambda req, timeout=None, deadline=None: io.BytesIO(b'{"data":{}}')
         try:
             interp.list_models({"base_url": "http://h/v1"})
             raise AssertionError("non-list data accepted")
@@ -3586,7 +3657,7 @@ def test_list_models():
         limit = interp.LLM_RESPONSE_MAX
         interp.LLM_RESPONSE_MAX = 16
         try:
-            interp.urllib.request.urlopen = lambda req, timeout=None: io.BytesIO(b'{"data":[]}' + b" " * 20)
+            interp._urlopen = lambda req, timeout=None, deadline=None: io.BytesIO(b'{"data":[]}' + b" " * 20)
             try:
                 interp.list_models({"base_url": "http://h/v1"})
                 raise AssertionError("oversized response accepted")
@@ -3595,7 +3666,7 @@ def test_list_models():
         finally:
             interp.LLM_RESPONSE_MAX = limit
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
     print("model listing ok")
 
 
@@ -3609,17 +3680,17 @@ def test_list_models_sends_no_body():
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
-    def fake_open(req, timeout=None):
+    def fake_open(req, timeout=None, deadline=None):
         seen.append((req.get_method(), req.data, req.get_header("Content-type")))
         return Resp(json.dumps({"data": []}).encode())
 
-    real_open = interp.urllib.request.urlopen
-    interp.urllib.request.urlopen = fake_open
+    real_open = interp._urlopen
+    interp._urlopen = fake_open
     try:
         assert interp.list_models({"base_url": "http://h/v1"}) == []
         assert seen == [("GET", None, None)], seen
     finally:
-        interp.urllib.request.urlopen = real_open
+        interp._urlopen = real_open
     print("list models sends no body ok")
 
 

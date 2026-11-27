@@ -8,10 +8,12 @@ one doubled-limit retry on finish_reason=length; never invents findings on
 configuration failure.
 
 Transport seam: _request() below is the ONE http adapter; post() and
-list_models() wrap it. Tests fake _request instead of reaching further in;
+list_models() wrap it. Tests fake _urlopen instead of reaching further in;
 the worker owns retries and policy around post().
 """
 import base64
+import functools
+import http.client
 import io
 import json
 import os
@@ -176,16 +178,62 @@ class _TransportError(InterpretationError):
         super().__init__(message)
 
 
-def _deadline_stream(fp, deadline):
-    """Response stream whose every recv re-tightens the socket timeout to the
-    remaining whole-request budget (network._DeadlineIO): urlopen(timeout=)
-    bounds each recv alone, so a byte-at-a-time trickle resets the clock
-    forever and holds a worker slot without limit. None for fake in-memory
-    streams (tests), which read straight through."""
-    sock = getattr(getattr(fp, "raw", None), "_sock", None)
-    if sock is None:
-        return None
-    return io.BufferedReader(network._DeadlineIO(sock, fp, deadline))
+class _DeadlineConnection(http.client.HTTPConnection):
+    """HTTPConnection under one absolute whole-request deadline. The
+    response stream is network._DeadlineIO: every recv re-tightens the socket
+    timeout to the remaining budget, so the status line, headers, interim
+    100 Continue replies, the body, and the redirect-body drain all die at
+    the deadline. urlopen(timeout=) bounds each recv alone, and those reads
+    happen inside urlopen, where _request cannot wrap anything afterwards."""
+
+    def __init__(self, *args, deadline, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._deadline = deadline
+
+    def response_class(self, sock, *args, **kwargs):
+        resp = http.client.HTTPResponse(sock, *args, **kwargs)
+        resp.fp = io.BufferedReader(
+            network._DeadlineIO(sock, resp.fp, self._deadline))
+        return resp
+
+
+class _DeadlineHTTPSConnection(_DeadlineConnection, http.client.HTTPSConnection):
+    """HTTPS twin; only the TLS handshake itself stays on per-op timeouts."""
+
+
+class _DeadlineHTTPHandler(urllib.request.HTTPHandler):
+    """Opener handler that hands _request's deadline to the connection."""
+
+    def __init__(self, deadline):
+        super().__init__()
+        self._deadline = deadline
+
+    def http_open(self, req):
+        return self.do_open(functools.partial(_DeadlineConnection,
+                                              deadline=self._deadline), req)
+
+
+class _DeadlineHTTPSHandler(urllib.request.HTTPSHandler):
+    """HTTPS twin of _DeadlineHTTPHandler."""
+
+    def __init__(self, deadline):
+        super().__init__()
+        self._deadline = deadline
+
+    def https_open(self, req):
+        return self.do_open(functools.partial(_DeadlineHTTPSConnection,
+                                              deadline=self._deadline), req,
+                            context=self._context)
+
+
+def _urlopen(req, timeout, deadline):
+    """ONE urlopen seam; tests patch this. The real path builds an opener
+    whose connections carry the deadline, so it governs every response read,
+    including the ones inside urlopen (status and header parsing, interim
+    100 Continue replies, the redirect body drain)."""
+    opener = urllib.request.build_opener(
+        _DeadlineHTTPHandler(deadline), _DeadlineHTTPSHandler(deadline))
+    return opener.open(req, timeout=timeout)
 
 
 def _request(method, url, key, payload, timeout):
@@ -197,16 +245,10 @@ def _request(method, url, key, payload, timeout):
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     deadline = time.monotonic() + timeout
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            fp = getattr(resp, "fp", None)
-            if fp is not None:  # fake in-memory responses have none
-                resp.fp = _deadline_stream(fp, deadline) or fp
+        with _urlopen(req, timeout=timeout, deadline=deadline) as resp:
             raw = resp.read(LLM_RESPONSE_MAX + 1)
     except urllib.error.HTTPError as exc:
         try:  # a stalled or reset error body must not skip the OSError
-            inner = getattr(exc.fp, "fp", None)  # HTTPResponse wraps a stream
-            if inner is not None:  # the error body read loops recvs too, so
-                exc.fp.fp = _deadline_stream(inner, deadline) or inner
             body = exc.read(4096)  # mapping below: degrade to an empty body
         except OSError:
             body = b""
