@@ -269,6 +269,14 @@ def runtime_plus(snippet):
     return REAL.replace(anchor, snippet + "\n" + anchor)
 
 
+def whisper_args():
+    """ARG lines that match the inventoried Whisper model pin."""
+    model = check_licenses.INV["image"]["whisper_model"]
+    return (f"ARG WHISPER_MODEL_FILE={model['file']}\n"
+            f"ARG WHISPER_MODEL_URL={model['url']}\n"
+            f"ARG WHISPER_MODEL_SHA256={model['sha256']}\n")
+
+
 class CheckImageTests(unittest.TestCase):
     def test_checks_runtime_external_base_and_ignores_stage_alias(self):
         image = check_licenses.INV["image"]
@@ -285,6 +293,7 @@ class CheckImageTests(unittest.TestCase):
             f"ARG SQLITE_TARBALL={sqlite['tarball']}\n"
             f"ARG SQLITE_URL={sqlite['url']}\n"
             f"ARG SQLITE_SHA256={sqlite['sha256']}\n"
+            + whisper_args() +
             "COPY THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md\n"
         )
 
@@ -376,6 +385,26 @@ class CheckImageTests(unittest.TestCase):
                 self.assertIn(f"ARG {arg} is {pinned}", errors[0])
                 self.assertIn("inventory pins", errors[0])
 
+    def test_whisper_model_arg_pins_are_enforced(self):
+        model = check_licenses.INV["image"]["whisper_model"]
+        self.assertIn(whisper_args(), REAL)
+        self.assertEqual(image_errors(REAL), [])
+        bad_sha = "0" * 64
+        changed = REAL.replace(
+            f"ARG WHISPER_MODEL_SHA256={model['sha256']}",
+            f"ARG WHISPER_MODEL_SHA256={bad_sha}", 1)
+        self.assertNotEqual(changed, REAL)
+        missing = REAL.replace(
+            f"ARG WHISPER_MODEL_URL={model['url']}\n", "", 1)
+        self.assertNotEqual(missing, REAL)
+        for dockerfile, arg, found, key in (
+                (changed, "WHISPER_MODEL_SHA256", bad_sha, "sha256"),
+                (missing, "WHISPER_MODEL_URL", "missing", "url")):
+            with self.subTest(arg=arg):
+                errors = image_errors(dockerfile)
+                self.assertEqual(errors, [
+                    f"image: ARG {arg} is {found}, inventory pins {model[key]}"])
+
     def test_missing_notices_copy_fails(self):
         dockerfile = REAL.replace(
             "COPY THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md\n", "", 1)
@@ -391,6 +420,7 @@ class CheckImageTests(unittest.TestCase):
             f"ARG SQLITE_TARBALL={sqlite['tarball']}\n"
             f"ARG SQLITE_URL={sqlite['url']}\n"
             f"ARG SQLITE_SHA256={sqlite['sha256']}\n"
+            + whisper_args() +
             "COPY THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md\n"
         )
         base = check_licenses.INV["image"]["base"]

@@ -12,8 +12,8 @@
 #             SET, the VERSION and the LICENSE of every shipped distribution.
 #   android : `gradlew :app:dependencies --configuration releaseRuntimeClasspath`
 #             (versions here are resolved pins and ARE gate-checked exactly).
-#   image   : Dockerfile pins (base, apt lines, bundled SQLite), read from the
-#             Dockerfile text, not from a built image.
+#   image   : Dockerfile pins (base, apt lines, bundled SQLite, Whisper model),
+#             read from the Dockerfile text, not from a built image.
 #
 # Enforced by check_licenses.py in ci.yml; the gate rules are notices policy item 3 in THIRD_PARTY_NOTICES.md.
 
@@ -59,8 +59,8 @@ cffi              = { observed = "2.1.1",   license = "MIT-0",        meta = "MI
 pycparser         = { observed = "3.12",    license = "BSD-3-Clause", meta = "BSD-3-Clause" }
 argon2-cffi-bindings = { observed = "26.2.0", license = "MIT",        meta = "MIT" }
 httpx2            = { observed = "2.16.2",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
-pydantic          = { observed = "2.14.3",  license = "MIT",          meta = "MIT" }
-pydantic-core     = { observed = "2.50.4",  license = "MIT",          meta = "MIT" }
+pydantic          = { observed = "2.14.4",  license = "MIT",          meta = "MIT" }
+pydantic-core     = { observed = "2.50.5",  license = "MIT",          meta = "MIT" }
 tenacity          = { observed = "9.2.1",   license = "Apache-2.0",   meta = "Apache-2.0" }
 typing-extensions = { observed = "4.16.0",  license = "PSF-2.0",      meta = "PSF-2.0" }
 httpcore2         = { observed = "2.16.2",  license = "BSD-3-Clause", meta = "BSD-3-Clause" }
@@ -73,6 +73,15 @@ packaging         = { observed = "26.3",    license = "Apache-2.0",   meta = "Ap
 # django declares tzdata only on win32, but the hash-locked requirements.lock
 # ships it on every platform (harmless data package, Apache-2.0).
 tzdata            = { observed = "2026.5",  license = "Apache-2.0",   meta = "Apache-2.0" }
+# Local Whisper speech-to-text (CLIP-171); bundles whisper.cpp/ggml (MIT).
+pywhispercpp      = { observed = "1.5.1",   license = "MIT",          meta = "MIT" }
+# numpy itself is BSD-3-Clause; its bundled components are 0BSD, MIT, Zlib and
+# CC0-1.0, all permissive (pywhispercpp dep).
+numpy             = { observed = "2.5.5",   license = "BSD-3-Clause", meta = "BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0" }
+# tqdm is MPL-2.0 (weak, file-level copyleft) with MIT-licensed parts; unmodified
+# (pywhispercpp dep).
+tqdm              = { observed = "4.70.1",  license = "MPL-2.0",      meta = "MPL-2.0 AND MIT" }
+platformdirs      = { observed = "4.14.8",  license = "MIT",          meta = "MIT" }
 
 [android]
 # Resolved releaseRuntimeClasspath (Gradle 8.9 / AGP 8.7.3, build-time tooling
@@ -160,8 +169,8 @@ non_packaged = ["org.jetbrains.kotlinx:kotlinx-coroutines-bom",
 # with sources on deb.debian.org. The gate checks the pins below, not each
 # package's license.
 base = "python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928"
-# Multistage build: the compiler set lives in the discarded sqlite-build stage;
-# only the runtime set ships.
+# Multistage build: the compiler set lives in the discarded sqlite-build stage
+# (which also downloads the Whisper model); only the runtime set ships.
 apt_build_stage = ["ca-certificates", "gcc", "libc6-dev", "make"]
 apt_runtime = ["ca-certificates", "ffmpeg"]
 
@@ -171,6 +180,15 @@ tarball = "sqlite-autoconf-3530100.tar.gz"
 url = "https://sqlite.org/2026/sqlite-autoconf-3530100.tar.gz"
 sha256 = "83e6b2020a034e9a7ad4a72feea59e1ad52f162e09cbd26735a3ffb98359fc4f"
 license = "LicenseRef-Public-Domain"
+
+[image.whisper_model]
+# Whisper "small" speech-to-text model baked into the image (CLIP-171): OpenAI
+# Whisper weights (MIT) in the ggml format of whisper.cpp (MIT).
+file = "ggml-small.bin"
+url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin"
+sha256 = "1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b"
+revision = "5359861c739e955e79d9a303bcbc70fb988958b1"
+license = "MIT"
 
 [fonts.entries]
 # Bundled font files. check_licenses.py does not find fonts: change this

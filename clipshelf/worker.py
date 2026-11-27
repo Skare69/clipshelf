@@ -41,6 +41,7 @@ from clipshelf import (
     lib,
     models,
     services,
+    transcription,
 )
 from clipshelf.management.locks import coordinator_lock, data_lock
 
@@ -246,6 +247,7 @@ def _process_job(job):
         if not _acquire_phase(job):
             return
     if job.interpretation == "pending" and job.acquisition in ("complete", "partial"):
+        _transcribe_phase(job)
         _interpret_phase(job)
         return
     if job.acquisition != "pending" and job.interpretation != "pending":
@@ -285,6 +287,45 @@ def _acquire_phase(job):
         _fail(job, acquisition.AcquisitionError(error))
         return False
     return True
+
+
+def _transcribe_phase(job):
+    """Local speech-to-text for a caption-less video, before interpretation:
+    new captures, browser imports and operator requeues (which keep a complete
+    acquisition) all pass here. A failure only adds a visible warning; the
+    job is interpreted either way and never fails for it. A failed or silent
+    attempt leaves a source marker, so automatic retries skip the costly run
+    again; Job.requeue (operator Retry) clears it."""
+    metadata = (job.source or {}).get("metadata")
+    if not isinstance(metadata, dict) or (
+            metadata.get("media"), metadata.get("captions")) != ("video", "none") or (
+            transcription.MARKER in metadata):
+        return
+    video = next((asset["path"] for asset in _material(job).get("assets") or []
+                  if asset.get("kind") == "video" and isinstance(asset.get("path"), str)),
+                 None)
+    try:
+        if video is None:
+            raise transcription.TranscriptionError("video file unavailable")
+        text = transcription.transcribe(video)
+    except transcription.TranscriptionError as exc:
+        message = str(exc)
+        if not message.startswith(transcription.WARNING_PREFIX):
+            message = f"local transcription failed: {message}"
+        _record_attempt(job, "failed", message)
+        return
+    if not text:
+        _record_attempt(job, "no-speech", "local transcription found no speech")
+        return
+    services.store_transcript(job, text)
+
+
+def _record_attempt(job, outcome, message):
+    source = dict(job.source or {})
+    source["metadata"] = {**source.get("metadata", {}), transcription.MARKER: outcome}
+    job.source = source
+    job.warnings = _warn(job, message)
+    job.save(update_fields=["source", "warnings", "updated_at"])
 
 
 def _interpret_phase(job):

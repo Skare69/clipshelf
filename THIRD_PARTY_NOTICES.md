@@ -73,8 +73,8 @@ are the source of record; every wheel ships its license text inside
 | pycparser | 3.12 | BSD-3-Clause | |
 | argon2-cffi-bindings | 26.2.0 | MIT | |
 | httpx2 | 2.16.2 | BSD-3-Clause | |
-| pydantic | 2.14.3 | MIT | |
-| pydantic-core | 2.50.4 | MIT | |
+| pydantic | 2.14.4 | MIT | |
+| pydantic-core | 2.50.5 | MIT | |
 | tenacity | 9.2.1 | Apache-2.0 | |
 | typing-extensions | 4.16.0 | PSF-2.0 | |
 | httpcore2 | 2.16.2 | BSD-3-Clause | |
@@ -84,6 +84,10 @@ are the source of record; every wheel ships its license text inside
 | typing-inspection | 0.4.5 | MIT | |
 | packaging | 26.3 | Apache-2.0 | dual-licensed `Apache-2.0 OR BSD-2-Clause`, used under Apache-2.0; required by typesafe-sdk |
 | tzdata | 2026.5 | Apache-2.0 | django declares it only on win32, but `requirements.lock` ships it on every platform, including the linux image |
+| pywhispercpp | 1.5.1 | MIT | local Whisper speech-to-text; bundles whisper.cpp/ggml (MIT) |
+| numpy | 2.5.5 | BSD-3-Clause | metadata `BSD-3-Clause AND 0BSD AND MIT AND Zlib AND CC0-1.0`: bundled components are 0BSD/MIT/Zlib/CC0-1.0, all permissive; required by pywhispercpp |
+| tqdm | 4.70.1 | MPL-2.0 | metadata `MPL-2.0 AND MIT`; installed unmodified; required by pywhispercpp |
+| platformdirs | 4.14.8 | MIT | required by pywhispercpp |
 
 Not installed on purpose: yt-dlp's `[default]` extras (mutagen — **GPL-2.0+**,
 pycryptodomex, websockets, yt-dlp-ejs, brotli). If requirements ever enable
@@ -196,12 +200,14 @@ license text is under "Full license texts".
 | python:3.15-slim base | pinned by digest (`sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928`, both Dockerfile stages) | PSF-2.0 (CPython) + Debian distro set | |
 | pip (in base) | per base image | MIT | tooling, not an application dependency |
 | Debian packages: ca-certificates, ffmpeg (runtime image) | per Debian release | DFSG set; ffmpeg program build is **GPL-2.0-or-later** | license texts ship in-image at `/usr/share/doc/<pkg>/copyright`; sources on deb.debian.org |
-| Debian packages: ca-certificates, gcc, libc6-dev, make (build stage only) | per Debian release | DFSG set | compile the bundled SQLite; discarded in the multistage build, never shipped |
+| Debian packages: ca-certificates, gcc, libc6-dev, make (build stage only) | per Debian release | DFSG set | compile the bundled SQLite and download the Whisper model; discarded in the multistage build, never shipped |
 | SQLite (bundled, built from pinned tarball) | 3.53.1 | Public domain | sqlite.org; sha256-verified at build |
+| Whisper model `ggml-small.bin` (bundled at `/opt/whisper/`) | revision `5359861c739e955e79d9a303bcbc70fb988958b1` | MIT | OpenAI Whisper "small" weights (MIT), converted to ggml by whisper.cpp (MIT); source https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin; sha256-verified at build |
 
 Debian policy: the distro guarantees DFSG-free licenses for its packages; the
 per-package copyright/license files are inside the image. The gate checks the
-Dockerfile pins (base, apt set, SQLite tarball + sha256), not each package's
+Dockerfile pins (base, apt set, SQLite tarball + sha256, Whisper model URL +
+sha256), not each package's
 license. The exact Debian release is whatever the pinned base digest carries
 (see `/etc/os-release` in the image).
 
@@ -225,7 +231,7 @@ The wheels and AARs in the artifacts carry their own license texts
 (`*.dist-info/licenses/`, Maven POM/NOTICE). The four licenses that require
 or warrant a verbatim copy in a redistribution are reproduced below: GNU GPL
 v2 (gallery-dl, ffmpeg), Apache License 2.0 (the Android stack, requests,
-tenacity), Mozilla Public License 2.0 (certifi), and SIL Open Font License
+tenacity), Mozilla Public License 2.0 (certifi, tqdm), and SIL Open Font License
 1.1 (Archivo). Short permissive licenses (MIT/BSD/PSF/ZPL/Unlicense) are used
 under their standard attribution requirements, satisfied by the tables above
 plus the texts shipped in the packages themselves.

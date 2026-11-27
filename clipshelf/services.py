@@ -18,7 +18,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
-from clipshelf import asset_files, interpretation, judgment, lib, publication
+from clipshelf import acquisition, asset_files, interpretation, judgment, lib, publication, transcription
 from clipshelf.interpretation import GuardrailBlocked
 from clipshelf.lib import _str
 
@@ -733,6 +733,42 @@ def store_source(job, source):
             )
         job.warnings = list(dict.fromkeys(list(job.warnings or []) + warnings))[:100]
         job.save()
+    caller_job.refresh_from_db()
+
+
+def store_transcript(job, text):
+    """Persist a local transcript of a caption-less video: append it to the
+    source text, mark captions "local-asr" (dropping the failed-attempt
+    marker), drop the no-captions warning and stale transcription warnings
+    (store_source unions job warnings across runs), and refresh the capture
+    contribution's text. Never moves or creates a contribution; a removed
+    (tombstoned) entry stays removed."""
+    text = _str(text)
+    caller_job = job  # the locked row below is a separate instance
+
+    def stale(warning):
+        return warning == acquisition.NO_CAPTIONS_WARNING or (
+            isinstance(warning, str) and warning.startswith(transcription.WARNING_PREFIX))
+
+    with transaction.atomic():
+        job = Job.objects.select_for_update().get(pk=job.pk)
+        source = dict(job.source or {})
+        prior = _str(source.get("text"))
+        combined = (f"{prior}\n\n{text}" if prior else text)[:TEXT_MAX]
+        metadata = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
+        source["text"] = combined
+        source["metadata"] = {**{k: v for k, v in metadata.items() if k != transcription.MARKER},
+                              "captions": "local-asr"}
+        source["warnings"] = [w for w in _stored_list(source.get("warnings")) if not stale(w)]
+        job.source = source
+        job.warnings = [w for w in _stored_list(job.warnings) if not stale(w)]
+        job.save()
+        if can_write(job.capture.user, job.collection):
+            contribution = Contribution.objects.filter(
+                job=job, origin="capture", entry__kind=Entry.Kind.LINK).first()
+            if contribution is not None:
+                contribution.data = {**(contribution.data or {}), "text": combined}
+                contribution.save(update_fields=["data"])
     caller_job.refresh_from_db()
 
 

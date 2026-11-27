@@ -17,7 +17,7 @@
   <a href="https://github.com/ottr-ai/ottr"><img src="https://raw.githubusercontent.com/ottr-ai/ottr/main/.github/assets/built-with-ottr.png" alt="Built with Ottr"></a>
 </p>
 
-Share a link from your phone and your own server fetches what is actually in the post: TikTok photo carousels slide by slide with their audio, video with its ASR captions, pages as text. A vision model that you host turns that into typed link and prompt entries (a repo is a link) with a summary and a category, not only tags. The Android app queues shares while offline and delivers them when it can. Self-hosted and account-based. A local model needs no third-party model service when optional screening is off. The worker still re-verifies github.com links that occur in captured pages (see [docs/privacy.md](docs/privacy.md)).
+Share a link from your phone and your own server fetches what is actually in the post: TikTok photo carousels slide by slide with their audio, video with its ASR captions or a local Whisper transcript, pages as text. A vision model that you host turns that into typed link and prompt entries (a repo is a link) with a summary and a category, not only tags. The Android app queues shares while offline and delivers them when it can. Self-hosted and account-based. A local model needs no third-party model service when optional screening is off. The worker still re-verifies github.com links that occur in captured pages (see [docs/privacy.md](docs/privacy.md)).
 
 ![clipshelf](screenshot.jpg)
 
@@ -27,6 +27,7 @@ Share a link from your phone and your own server fetches what is actually in the
 - Paste a URL into the web **Add** dialog from any browser.
 - Follow a TikTok creator profile with a topic tag. The worker checks each followed profile on a schedule and captures its new posts by itself. Press **Suggest tags** to get topic tags from the configured model for the profile, and click one to use it.
 - Keep the whole post: page text, TikTok video with its ASR captions, photo carousels slide by slide with their audio, and the original source for viewing.
+- Get the spoken words of a TikTok video that has no captions. The worker transcribes its audio locally with Whisper (model `small`, inside the image). The audio does not leave your server. Press **Retry** on an older item to transcribe it.
 - Get a summary and a category for every entry from a vision model that you host.
 - Browse the Library, search it, and group entries into collections.
 - Run one container on the NAS, with the SQLite database and the retained media on one data volume.

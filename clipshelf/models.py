@@ -16,7 +16,7 @@ from django.utils import timezone
 from django.utils.crypto import salted_hmac
 from django.utils.translation import gettext_lazy as _
 
-from clipshelf import lib
+from clipshelf import lib, transcription
 
 # Omitted-value sentinel for ServerSettings.resolve; distinct from an explicit
 # empty string, which clears the key.
@@ -341,6 +341,11 @@ class Job(models.Model):
             self.acquisition = self.AcquisitionStatus.PENDING
         self.interpretation = self.InterpretationStatus.PENDING
         self.url_failures = None
+        # Operator Retry re-runs local transcription that failed or heard nothing.
+        metadata = (self.source or {}).get("metadata")
+        if isinstance(metadata, dict) and transcription.MARKER in metadata:
+            self.source = {**self.source, "metadata": {
+                k: v for k, v in metadata.items() if k != transcription.MARKER}}
         self.save()
 
     def __str__(self):

@@ -4,7 +4,10 @@ from contextlib import redirect_stdout
 import io
 import json
 import os
+import random
 import shutil
+import subprocess
+import sys
 import threading
 import tempfile
 import time
@@ -18,7 +21,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db.utils import OperationalError
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 
 # Standalone self-check (`$PY test_worker.py`): models import at module level,
@@ -29,7 +32,8 @@ django.setup()
 
 from PIL import Image
 
-from clipshelf import cli, extracted_merge, imports, lib, models, network, publication, services, worker
+from clipshelf import (acquisition, cli, extracted_merge, imports, interpretation, lib, models,
+                       network, publication, services, transcription, worker)
 
 FINDINGS = {"source": "", "summary": "good findings", "repos": [], "prompts": [],
             "links": [], "categories": [], "installs": [], "warnings": []}
@@ -1991,6 +1995,311 @@ class CoordinatorRefillTests(WorkerMixin, TransactionTestCase):
         # The third, empty claim round proves it kept claiming after work
         # remained claimable, then broke once nothing was claimable.
         self.assertEqual(claims["n"], 3)
+
+
+def fake_video_acquire(url, directory, captions="none", media="video"):
+    """A TikTok-shaped video source: no text, captions as given, and the
+    no-captions warning acquisition adds for a caption-less video."""
+    path = Path(directory) / "video.mp4"
+    path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    warnings = ([acquisition.NO_CAPTIONS_WARNING]
+                if media == "video" and captions == "none" else [])
+    return {"url": url, "original_url": url, "title": "t", "desc": "d", "text": "",
+            "links": [], "assets": [{"path": str(path), "kind": "video",
+                                     "content_type": "video/mp4", "position": 0}],
+            "acquisition": "complete", "warnings": warnings,
+            "metadata": {"media": media, "captions": captions}}
+
+
+class LocalTranscriptionTests(WorkerMixin, TransactionTestCase):
+    """Caption-less videos get a local transcript before interpretation; a
+    failed or silent transcription only warns, and the job still completes."""
+
+    def run_video(self, transcribe, interpret=None, **video):
+        with mock.patch("clipshelf.transcription.transcribe", side_effect=transcribe) as spy:
+            self.run_worker(interpret=interpret,
+                            acquire=lambda url, d: fake_video_acquire(url, d, **video))
+        return spy
+
+    def contribution(self, job):
+        return models.Contribution.objects.get(job=job, origin="capture", entry__kind="link")
+
+    def test_caption_less_video_gets_local_transcript(self):
+        seen = []
+
+        def interpret(source, config, cats, **kw):
+            seen.append(source)
+            return {**FINDINGS, "source": source["url"]}
+
+        job = self.make_job(url="https://www.tiktok.com/@a/video/1")
+        spy = self.run_video(lambda path: "hello from the video", interpret=interpret)
+        job = self.refresh(job)
+        video = Path(spy.call_args.args[0])
+        self.assertTrue(video.is_absolute() and video.is_file())
+        self.assertEqual(video.resolve().parent.parent, (self.tmp / "assets").resolve())
+        self.assertEqual((job.state, job.interpretation), ("done", "complete"))
+        self.assertEqual(job.source["text"], "hello from the video")
+        self.assertEqual(job.source["metadata"]["captions"], "local-asr")
+        self.assertNotIn(acquisition.NO_CAPTIONS_WARNING, job.source["warnings"])
+        self.assertNotIn(acquisition.NO_CAPTIONS_WARNING, job.warnings)
+        data = self.contribution(job).data
+        self.assertEqual(data["text"], "hello from the video")
+        self.assertEqual(data["title"], "t")  # merged, not replaced
+        # The interpreter reads the transcript and gets no "no captions" note.
+        self.assertEqual(len(seen), 1)
+        state = interpretation._material_state(seen[0], [])
+        self.assertEqual(state["page_text"], "hello from the video")
+        self.assertEqual(state["captions_note"], "")
+
+    def test_requeue_transcribes_an_old_caption_less_video(self):
+        job = self.make_job(url="https://www.tiktok.com/@a/video/2")
+        self.run_video(transcription.TranscriptionError(
+            "local transcription unavailable: no Whisper model file (CLIPSHELF_WHISPER_MODEL)"))
+        job = self.refresh(job)
+        self.assertEqual(job.state, "done")
+        self.assertEqual(job.source["metadata"]["captions"], "none")
+        self.assertEqual(job.source["metadata"][transcription.MARKER], "failed")
+        self.assertIn(acquisition.NO_CAPTIONS_WARNING, job.warnings)
+        # The missing-model reason already names the feature: no double prefix.
+        self.assertIn("local transcription unavailable: no Whisper model file "
+                      "(CLIPSHELF_WHISPER_MODEL)", job.warnings)
+        self.assertFalse([w for w in job.warnings if w.startswith("local transcription failed")])
+
+        job.requeue()
+        self.assertNotIn(transcription.MARKER, self.refresh(job).source["metadata"])
+        self.assertEqual(job.source["metadata"]["captions"], "none")  # rest untouched
+
+        def no_reacquire(url, directory):
+            raise AssertionError("a requeue with complete acquisition must not refetch")
+
+        with mock.patch("clipshelf.transcription.transcribe", return_value="spoken words"):
+            self.run_worker(acquire=no_reacquire)
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.interpretation), ("done", "complete"))
+        self.assertEqual(job.source["text"], "spoken words")
+        self.assertEqual(job.source["metadata"]["captions"], "local-asr")
+        self.assertNotIn(transcription.MARKER, job.source["metadata"])
+        self.assertNotIn(acquisition.NO_CAPTIONS_WARNING, job.warnings)
+        self.assertFalse([w for w in job.warnings if w.startswith("local transcription")],
+                         "a stale transcription failure survived the successful retry")
+        self.assertEqual(self.contribution(job).data["text"], "spoken words")
+
+    def test_failed_attempt_is_not_rerun_on_automatic_retries(self):
+        def model_down(source, config, cats, **kw):
+            raise interpretation.InterpretationError("model down")
+
+        job = self.make_job(url="https://www.tiktok.com/@a/video/9")
+        spy = self.run_video(transcription.TranscriptionError("no audio track"),
+                             interpret=model_down)
+        self.assertEqual(spy.call_count, 1)
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.source["metadata"][transcription.MARKER]),
+                         ("retry", "failed"))
+        models.Job.objects.filter(pk=job.pk).update(
+            retry_at=timezone.now() - timedelta(seconds=1))
+        cfg = services.get_settings()
+        cfg.llm_model = ""
+        cfg.save()
+        # Backoff retry, then the CONFIG_ERROR resume: neither transcribes again.
+        spy = self.run_video(AssertionError("transcribed again without requeue"))
+        spy.assert_not_called()
+        self.assertEqual(self.refresh(job).error, worker.CONFIG_ERROR)
+        cfg.llm_model = "test-model"
+        cfg.save()
+        spy = self.run_video(AssertionError("transcribed again without requeue"))
+        spy.assert_not_called()
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.interpretation), ("done", "complete"))
+        self.assertIn("local transcription failed: no audio track", job.warnings)
+
+    def test_transcription_failure_warns_and_still_interprets(self):
+        calls = []
+
+        def interpret(source, config, cats, **kw):
+            calls.append(source["url"])
+            return {**FINDINGS, "source": source["url"]}
+
+        job = self.make_job(url="https://www.tiktok.com/@a/video/3")
+        self.run_video(transcription.TranscriptionError("no audio track"), interpret=interpret)
+        job = self.refresh(job)
+        self.assertEqual(calls, [job.url])
+        self.assertEqual((job.state, job.interpretation, job.attempts), ("done", "complete", 0))
+        self.assertIn("local transcription failed: no audio track", job.warnings)
+        self.assertIn(acquisition.NO_CAPTIONS_WARNING, job.warnings)
+        self.assertEqual(job.source["metadata"]["captions"], "none")
+
+    def test_silent_video_keeps_captions_none(self):
+        job = self.make_job(url="https://www.tiktok.com/@a/video/4")
+        self.run_video(lambda path: "")
+        job = self.refresh(job)
+        self.assertEqual((job.state, job.interpretation), ("done", "complete"))
+        self.assertIn("local transcription found no speech", job.warnings)
+        self.assertEqual(job.source["text"], "")
+        self.assertEqual(job.source["metadata"]["captions"], "none")
+        self.assertEqual(job.source["metadata"][transcription.MARKER], "no-speech")
+
+    def test_captioned_and_non_video_sources_skip_transcription(self):
+        self.make_job(url="https://www.tiktok.com/@a/video/5")
+        spy = self.run_video(AssertionError("captioned video transcribed"), captions="asr")
+        spy.assert_not_called()
+        self.make_job(url="https://www.tiktok.com/@a/photo/6")
+        spy = self.run_video(AssertionError("image post transcribed"), media="image")
+        spy.assert_not_called()
+        page = self.make_job(url="https://example.com/page")
+        with mock.patch("clipshelf.transcription.transcribe",
+                        side_effect=AssertionError("page transcribed")) as spy:
+            self.run_worker()
+        spy.assert_not_called()
+        self.assertEqual(self.refresh(page).state, "done")
+
+    def test_store_transcript_appends_after_existing_text(self):
+        job = self.make_job(url="https://www.tiktok.com/@a/video/7")
+        services.store_source(job, {
+            "url": job.url, "acquisition": "complete", "text": "on-screen text",
+            "metadata": {"media": "video", "captions": "none", "tags": ["kept"]},
+            "warnings": [acquisition.NO_CAPTIONS_WARNING, "other warning"]})
+        services.store_transcript(job, "spoken")
+        self.assertEqual(job.source["text"], "on-screen text\n\nspoken")
+        self.assertEqual(job.source["metadata"],
+                         {"media": "video", "captions": "local-asr", "tags": ["kept"]})
+        self.assertEqual(job.source["warnings"], ["other warning"])
+        self.assertEqual(job.warnings, ["other warning"])
+        data = models.Contribution.objects.get(job=job).data
+        self.assertEqual((data["text"], data["tags"]), ("on-screen text\n\nspoken", ["kept"]))
+        services.store_transcript(job, "x" * (services.TEXT_MAX + 10))
+        self.assertEqual(len(job.source["text"]), services.TEXT_MAX)
+
+    def test_store_transcript_without_contribution_updates_only_the_job(self):
+        job = self.make_job(url="https://www.tiktok.com/@a/video/8")
+        services.store_source(job, {
+            "url": job.url, "acquisition": "complete",
+            "metadata": {"media": "video", "captions": "none"}})
+        models.Contribution.objects.filter(job=job).delete()
+        services.store_transcript(job, "spoken")
+        self.assertEqual(job.source["text"], "spoken")
+        self.assertFalse(models.Contribution.objects.filter(job=job).exists())
+
+
+def _completed(argv, returncode=0, stdout=b"", stderr=b""):
+    return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+
+
+def _raising(exc):
+    def run(argv):
+        raise exc
+    return run
+
+
+class TranscribeTests(SimpleTestCase):
+    """transcription.transcribe without a model, ffmpeg or network: the
+    subprocess runs are faked, so the child protocol and bounds are pinned."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="clipshelf-asr-test-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.model = self.tmp / "ggml-small.bin"
+        self.model.write_bytes(b"model")
+        self.video = self.tmp / "video.mp4"
+        self.video.write_bytes(b"video")
+
+    def run_transcribe(self, child, decode=None, env=None):
+        """Fake ffmpeg (decode) and the whisper child (child); return the
+        result and the recorded subprocess calls."""
+        calls = []
+
+        def fake_run(argv, **kwargs):
+            calls.append((argv, kwargs))
+            if len(calls) == 1:
+                if decode is not None:
+                    return decode(argv)
+                Path(argv[-1]).write_bytes(b"\x00" * 64)
+                return _completed(argv)
+            return child(argv)
+
+        with mock.patch.dict(os.environ, env or {transcription.MODEL_ENV: str(self.model)}), \
+                mock.patch("clipshelf.transcription.shutil.which", return_value="/usr/bin/ffmpeg"), \
+                mock.patch("clipshelf.transcription.subprocess.run", side_effect=fake_run):
+            return transcription.transcribe(str(self.video)), calls
+
+    def test_missing_model_is_unavailable_without_running_anything(self):
+        for value in ("", "   ", str(self.tmp / "absent.bin"), str(self.tmp)):
+            with self.subTest(value=value), \
+                    mock.patch.dict(os.environ, {transcription.MODEL_ENV: value}), \
+                    mock.patch("clipshelf.transcription.subprocess.run",
+                               side_effect=AssertionError("ran without a model")):
+                with self.assertRaisesRegex(transcription.TranscriptionError,
+                                            "no Whisper model file"):
+                    transcription.transcribe(str(self.video))
+        with mock.patch.dict(os.environ, {}, clear=True), \
+                self.assertRaisesRegex(transcription.TranscriptionError, "no Whisper model file"):
+            transcription.transcribe(str(self.video))
+
+    def test_child_json_is_parsed_normalised_and_capped(self):
+        text = "  hello \n\t world " + "x" * (transcription.TEXT_MAX + 50)
+        out = b"whisper_init: native log line\n" + json.dumps({"text": text}).encode() + b"\n"
+        env = {transcription.MODEL_ENV: str(self.model), "HTTPS_PROXY": "http://proxy:1",
+               "CLIPSHELF_SECRET_KEY": "s"}
+        result, calls = self.run_transcribe(lambda argv: _completed(argv, stdout=out), env=env)
+        self.assertTrue(result.startswith("hello world x"))
+        self.assertEqual(len(result), transcription.TEXT_MAX)
+        (decode_argv, decode_kw), (child_argv, child_kw) = calls
+        self.assertEqual(decode_argv[decode_argv.index("-protocol_whitelist") + 1], "file")
+        self.assertEqual(decode_argv[decode_argv.index("-i") + 1], str(self.video))
+        self.assertEqual(decode_argv[decode_argv.index("-f") + 1], "f32le")
+        self.assertFalse(decode_kw["shell"])
+        self.assertEqual(child_argv[:3], [sys.executable, "-m", "clipshelf.transcription"])
+        self.assertEqual(child_argv[3:], [str(self.model), decode_argv[-1]])
+        self.assertFalse(child_kw["shell"])
+        self.assertEqual(child_kw["timeout"], transcription.TRANSCRIBE_TIMEOUT)
+        self.assertEqual(Path(child_kw["cwd"]),
+                         Path(transcription.__file__).resolve().parent.parent)
+        self.assertEqual(set(child_kw["env"]), {"PATH", "HOME", "LANG"})
+        self.assertFalse(Path(decode_argv[-1]).exists(), "PCM temp dir outlived the run")
+
+    def test_child_failures_raise_with_stderr_tail(self):
+        cases = [
+            ("exit 1.*model load failed",
+             lambda argv: _completed(argv, 1, stderr=b"boom: model load failed")),
+            ("no result", lambda argv: _completed(argv, stdout=b"not json\n")),
+            ("no result", lambda argv: _completed(argv, stdout=b'{"text": 5}\n')),
+            ("timed out", _raising(subprocess.TimeoutExpired("child", 1))),
+            ("could not start", _raising(OSError("exec failed"))),
+        ]
+        for pattern, child in cases:
+            with self.subTest(pattern=pattern), \
+                    self.assertRaisesRegex(transcription.TranscriptionError, pattern):
+                self.run_transcribe(child)
+
+    def test_video_without_audio_is_reported(self):
+        child = _raising(AssertionError("child ran after a failed decode"))
+        no_stream = lambda argv: _completed(
+            argv, 1, stderr=b"Stream map '0:a:0' matches no streams.")
+        empty = lambda argv: _completed(argv)  # ffmpeg ran but wrote no PCM
+        for decode in (no_stream, empty):
+            with self.assertRaisesRegex(transcription.TranscriptionError, "^no audio track$"):
+                self.run_transcribe(child, decode=decode)
+        with self.assertRaisesRegex(transcription.TranscriptionError, "audio decode failed"):
+            self.run_transcribe(child, decode=lambda argv: _completed(argv, 1, stderr=b"bad"))
+
+    def test_child_output_property(self):
+        """Any child stdout yields a normalised, capped str or a
+        TranscriptionError, never another exception (seeded loop)."""
+        seed = 20261127
+        rng = random.Random(seed)
+        pieces = [b"\n", b" ", b"\t", b"{", b"}", b'"text"', b":", b"null", b"\xff",
+                  b'{"text": "a  b"}', b'{"text": ' + json.dumps("\u00e9 \u3000x").encode() + b"}",
+                  b"[]", b'"x"', b"0"]
+        for run in range(150):
+            out = b"".join(rng.choice(pieces) for _ in range(rng.randint(0, 12)))
+            try:
+                result, _ = self.run_transcribe(lambda argv, out=out: _completed(argv, stdout=out))
+            except transcription.TranscriptionError:
+                continue
+            except Exception as exc:  # name the seed and input, then fail
+                self.fail(f"seed {seed} run {run} stdout {out!r}: {exc!r}")
+            self.assertIsInstance(result, str)
+            self.assertLessEqual(len(result), transcription.TEXT_MAX)
+            self.assertEqual(result, " ".join(result.split()), f"seed {seed} stdout {out!r}")
 
 
 if __name__ == "__main__":

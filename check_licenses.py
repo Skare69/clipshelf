@@ -6,7 +6,7 @@ Enforces license_inventory.toml against reality. The default run checks:
             --require-hashes -r requirements.lock`) must equal the inventoried
             set and versions for this platform, and every entry's license must
             be allowlisted and unchanged since review.
-  image   : Dockerfile pins (base, apt, SQLite) must match the inventory and
+  image   : Dockerfile pins (base, apt, SQLite, Whisper model) must match the inventory and
             the Dockerfile must COPY THIRD_PARTY_NOTICES.md. This reads the
             Dockerfile text, not a built image. Fails closed: any package-
             manager use it cannot parse, any external image pulled via
@@ -339,12 +339,17 @@ def check_image() -> None:
     if stages != want:
         fail(f"image: apt stage sets {stages} != inventoried {want}")
 
-    for key, arg in [("version", "SQLITE_VERSION"), ("tarball", "SQLITE_TARBALL"),
-                     ("url", "SQLITE_URL"), ("sha256", "SQLITE_SHA256")]:
+    for section, key, arg in [
+            ("sqlite", "version", "SQLITE_VERSION"), ("sqlite", "tarball", "SQLITE_TARBALL"),
+            ("sqlite", "url", "SQLITE_URL"), ("sqlite", "sha256", "SQLITE_SHA256"),
+            ("whisper_model", "file", "WHISPER_MODEL_FILE"),
+            ("whisper_model", "url", "WHISPER_MODEL_URL"),
+            ("whisper_model", "sha256", "WHISPER_MODEL_SHA256")]:
+        pin = img[section][key]
         m = re.search(rf"ARG {arg}=(\S+)", text)
-        if not m or m.group(1) != img["sqlite"][key]:
+        if not m or m.group(1) != pin:
             fail(f"image: ARG {arg} is {m.group(1) if m else 'missing'}, "
-                 f"inventory pins {img['sqlite'][key]}")
+                 f"inventory pins {pin}")
 
     if not re.search(r"^COPY THIRD_PARTY_NOTICES\.md", text, re.M):
         fail("image: Dockerfile does not COPY THIRD_PARTY_NOTICES.md")

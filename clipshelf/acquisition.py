@@ -44,6 +44,9 @@ AUDIO_TYPES = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "aac": "audio/aac",
 CAPTION_EXTS = {"srt", "vtt"}
 _IMAGE_FORMAT_TYPE = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp",
                       "GIF": "image/gif", "AVIF": "image/avif"}
+# Added when a video has no TikTok captions; worker transcription removes it
+# once a local transcript fills the gap (services.store_transcript).
+NO_CAPTIONS_WARNING = "no captions available; spoken content was not acquired"
 
 
 class AcquisitionError(Exception):
@@ -477,7 +480,7 @@ def _acquire_tiktok(url, directory, source):
         source["acquisition"] = ("partial" if cover_only or video_validation_failed
                                  else "complete")
         if media == "video" and source["metadata"].get("captions") == "none":
-            _warn(source, "no captions available; spoken content was not acquired")
+            _warn(source, NO_CAPTIONS_WARNING)
     else:
         failure = _tiktok_failure(stderr_log)
         source["metadata"]["failure"] = failure

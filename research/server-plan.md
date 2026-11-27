@@ -327,9 +327,11 @@ The server, not a tool-less chat completion, gathers the material:
 - Bounded readable page text, description, and relevant source links.
 - Ordered slide images and bounded video frames, downscaled for the selected
   model while retaining the acquired source files unchanged.
-- TikTok's own ASR captions when available. Frame-only interpretation must not
-  claim to have heard spoken content. Additional transcription remains deferred
-  pending demonstrated need, with missing audio evidence shown explicitly.
+- TikTok's own ASR captions when available. When a video has none, the worker
+  transcribes its audio locally with whisper.cpp (pywhispercpp, ggml model
+  `small` in the image, CLIP-171) and marks the source `captions: local-asr`.
+  When that fails, frame-only interpretation must not claim to have heard
+  spoken content, and the missing audio evidence stays visible as a warning.
 - Only the current capture's authorized context, including collection categories;
   never the whole server's private library or paths to unrelated source files.
 

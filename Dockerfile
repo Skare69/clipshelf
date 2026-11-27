@@ -3,8 +3,9 @@
 # Runs unprivileged; the operator chooses the actual runtime UID/GID in compose.yaml.
 #
 # Multistage: the first stage compiles the pinned SQLite with the WAL-reset fix
-# (>= 3.51.3, per https://www.sqlite.org/wal.html); its compilers and headers
-# are discarded and only the shared library ships.
+# (>= 3.51.3, per https://www.sqlite.org/wal.html) and downloads the pinned
+# Whisper model; its compilers and headers are discarded and only the shared
+# library and the model file ship.
 # Both stages pin python:3.15-slim by manifest-list digest (linux/amd64 + arm64);
 # re-pin deliberately after review: docker buildx imagetools inspect python:3.15-slim
 ARG SQLITE_VERSION=3.53.1
@@ -15,7 +16,7 @@ ARG SQLITE_TARBALL=sqlite-autoconf-3530100.tar.gz
 ARG SQLITE_URL=https://sqlite.org/2026/sqlite-autoconf-3530100.tar.gz
 ARG SQLITE_SHA256=83e6b2020a034e9a7ad4a72feea59e1ad52f162e09cbd26735a3ffb98359fc4f
 
-# ca-certificates is for the HTTPS download below; the rest is build-only tooling.
+# ca-certificates is for the HTTPS downloads below; the rest is build-only tooling.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates gcc libc6-dev make \
     && rm -rf /var/lib/apt/lists/*
@@ -49,7 +50,38 @@ RUN set -eux; \
 # No ldconfig here: the builder runs nothing; the runtime stage keeps its own
 # loader path below.
 
-# ---- Runtime stage: same pinned base, no compilers, only the built shared library ---
+# Download and checksum-verify the pinned Whisper "small" ggml model (CLIP-171:
+# local speech-to-text for videos without TikTok captions). Baked in at build:
+# the runtime never downloads a model. Streams to disk while hashing (~488 MB),
+# refuses any hash mismatch. Verify/re-pin when bumping:
+#   https://huggingface.co/ggerganov/whisper.cpp (commit revision + file sha256)
+ARG WHISPER_MODEL_FILE=ggml-small.bin
+ARG WHISPER_MODEL_URL=https://huggingface.co/ggerganov/whisper.cpp/resolve/5359861c739e955e79d9a303bcbc70fb988958b1/ggml-small.bin
+ARG WHISPER_MODEL_SHA256=1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b
+RUN python - <<'PY'
+import hashlib, os, shutil, sys, urllib.request
+
+url = os.environ["WHISPER_MODEL_URL"]
+want = os.environ["WHISPER_MODEL_SHA256"]
+name = os.environ["WHISPER_MODEL_FILE"]
+dest = os.path.join("/opt/whisper", name)
+part = dest + ".part"
+os.makedirs("/opt/whisper", exist_ok=True)
+print(f"downloading {url}", flush=True)
+h = hashlib.sha256()
+with urllib.request.urlopen(url, timeout=120) as resp, open(part, "wb") as out:
+    while chunk := resp.read(1 << 20):
+        h.update(chunk)
+        out.write(chunk)
+got = h.hexdigest()
+if got != want:
+    os.remove(part)
+    sys.exit(f"FATAL: {name} sha256 {got} != pinned {want} — do not ship an unverified model")
+os.replace(part, dest)
+print(f"verified {name}: {got}")
+PY
+
+# ---- Runtime stage: same pinned base, no compilers, only the built shared library and the model ---
 FROM python:3.15-slim@sha256:65a65fc7b30b06cb6df4930fd4650697cb23f4c2698ab81fc87e4b031bc36928
 ARG SQLITE_VERSION
 
@@ -66,6 +98,9 @@ RUN apt-get update \
 COPY --from=sqlite-build /usr/local/lib/libsqlite3.so* /usr/local/lib/
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
+# Pinned Whisper model for local speech-to-text (see the build stage above).
+COPY --from=sqlite-build /opt/whisper/ggml-small.bin /opt/whisper/ggml-small.bin
+
 # Hash-locked Python dependencies: the exact resolution CI audits (includes the
 # gallery-dl / yt-dlp extractors); all ship wheels, nothing needs the discarded
 # compiler toolchain. Regenerate with scripts/lock_deps.py.
@@ -81,7 +116,8 @@ COPY THIRD_PARTY_NOTICES.md THIRD_PARTY_NOTICES.md
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HOME=/tmp \
-    CLIPSHELF_DATA_DIR=/data
+    CLIPSHELF_DATA_DIR=/data \
+    CLIPSHELF_WHISPER_MODEL=/opt/whisper/ggml-small.bin
 
 # Unprivileged default; compose.yaml overrides with the real dataset UID/GID via
 # `user:`. No docker socket, no host home, nothing writable outside /data and /tmp.
