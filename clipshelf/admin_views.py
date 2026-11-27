@@ -169,6 +169,13 @@ def user_status(request, user, user_id):
                 accepted_by__isnull=True,
                 expires_at__gt=timezone.now(),
             ).update(expires_at=timezone.now())
+            # The same holds for signup invitations the account issued: a
+            # disabled (perhaps compromised) admin's links create no account.
+            Invitation.objects.filter(
+                created_by_id=target.pk,
+                used_by__isnull=True,
+                expires_at__gt=timezone.now(),
+            ).update(expires_at=timezone.now())
         elif active and not target.is_active:
             target.is_active = True
             target.save(update_fields=["is_active"])

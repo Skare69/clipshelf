@@ -229,6 +229,44 @@ class InvitationFlowTests(AccountTestCase):
         invitation.refresh_from_db()
         self.assertEqual(invitation.used_by.email, "once@clipshelf.test")
 
+    def test_disabled_issuer_invitation_cannot_create_account(self):
+        issuer = make_user("issuer@clipshelf.test", is_app_admin=True)
+        token, invitation = make_invitation("late@clipshelf.test", issuer)
+        # A second session already holds the link before the disable.
+        early = Client()
+        early.get(f"/invite/{token}")
+        self.assertIn(SESSION_INVITATION_KEY, early.session)
+
+        self.client.force_login(self.admin)
+        response = self.admin_post(
+            f"/api/admin/users/{issuer.pk}/status", {"active": False}, reauth=True
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response = Client().get(f"/invite/{token}")
+        self.assertRedirects(
+            response, reverse("account_login"), fetch_redirect_response=False
+        )
+        signup = {
+            "email": "late@clipshelf.test",
+            "password1": PASSWORD,
+            "password2": PASSWORD,
+        }
+        response = early.post(reverse("account_signup"), data=signup)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(
+            get_user_model().objects.filter(email="late@clipshelf.test").exists()
+        )
+        invitation.refresh_from_db()
+        self.assertIsNone(invitation.used_by)
+
+        # Re-enabling the issuer does not revive the expired link.
+        self.admin_post(f"/api/admin/users/{issuer.pk}/status", {"active": True})
+        response = Client().get(f"/invite/{token}")
+        self.assertRedirects(
+            response, reverse("account_login"), fetch_redirect_response=False
+        )
+
     def test_non_invited_browser_and_headless_signup_fail(self):
         before = get_user_model().objects.count()
         response = self.client.post(

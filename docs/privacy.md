@@ -1,7 +1,9 @@
 # Accounts and privacy
 
 - Invitation-only: an admin issues a single-use link; the recipient picks the
-  password and verifies the mailbox.
+  password and verifies the mailbox. When an admin account is disabled, all
+  unused signup invitations that it issued expire. They stay expired when the
+  account is enabled again.
 - A successful invited signup deletes other accounts' unverified secondary
   claims on the invited address: address rows that are neither verified nor
   primary. The other account gets no notice, because an unverified claim
