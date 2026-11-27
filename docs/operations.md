@@ -86,6 +86,23 @@ development container, with an import that has no links or prompts:
 failed. The script does not measure imports with links, or the deployed
 storage. Run it with `CLIPSHELF_DATA_DIR` set to a throwaway directory.
 
+An imported item with media also writes a `Job`, its `Asset` rows and its
+source in the same transaction. The import hashes and measures the asset
+files before the transaction starts, so the lock covers only row writes.
+Measured on 2026-11-27 with
+`python3 scripts/bench_import_assets.py <items> <images>` on the same kind
+of disk, with the query log off as in a deployment:
+
+| Import | Lock with hashing inside | Lock with hashing before |
+| --- | --- | --- |
+| 5000 items x 16 images (80000 assets) | 52.8 s | 38.5 s |
+| 5000 items x 1 image | 34.1 s | 34.9 s |
+| 5000 link-only items | not measured | 11.4 s |
+
+In each run above 30 s, a concurrent capture failed with "database is
+locked". The per-item writes of an item with media cost most of the lock
+time, not the asset count. The import still has no bound for them.
+
 ## LLM spend ceilings
 
 Interpretation bills the operator's LLM key, so the endpoints that create

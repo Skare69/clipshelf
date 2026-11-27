@@ -33,7 +33,7 @@ from PIL import Image
 
 from django.conf import settings
 
-from clipshelf import acquisition, cli, imports, judgment, lib, models, publication, services, worker
+from clipshelf import acquisition, asset_files, cli, imports, judgment, lib, models, publication, services, worker
 from clipshelf.management.commands.backup import CONFIG_KEYS, Command as BackupCommand
 
 CACHE_BYTES = b"<html>cached page</html>"
@@ -982,6 +982,12 @@ class BackupRestoreTests(MigrationMixin, TransactionTestCase):
                          "restore littered the working directory")
 
 
+def png_b64(color):
+    data = io.BytesIO()
+    Image.new("RGB", (4, 4), color).save(data, "PNG")
+    return base64.b64encode(data.getvalue()).decode()
+
+
 def _interpreted_item(url):
     return {"url": url, "title": url, "desc": "legacy findings",
             "interpreted": "2024-02-01", "cat": "ml", "install": "pip install x",
@@ -1046,6 +1052,37 @@ class ImportScreeningTests(MigrationMixin, TransactionTestCase):
             "flagged item must not be dropped from the import")
         # The whole import committed: the flagged job did not roll it back.
         self.assertTrue(models.ImportRecord.objects.filter(user=self.user).exists())
+
+
+class ImportAssetHashingTests(MigrationMixin, TransactionTestCase):
+    """Asset files are hashed and measured before the import transaction:
+    the SQLite write lock covers only row inserts. Measured before the fix
+    (scripts/bench_import_assets.py): 5000 items x 16 images held the lock
+    68 s, and a concurrent capture failed with "database is locked"."""
+
+    def test_asset_hashing_runs_outside_import_transaction(self):
+        probes = []
+        real_hash = asset_files._file_sha256
+
+        def probe(path):
+            probes.append(connection.in_atomic_block)
+            return real_hash(path)
+
+        images = [png_b64(color) for color in ("red", "green", "blue")]
+        items = [{"url": f"https://example.com/slides/{i}",
+                  "images": [{"b64": b64} for b64 in images]} for i in range(2)]
+        with override_settings(DATA_DIR=str(self.tmp)), \
+                mock.patch.object(asset_files, "_file_sha256", side_effect=probe):
+            result = imports.import_items(user=self.user, collection_id=None, items=items)
+        self.assertEqual(result["counts"]["assets"], 6)
+        self.assertEqual(len(probes), 6)
+        self.assertNotIn(True, probes,
+                         "asset hashing ran inside the import transaction: the "
+                         "SQLite write lock was held across file reads")
+        for asset in models.Asset.objects.all():
+            data = (self.tmp / asset.path).read_bytes()
+            self.assertEqual(asset.sha256, hashlib.sha256(data).hexdigest())
+            self.assertEqual(asset.size, len(data))
 
 
 class DeferredFetchTests(MigrationMixin, TestCase):

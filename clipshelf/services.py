@@ -422,9 +422,10 @@ def commit_import_rows(user, collection, plans, prompt_plans, *, crid, digest,
     the import history, one Job and Contribution per plan, the prompt
     contributions, and the import record's one "done" write. Rechecks the
     account and destination after staging: a lost destination falls back to
-    Personal with a notice, a disabled account raises. Screening must have
-    run before this call: the judgment call never holds the SQLite write
-    lock. Returns the import result dict."""
+    Personal with a notice, a disabled account raises. Screening and the
+    asset hashing (plan["prepared"]) must have run before this call: neither
+    the judgment call nor a file read holds the SQLite write lock. Returns
+    the import result dict."""
     counts = {"entries": 0, "jobs": 0, "assets": 0, "prompts": 0}
     with transaction.atomic():
         # Recheck account and destination after staging: membership or account
@@ -468,7 +469,7 @@ def commit_import_rows(user, collection, plans, prompt_plans, *, crid, digest,
                     interpretation=plan["interpretation"],
                     source=plan["source"], warnings=plan["warnings"])
                 if plan["published"]:
-                    store_source(job, plan["source"])
+                    store_source(job, plan["source"], plan["prepared"])
                     counts["assets"] += len(plan["published"])
                 if plan["findings"]:
                     # Screening already ran outside this transaction.
@@ -630,11 +631,14 @@ def remove_entry(user, entry):
 # Worker result storage
 # ---------------------------------------------------------------------------
 
-def store_source(job, source):
+def store_source(job, source, prepared_assets=None):
     """Persist an acquisition result: recheck account/destination, sync Asset
     rows for files the worker already published atomically under DATA_DIR,
     then store the job source and the collection-scoped entry/contribution.
-    Never moves a committed contribution to another collection."""
+    Never moves a committed contribution to another collection. A caller
+    inside its own transaction passes `prepared_assets` (asset_files.prepare
+    of source["assets"], run before that transaction), so no file is hashed
+    while the SQLite write lock is held."""
     if not isinstance(source, dict):
         raise ValidationError({"source": "Source must be an object."}, code="invalid")
     url = _str(source.get("url"))
@@ -644,7 +648,8 @@ def store_source(job, source):
         raise ValidationError({"acquisition": "Invalid acquisition status."}, code="invalid")
     warnings = _string_list(source.get("warnings"), 100, 500)
     links = _link_list(source.get("links"), 200)
-    prepared_assets = asset_files.prepare(source.get("assets") or [])
+    if prepared_assets is None:
+        prepared_assets = asset_files.prepare(source.get("assets") or [])
     caller_job = job  # the locked row below is a separate instance
 
     with transaction.atomic():

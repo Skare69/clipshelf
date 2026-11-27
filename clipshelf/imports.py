@@ -643,9 +643,12 @@ def _prompt_plans(prompts):
 
 def _publish_plans(plans, staging):
     """Publish every job's files: complete bytes at final paths before any
-    reference."""
+    reference. Hash and measure them here too, outside the commit
+    transaction: 5000 items x 16 images held the SQLite write lock 68 s
+    with the hashing inside it (scripts/bench_import_assets.py)."""
     for plan in plans:
         plan["published"] = asset_files.publish(plan["source"], staging, move=False)
+        plan["prepared"] = asset_files.prepare(plan["published"])
 
 
 def _screen_plans(plans):
