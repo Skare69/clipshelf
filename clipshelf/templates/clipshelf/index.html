@@ -14,9 +14,8 @@
       <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
     </button>
   </div>
-  <button id="addBtn" class="btn signal add" type="button">
-    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-    <span>Add</span>
+  <button id="addBtn" class="btn signal add" type="button" aria-label="Add">
+    <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
   </button>
 </header>
 <div class="shell">
@@ -29,14 +28,14 @@
       <li class="adm" hidden><a href="#admin" class="vw" data-nav="admin"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path d="M12 1 3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4z"/></svg><span>Admin</span></a></li>
     </ul>
     <div class="cats" id="tsec"></div>
-    <p class="ver">{% if CLIPSHELF_UPDATE %}<a class="upd" href="{{ CLIPSHELF_UPDATE.url }}" title="clipshelf v{{ CLIPSHELF_UPDATE.version }} is available">v{{ CLIPSHELF_UPDATE.version }} available</a>{% endif %}<a href="https://github.com/Skare69/clipshelf">clipshelf</a> <a class="vtag" href="{{ CLIPSHELF_RELEASE_URL }}">v{{ CLIPSHELF_VERSION }}</a></p>
+    <p class="ver">{% if CLIPSHELF_UPDATE %}<a class="btn small signal upd" href="{{ CLIPSHELF_UPDATE.url }}" title="clipshelf v{{ CLIPSHELF_UPDATE.version }} is available"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>v{{ CLIPSHELF_UPDATE.version }} available</a>{% endif %}<span class="rel"><a href="https://github.com/Skare69/clipshelf">clipshelf</a><span class="dot" aria-hidden="true">·</span><a class="v" href="{{ CLIPSHELF_RELEASE_URL }}">v{{ CLIPSHELF_VERSION }}</a></span></p>
   </nav>
   <main id="main" tabindex="-1">
     <div id="vhead"></div>
     <div id="out"></div>
   </main>
 </div>
-<div id="banner" class="banner" role="status" aria-live="polite" hidden></div>
+<div id="banner" class="banner" role="status" aria-live="polite" popover="manual" hidden></div>
 <dialog id="addDlg" aria-labelledby="addHead">
   <header class="dhead">
     <h2 id="addHead">New capture</h2>
@@ -61,14 +60,12 @@
     <summary>Import a TikTok export or a library.json</summary>
     <div class="row">
       <label class="filebtn">Choose a file<input id="impFile" type="file" accept=".json,application/json"></label>
+      <button id="impBtn" class="btn primary" type="button" disabled>Import</button>
       <span id="impName" class="hint"></span>
+      <span id="impStat" class="hint"></span>
     </div>
     <progress id="impProg" class="prog" max="100" value="0" aria-label="Import upload progress" hidden></progress>
     <p class="err" id="impErr" role="alert" hidden></p>
-    <div class="row">
-      <button id="impBtn" class="btn primary" type="button" disabled>Import</button>
-      <span id="impStat" class="hint"></span>
-    </div>
     <p class="hint">Accepts a TikTok browser export (<code>tiktok.json</code>) or a legacy <code>library.json</code>. The server rejects an export above its import ceiling as a whole and never cuts it. A legacy library keeps its media only if its old <code>cache/</code> directory was first copied to <code>import-cache/</code> in the server data directory. Otherwise the entries come in without media, and the manifest lists what is missing.</p>
   </details>
 </dialog>

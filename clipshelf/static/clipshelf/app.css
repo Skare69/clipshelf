@@ -3,8 +3,11 @@
    thermal-black print, black routing blocks for categories, one parcel-yellow
    signal for the next action, red only for exceptions. Archivo is self-hosted
    (OFL-1.1, see THIRD_PARTY_NOTICES.md). */
+/* ascent/descent overrides keep Archivo's 1.088em content box but move the baseline down 0.085em,
+   so text sits optically centered in controls and labels (measured: it rendered 1-2px high). */
 @font-face{font-family:"Archivo";src:url("fonts/archivo.woff2") format("woff2");
-  font-weight:100 900;font-stretch:62% 125%;font-style:normal;font-display:swap}
+  font-weight:100 900;font-stretch:62% 125%;font-style:normal;font-display:swap;
+  ascent-override:96.3%;descent-override:12.5%}
 :root{color-scheme:light dark;
   --ground:light-dark(#E9EBEE,#0E1013);
   --label:light-dark(#FFFFFF,#1A1D22);
@@ -75,10 +78,12 @@ button{font:inherit;color:inherit;cursor:pointer}
 @keyframes spin{to{transform:rotate(360deg)}}
 
 /* ---------- top bar ---------- */
-.top{position:sticky;top:0;z-index:20;display:grid;align-items:center;gap:16px;
-  grid-template-columns:var(--railW) minmax(0,640px) 1fr auto;height:var(--topH);
-  padding:0 24px 0 20px;background:var(--label);border-bottom:1px solid var(--edge)}
-.brand{display:inline-flex;align-items:center;gap:10px;color:var(--ink);text-decoration:none;
+/* The brand starts 16px in, on the same left edge as the rail's nav buttons. The mark column ends where the rail
+   ends; the 40px search field then keeps the same 8px margin on its left and right as above and below it. */
+.top{position:sticky;top:0;z-index:20;display:grid;align-items:center;gap:8px;
+  grid-template-columns:calc(var(--railW) - 16px) minmax(0,1fr);height:var(--topH);
+  padding:0 8px 0 16px;background:var(--label);border-bottom:1px solid var(--edge)}
+.brand{display:inline-flex;align-items:center;gap:8px;color:var(--ink);text-decoration:none;
   font:800 var(--t4)/1 var(--sans);font-stretch:88%;letter-spacing:-.01em}
 .mark{display:block;width:28px;height:28px}
 .find{display:flex;align-items:center;gap:8px;height:40px;padding:0 6px 0 12px;
@@ -91,12 +96,18 @@ button{font:inherit;color:inherit;cursor:pointer}
 .key{font:700 var(--t1)/1 var(--sans);color:var(--ink3);border:1px solid var(--edge);
   border-radius:3px;padding:3px 7px;background:var(--label)}
 .find:focus-within .key,.find:has(input:not(:placeholder-shown)) .key{display:none}
-.add{grid-column:4}
+/* Add floats at the bottom right, 32px square like the rail's update button (btn small); its 24px inset repeats
+   the main column's padding. Touch layouts keep a 48px target (phone block below). */
+.add{position:fixed;z-index:30;right:24px;bottom:24px;width:32px;height:32px;min-height:0;padding:0;
+  box-shadow:0 8px 20px -6px rgb(0 0 0 / .4)}
+.add svg{width:20px;height:20px}
 
 /* ---------- shell, rail ---------- */
-.shell{display:grid;grid-template-columns:var(--railW) minmax(0,1fr);max-width:1480px;margin:0 auto}
+/* The rail sits at the window's left edge under the mark; the main column takes the rest of the width. */
+.shell{display:grid;grid-template-columns:var(--railW) minmax(0,1fr)}
 .rail{position:sticky;top:var(--topH);align-self:start;height:calc(100dvh - var(--topH));overflow:auto;
-  display:flex;flex-direction:column;gap:20px;padding:16px 12px 16px 16px;border-right:1px solid var(--hair)}
+  display:flex;flex-direction:column;gap:20px;padding:16px;border-right:1px solid var(--hair);
+  background:var(--label)}
 .views{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px}
 .vw{position:relative;display:flex;align-items:center;gap:12px;min-height:40px;padding:0 12px;
   border-radius:var(--r-ctl);color:var(--ink2);font-weight:600;text-decoration:none;
@@ -104,29 +115,41 @@ button{font:inherit;color:inherit;cursor:pointer}
 .vw:hover{background:var(--hover);color:var(--ink)}
 .vw.on{background:var(--ink);color:var(--label)}
 .count{margin-left:auto;font-size:var(--t1);font-weight:600;color:inherit}
-.count.alert{background:var(--err);color:var(--label);border-radius:10px;min-width:20px;
+.count.alert{background:var(--err);color:var(--label);border-radius:var(--r-ctl);min-width:20px;
   padding:1px 6px;text-align:center}
-.cats{display:flex;flex-direction:column;gap:2px;min-height:0}
+/* Short windows: the category list scrolls instead of running under the footer; 2px room keeps focus rings unclipped. */
+.cats{display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto;padding:2px;margin:-2px}
 .cats h2{font-size:var(--t1);font-weight:700;color:var(--ink2);padding:0 12px 6px}
 .cats a{display:flex;align-items:center;gap:8px;min-height:36px;padding:0 12px;border-radius:var(--r-ctl);
   color:var(--ink);text-decoration:none;font-size:var(--t2);font-weight:500}
 .cats a:hover{background:var(--hover)}
 .cats a.on{background:var(--label);box-shadow:inset 0 0 0 1px var(--field);font-weight:700}
-.ver{margin-top:auto;padding:12px 12px 0;border-top:1px solid var(--hair);font-size:var(--t1);color:var(--ink2)}
+/* The footer bleeds past the rail's 16px padding so its line runs edge to edge, and repeats that padding inside,
+   so the update button lines up with the nav items above it on both sides. */
+.ver{margin:auto -16px -16px;padding:12px 16px 16px;border-top:1px solid var(--hair);font-size:var(--t1);color:var(--ink2);
+  display:flex;flex-direction:column;align-items:center}
 .ver a{color:inherit;font-weight:700;text-decoration:none}
-.ver a.vtag,.foot a.vtag{font-weight:400}
-.ver a.vtag:hover{text-decoration:underline}
-.ver a.upd,.foot a.upd{display:inline-block;padding:1px 8px;border:1px solid var(--signal-edge);border-radius:999px;background:var(--signal);color:var(--on-signal);font-weight:700;text-decoration:none}
-.ver a.upd{display:block;width:fit-content;margin-bottom:8px}
-.shell>main{min-width:0;padding:28px 32px 96px}
+/* "clipshelf · v1.2.3": the name links to the repository, the version to its release page. */
+.rel{display:inline-flex;align-items:center;gap:6px}
+.rel a{display:inline-flex;align-items:center;min-height:24px}
+.rel .v,.rel .dot{font-weight:400}
+.rel .dot{color:var(--ink3)}
+.ver .rel a:hover{color:var(--ink)}
+.rel a:hover{text-decoration:underline}
+/* The update notice is a btn small signal with a leading arrow: less padding on the icon side. */
+.ver a.upd,.foot a.upd{padding-left:8px}
+.ver a.upd{display:flex;width:100%;margin-bottom:8px}
+/* 24px all round, the same as the gap between the filter bar and the content; 96px at the bottom leaves room to scroll past the Add button. */
+.shell>main{min-width:0;padding:24px 24px 96px}
 
 /* ---------- view header ---------- */
 .vhead{display:flex;flex-direction:column;gap:16px;margin-bottom:24px}
-.vtitle{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px 16px}
+/* Center, not baseline: the 28px title, the 32px collection select and the counts share one center line. */
+.vtitle{display:flex;align-items:center;flex-wrap:wrap;gap:6px 16px}
 h1{font:800 var(--t5)/1.1 var(--sans);font-stretch:88%;letter-spacing:-.015em}
-.vsub{display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;color:var(--ink2);font-size:var(--t2)}
+.vsub{display:flex;align-items:center;flex-wrap:wrap;gap:4px 12px;color:var(--ink2);font-size:var(--t2)}
 .vsub .need{color:var(--err);font-weight:700}
-.colsel{height:32px;min-height:0;padding:0 28px 0 8px;border:1px solid var(--hair);background-color:var(--label);
+.colsel{--caret-x:8px;height:32px;min-height:0;padding:0 28px 0 8px;border:1px solid var(--hair);background-color:var(--label);
   font:600 var(--t2) var(--sans);color:var(--ink)}
 .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px}
 .filters{display:none}
@@ -136,6 +159,10 @@ h1{font:800 var(--t5)/1.1 var(--sans);font-stretch:88%;letter-spacing:-.015em}
 .seg button:first-child{border-left:0}
 .seg button:hover{background:var(--hover);color:var(--ink)}
 .seg button[aria-pressed=true]{background:var(--ink);color:var(--label)}
+.seg button.ico{display:inline-grid;place-items:center;width:40px;padding:0}
+.seg button.ico svg{width:20px;height:20px}
+/* Layout only changes the look, not the content: it sits apart at the right end of the filter toolbar. */
+.libtools .seg[aria-label="Layout"]{margin-left:auto}
 .toolbar select{height:38px;min-height:0;font-size:var(--t2)}
 .catrow{display:none;gap:8px;overflow-x:auto;margin:0 -16px;padding:0 16px 4px;scrollbar-width:none}
 .catrow button{flex:none;min-height:36px;padding:0 12px;border:1px solid var(--field);border-radius:var(--r-ctl);
@@ -148,17 +175,27 @@ h1{font:800 var(--t5)/1.1 var(--sans);font-stretch:88%;letter-spacing:-.015em}
 .group:first-child{margin-top:0}
 .rhead{display:flex;align-items:center;gap:12px;margin-bottom:14px;scroll-margin-top:calc(var(--topH) + 16px)}
 .rb{display:inline-block;background:var(--ink);color:var(--label);font:800 var(--t4)/1 var(--sans);
-  font-stretch:70%;letter-spacing:.02em;text-transform:uppercase;padding:6px 10px 5px;border-radius:2px}
-.rb.small{font-size:var(--t1);padding:3px 6px 2px;letter-spacing:.03em}
+  font-stretch:70%;letter-spacing:.02em;text-transform:uppercase;padding:5px 10px 6px;border-radius:2px}
+.rb.small{font-size:var(--t1);padding:2px 6px 3px;letter-spacing:.03em}
 .rcount{font-size:var(--t1);font-weight:600;color:var(--ink2)}
 
 /* ---------- labels (entries) ---------- */
 .labels{list-style:none;margin:0;padding:0;display:grid;gap:16px;
   grid-template-columns:repeat(auto-fill,minmax(min(100%,320px),1fr))}
-.label{display:flex;flex-direction:column;gap:8px;min-width:0;padding:14px 16px 12px;
+.label{position:relative;display:flex;flex-direction:column;gap:8px;min-width:0;padding:14px 16px 12px;
   background:var(--label);border:1px solid var(--edge);border-radius:var(--r-label);
   transition:border-color .15s var(--ease)}
 .label:hover,.label:focus-within{border-color:var(--field)}
+/* The title button opens details; its ::after stretches the hit area over the whole card. */
+.lt{background:none;border:0;padding:0;margin:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.lt::after{content:"";position:absolute;inset:0;border-radius:var(--r-label)}
+.lt:focus-visible{outline:none}
+.label:has(.lt:focus-visible){outline:2px solid var(--ink);outline-offset:2px}
+.label:has(.lt:hover) .ltitle{text-decoration:underline}
+/* Raise only the controls: a raised container would swallow clicks on its gaps. */
+.label :is(.tags,.acts) :is(a,button){position:relative;z-index:1}
+.src{color:var(--ink2)}
+.src:hover{color:var(--ink)}
 .lhead{display:flex;align-items:center;gap:8px;min-width:0;font-size:var(--t1);font-weight:700;color:var(--ink2)}
 .lhead svg{width:16px;height:16px}
 .lhead .date{margin-left:auto;font-weight:500;color:var(--ink3)}
@@ -174,7 +211,7 @@ a.ltitle:hover{text-decoration:underline}
 .by{font-size:var(--t1);color:var(--ink3)}
 .tags{display:flex;flex-wrap:wrap;gap:6px}
 .tag{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border:1px solid var(--hair);
-  border-radius:var(--r-ctl);background:var(--label2);color:var(--ink2);font:500 var(--t1)/1 var(--sans);
+  border-radius:var(--r-ctl);background:var(--label2);color:var(--ink2);font:500 var(--t1)/1.2 var(--sans);
   text-decoration:none}
 button.tag:hover{border-color:var(--field);color:var(--ink)}
 .tag.more{background:none}
@@ -211,8 +248,12 @@ pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .more-row{margin-top:24px}
 
 /* ---------- inbox: tracked shipments ---------- */
-.ships{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:16px;max-width:920px}
+/* Shipments flow in a grid of cards, at least 440px wide, so wide windows show several side by side. */
+.ships{list-style:none;margin:0;padding:0;display:grid;gap:16px;align-items:start;
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,440px),1fr))}
 .ship{padding:14px 16px 16px;background:var(--label);border:1px solid var(--edge);border-radius:var(--r-label)}
+/* Wide screens: a shared minimum height keeps the rows of cards even; phones keep natural heights. */
+@media (min-width:961px){.ship{min-height:326px}}
 .shead{display:flex;align-items:center;flex-wrap:wrap;gap:6px 12px;font-size:var(--t1);color:var(--ink2)}
 .shead time{font-weight:600;color:var(--ink)}
 .stext{margin-top:6px;color:var(--ink);overflow-wrap:anywhere;white-space:pre-line;
@@ -235,6 +276,7 @@ pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .step.now{color:var(--ink);font-weight:700}
 .step.stop::before{border-color:var(--err);background:var(--err-soft)}
 .step.stop{color:var(--err);font-weight:700}
+.step.ok{color:var(--ok);font-weight:700}
 .status{font-size:var(--t2);font-weight:600;color:var(--ink)}
 .status.ok{color:var(--ok)}
 .status.warn{color:var(--ink2)}
@@ -278,6 +320,13 @@ input[type=text],input[type=email],input[type=password],input[type=url],input[ty
 input[type=search],textarea,select{min-height:40px;padding:0 12px;border:1px solid var(--field);
   border-radius:var(--r-ctl);background:var(--label);color:var(--ink);font:400 var(--t3) var(--sans)}
 textarea{width:100%;padding:10px 12px;line-height:1.5;resize:vertical}
+/* Own caret instead of the native arrow, which sat closer to the right edge than the text sat to the left.
+   Two gradient triangles in ink2 follow both themes; the caret's right edge mirrors the left padding. */
+select{--caret-x:12px;appearance:none;padding-right:calc(var(--caret-x) + 24px);
+  background-image:linear-gradient(45deg,transparent 50%,var(--ink2) 50%),linear-gradient(135deg,var(--ink2) 50%,transparent 50%);
+  background-position:calc(100% - var(--caret-x) - 5px) 55%,calc(100% - var(--caret-x)) 55%;
+  background-size:5px 5px;background-repeat:no-repeat}
+@media (forced-colors:active){select{appearance:auto}}
 :is(input,textarea,select):focus{outline:2px solid var(--ink);outline-offset:0;border-color:var(--ink)}
 input[type=checkbox],input[type=radio]{width:18px;height:18px;accent-color:var(--ink);margin:0}
 ::placeholder{color:var(--ink3);opacity:1}
@@ -344,10 +393,13 @@ td .acts{justify-content:flex-end;flex-wrap:nowrap}
 }
 
 /* ---------- snackbar ---------- */
-.banner{position:fixed;z-index:60;left:50%;bottom:24px;transform:translateX(-50%);
+/* A manual popover, so it renders in the top layer above an open modal dialog (details, add). */
+.banner{position:fixed;z-index:60;inset:auto auto 24px 50%;margin:0;border:0;height:auto;overflow:visible;
+  transform:translateX(-50%);
   width:min(560px,calc(100vw - 32px));display:flex;align-items:center;gap:12px;padding:10px 8px 10px 16px;
   background:var(--ink);color:var(--label);border-radius:var(--r-dlg);font-size:var(--t2);font-weight:500;
   box-shadow:0 10px 28px -8px rgb(0 0 0 / .45);animation:rise .2s var(--ease) both}
+.banner:not(:popover-open){display:none}
 .banner.err{background:var(--err);color:var(--label)}
 .banner .grow-text{flex:1;min-width:0}
 .banner .btn{min-height:32px;background:transparent;border-color:currentColor;color:inherit}
@@ -359,14 +411,21 @@ dialog{width:min(600px,94vw);max-height:min(90dvh,960px);padding:20px 24px 24px;
 dialog[open]{animation:rise .18s var(--ease) both}
 dialog::backdrop{background:rgb(14 16 19 / .6)}
 @keyframes rise{from{opacity:0;translate:0 8px}}
-dialog.sheet{width:min(760px,94vw)}
-/* Wide screens: details open as a side panel beside the list, not a modal. */
+/* Details slide in from the right edge (side panel on wide screens, full sheet on phones); the backdrop fades in. */
+dialog.sheet{width:min(760px,94vw);animation:slide .28s var(--ease) both}
+dialog.sheet::backdrop{animation:fade .28s var(--ease) both}
+/* Wide screens: the modal details sheet sits as a full-height side panel at the right edge. */
 @media (min-width:961px){
-  dialog.sheet:not(:modal){position:fixed;z-index:15;inset:var(--topH) 0 0 auto;margin:0;
-    width:min(560px,42vw);height:auto;max-height:none;border-width:0 0 0 1px;border-radius:0;
-    animation:slide .2s var(--ease) both}
+  dialog.sheet{position:fixed;inset:0 0 0 auto;margin:0;
+    width:min(560px,42vw);height:auto;max-height:none;border-width:0 0 0 1px;border-radius:0}
 }
-@keyframes slide{from{opacity:0;translate:16px 0}}
+@keyframes slide{from{translate:100% 0}}
+@keyframes fade{from{opacity:0}}
+/* Exit runs about 20% shorter than the entrance; core.js closeDialog() waits for it, then closes. */
+dialog.sheet[data-closing]{animation:slide-out .22s var(--ease) forwards}
+dialog.sheet[data-closing]::backdrop{animation:fade-out .22s var(--ease) forwards}
+@keyframes slide-out{to{translate:100% 0}}
+@keyframes fade-out{to{opacity:0}}
 dialog>h2{font:700 var(--t4)/1.3 var(--sans);margin-bottom:8px}
 #cfText{color:var(--ink2);margin-bottom:8px}
 .dhead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin:-4px -8px 12px 0}
@@ -376,7 +435,10 @@ dialog>h2{font:700 var(--t4)/1.3 var(--sans);margin-bottom:8px}
 details.imp{margin-top:24px;padding-top:16px;border-top:1px dashed var(--edge)}
 details.imp>summary{cursor:pointer;font-weight:600}
 details.imp[open]>summary{margin-bottom:12px}
-details.imp .hint{margin-top:12px}
+details.imp>.hint,details.imp>.err,details.imp>.prog{margin-top:12px}
+/* Dialog fields take the dialog's full width (the 520px cap is for page panels). */
+dialog .field{max-width:none}
+dialog .field select{width:100%}
 #cfExtra .field{margin:12px 0 0}
 
 /* ---------- account pages (allauth, setup) ---------- */
@@ -423,8 +485,8 @@ details.imp .hint{margin-top:12px}
 /* ---------- phones and tablets: bottom bar, one column ---------- */
 @media (max-width:960px){
   .top{grid-template-columns:auto minmax(0,1fr);gap:12px;padding:0 12px}
-  .add{position:fixed;z-index:30;right:16px;bottom:calc(76px + env(safe-area-inset-bottom));
-    min-height:48px;padding:0 20px;box-shadow:0 8px 20px -6px rgb(0 0 0 / .4)}
+  .add{right:16px;bottom:calc(76px + env(safe-area-inset-bottom));width:48px;height:48px}
+  .add svg{width:24px;height:24px}
   .shell{display:block}
   .rail{position:fixed;z-index:25;inset:auto 0 0 0;height:auto;overflow:visible;display:block;
     padding:0 0 env(safe-area-inset-bottom);background:var(--label);border-right:0;border-top:1px solid var(--edge)}
@@ -458,5 +520,5 @@ details.imp .hint{margin-top:12px}
   .acct-card{padding:20px}
 }
 @media (prefers-reduced-motion:reduce){
-  *,*::before,*::after{animation:none!important;transition:none!important}
+  *,*::before,*::after,dialog::backdrop{animation:none!important;transition:none!important}
 }

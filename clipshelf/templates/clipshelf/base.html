@@ -33,7 +33,7 @@
     {% block content %}{% endblock %}
   </main>
   <footer class="foot">
-    <p>{% if CLIPSHELF_UPDATE %}<a class="upd" href="{{ CLIPSHELF_UPDATE.url }}" title="clipshelf v{{ CLIPSHELF_UPDATE.version }} is available">v{{ CLIPSHELF_UPDATE.version }} available</a> · {% endif %}<a href="/">Library</a> · <a href="https://github.com/Skare69/clipshelf">clipshelf</a> <a class="vtag" href="{{ CLIPSHELF_RELEASE_URL }}">v{{ CLIPSHELF_VERSION }}</a></p>
+    <p>{% if CLIPSHELF_UPDATE %}<a class="btn small signal upd" href="{{ CLIPSHELF_UPDATE.url }}" title="clipshelf v{{ CLIPSHELF_UPDATE.version }} is available"><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>v{{ CLIPSHELF_UPDATE.version }} available</a> · {% endif %}<a href="/">Library</a> · <span class="rel"><a href="https://github.com/Skare69/clipshelf">clipshelf</a><span class="dot" aria-hidden="true">·</span><a class="v" href="{{ CLIPSHELF_RELEASE_URL }}">v{{ CLIPSHELF_VERSION }}</a></span></p>
   </footer>
 </div>
 {% endblock %}

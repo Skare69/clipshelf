@@ -81,7 +81,7 @@ components:
     backgroundColor: "{colors.ink}"
     textColor: "{colors.label}"
     rounded: "{rounded.block}"
-    padding: "6px 10px 5px"
+    padding: "5px 10px 6px"
   label-card:
     backgroundColor: "{colors.label}"
     textColor: "{colors.ink}"
@@ -146,7 +146,7 @@ The palette is a grayscale with two functional colors: one signal yellow and one
 
 ## Typography
 
-**Display Font:** Archivo, OFL-1.1. The web self-hosts one variable woff2. Android ships five static instances: regular, semibold, bold, routing, display. Fallback: the system-ui stack.
+**Display Font:** Archivo, OFL-1.1. The web self-hosts one variable woff2. Its `@font-face` sets `ascent-override: 96.3%` and `descent-override: 12.5%`. The content box stays at 1.088 em, and the baseline moves down 0.085 em, so text centers vertically in buttons, chips and labels. Android ships five static instances: regular, semibold, bold, routing, display. Fallback: the system-ui stack.
 **Mono Font:** ui-monospace stack, for codes, prompts, and install commands only.
 
 **Character:** One grotesk carries everything, like one print head. Weight and width carry hierarchy, not new fonts. Routing blocks squeeze the width to 70% and use capitals. The wordmark and the titles use 88% width and tight tracking.
@@ -164,9 +164,9 @@ The palette is a grayscale with two functional colors: one signal yellow and one
 
 ## Layout
 
-The web shell is a grid: a 56 px sticky top bar (mark, search, signal Add button), a 232 px left rail (views and category index with counts), and a main column capped at 1480 px with 28/32 px padding. Labels flow in an auto-fill grid, minimum 320 px per card, 16 px gaps.
+The web shell is a grid: a 56 px sticky top bar (mark, search), a 232 px left rail (views and category index with counts) on the `label` surface, and a main column with 24 px padding, the same as the gap between the view header and the content. Add is a signal floating action button (plus icon, accessible name "Add", 4 px corners) at the bottom right. On desktop it is 32×32 px, the height of the rail's update button. Its 24 px inset from the right and bottom edges repeats the main column's padding. The rail always sits at the left edge of the window, under the mark. The main column takes all the remaining width, so wide windows show more label columns. Form panels keep their own width cap. Labels flow in an auto-fill grid, minimum 320 px per card, 16 px gaps.
 
-- Breakpoints: at 960 px and below, the rail becomes the bottom navigation bar, Add becomes a floating button, the category chip row appears, and entry details open as a full-screen sheet. Above 960 px, entry details open as a side panel at the right edge. At 520 px and below, the wordmark text and the "/" hint hide, and the library toolbar folds behind one Filters button.
+- Breakpoints: at 960 px and below, the rail becomes the bottom navigation bar, the Add button grows to a 48×48 px touch target and moves up above the bar (16 px from the right edge, the phone page gutter), the category chip row appears, and entry details open as a full-screen sheet. Above 960 px, entry details open as a full-height side panel at the right edge. On every width the details are a modal dialog: the page behind is inert, and Escape, the close button or a click on the backdrop closes them. They slide in from the right edge while the backdrop fades in (0.28 s, the shared `--ease`). Every close slides them back out and fades the backdrop (0.22 s, about 20% shorter than the entrance). Under `prefers-reduced-motion: reduce` they open and close without motion. At 520 px and below, the wordmark text and the "/" hint hide, and the library toolbar folds behind one Filters button.
 - Spacing rhythm: 8/12/16 inside cards, 24–36 between sections, 16 px page gutter on phones.
 - Dates and counts are right-aligned tabular numerals.
 - Android translates the shell to Material: top app bar (56 dp), full-width search, chip row, single-column label list, bottom navigation (Library, Outbox, Collections, Settings).
@@ -175,14 +175,14 @@ The web shell is a grid: a 56 px sticky top bar (mark, search, signal Add button
 
 Depth comes from borders, not shadows. Labels, rows, and fields are flat. A 1 px `edge` border separates paper from ground, and internal `hair` dividers separate fields. Hover changes the border color, never the elevation.
 
-Only two floating elements carry a shadow: the snackbar (`0 10px 28px -8px rgb(0 0 0 / .45)`) and the phone Add button (`0 8px 20px -6px rgb(0 0 0 / .4)`). Dialogs and the side panel use a border and the backdrop, not a shadow. Android keeps cards flat (`Widget.Parcel.Card`: fill and a 1 dp stroke) and uses Material elevation only where the framework requires it.
+Only two floating elements carry a shadow: the snackbar (`0 10px 28px -8px rgb(0 0 0 / .45)`) and the floating Add button (`0 8px 20px -6px rgb(0 0 0 / .4)`). Dialogs and the side panel use a border and the backdrop, not a shadow. Android keeps cards flat (`Widget.Parcel.Card`: fill and a 1 dp stroke) and uses Material elevation only where the framework requires it.
 
 ### Named Rules
 **The Borders Rule.** Flat surfaces carry a border. A shadow never replaces a border, and hover lifts nothing.
 
 ## Shapes
 
-Small, print-like corners. Labels use 6 px, controls and chips use 4 px, dialogs use 8 px, and routing blocks are nearly square at 2 px. Interactive shapes are never pills or circles. Only the spinner, the count badge, and the tracking dots are round. Exception: the phone navigation indicator is a pill on both platforms. The web rail styles it 56×32 px with a 16 px radius. Android `Widget.Parcel.BottomNav` sets no `itemActiveIndicatorStyle`, so Material Components draws its default rounded indicator. The perforation line is a 1 px dashed `edge` border. It appears above card actions and between the links of one capture.
+Small, print-like corners. Labels use 6 px, controls, chips and the web count badge use 4 px, dialogs use 8 px, and routing blocks are nearly square at 2 px. Interactive shapes are never pills or circles. Only the spinner and the tracking dots are round. Exception: the phone navigation indicator is a pill on both platforms. The web rail styles it 56×32 px with a 16 px radius. Android `Widget.Parcel.BottomNav` sets no `itemActiveIndicatorStyle`, so Material Components draws its default rounded indicator. The perforation line is a 1 px dashed `edge` border. It appears above card actions and between the links of one capture.
 
 ## Components
 
@@ -196,10 +196,10 @@ Small, print-like corners. Labels use 6 px, controls and chips use 4 px, dialogs
 - **Android:** the primary button is a Material TonalButton in signal yellow, with an ink stroke in light mode. Outlined and Text buttons carry the rest. Corners come from `ShapeAppearance.Parcel.Control` (4 dp), not pills.
 
 ### Routing block
-The signature element: category head as a thermal-print box. Ink fill, label text, 800 weight, 70% width, uppercase, 20 px, 2 px corners, `6px 10px 5px` padding. A small variant (13 px) sits inside cards and detail rows. Routing blocks appear only for categories, never for tags or titles.
+The signature element: category head as a thermal-print box. Ink fill, label text, 800 weight, 70% width, uppercase, 20 px, 2 px corners, `5px 10px 6px` padding (the small variant: `2px 6px 3px`). A count next to the box centers on it. A small variant (13 px) sits inside cards and detail rows. Routing blocks appear only for categories, never for tags or titles.
 
 ### Label card
-A saved item as a courier label: `label` fill, 1 px `edge` border, 6 px corners, `14px 16px 12px` padding. Inside: a T1 field head (kind icon, date, right-aligned tabular), a T3 title clamped to 2 lines, From, Contents clamped to 3 lines, tags, then a dashed perforation and the action row. Hover moves the border to `field`. Android mirrors this in `item_entry.xml` with `Widget.Parcel.Card` and a drawable perforation.
+A saved item as a courier label: `label` fill, 1 px `edge` border, 6 px corners, `14px 16px 12px` padding. Inside: a T1 field head (kind icon, date, right-aligned tabular), a T3 title clamped to 2 lines, Contents clamped to 3 lines, tags, then a dashed perforation and the action row. On the web, the title is the button that opens the entry details, and its hit area covers the whole card. Tags and the action row stay separate controls above that area. The action row holds the source link (a quiet button with the open icon and the host, in a new tab) and the copy buttons. Hover moves the border to `field` and underlines the title. Android mirrors the card shape in `item_entry.xml` with `Widget.Parcel.Card` and a drawable perforation.
 
 ### Chip / tag
 Tags and category chips are 4 px rectangles, not pills. Tag: `label2` fill, `hair` border, 24 px height, T1 text, `ink2`. Category filter chip (web `.catrow`, Android `Widget.Parcel.Chip`): selected state inverts to ink fill with label text.
@@ -213,11 +213,13 @@ Web: the rail items are 40 px rows with 4 px corners. The active view inverts to
 ### Tracking line (Inbox)
 A four-column track: Received, Fetched, Read, Shelved. Each step is a dot on a 2 px line, with a T1 name under it. Reached steps fill with ink. When the worker reaches a new step, the line to it fills with a 0.5 s ease-out scaleX animation. A held or failed step shows a red ring, and the status line under the track gives the reason on `err-soft` with the next action. Android shows only the two phone steps (On phone, Delivered) and never shows server steps. All animation stops under `prefers-reduced-motion: reduce`.
 
+On the web, the Inbox cards (one per capture, each with its tracking lines) flow in a grid with a 440 px minimum column width, so wide windows show 2 or more cards side by side. Above 960 px, each card is at least 326 px tall, so the rows stay even. Phones show one column at natural height.
+
 ## Do's and Don'ts
 
 ### Do:
 - **Do** fill exactly one action per screen with parcel yellow (#FFC629). Everything else stays ink or outlined.
-- **Do** draw depth with 1 px borders (`edge` outside, `hair` inside). Keep shadows for the snackbar and the phone Add button.
+- **Do** draw depth with 1 px borders (`edge` outside, `hair` inside). Keep shadows for the snackbar and the floating Add button.
 - **Do** set category heads as routing blocks: 800 weight, 70% width, uppercase, 2 px corners.
 - **Do** use tabular numerals for dates and counts, right-aligned.
 - **Do** keep the ramp at five sizes (13, 14, 16, 20, 28) and keep Archivo the only text face.

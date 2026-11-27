@@ -1,7 +1,7 @@
 /* clipshelf web app — library, inbox, collections, settings panels. */
 "use strict";
 
-import { $, FALLBACK, ICONS, S, api, banner, captureActive, captureBad, catsFresh, confirmDialog, copyBtn, csrf, el, fmtDate, fmtWhen, hostOf, icon, note, onAuthLoss, onEnter, out, refreshMe, safeUrl, setView, shortHost, toast, uuid, vhead } from "./core.js";
+import { $, FALLBACK, ICONS, S, api, banner, captureActive, captureBad, catsFresh, closeDialog, confirmDialog, copyBtn, csrf, el, fmtDate, fmtWhen, hostOf, icon, note, onAuthLoss, onEnter, out, refreshMe, safeUrl, setView, shortHost, toast, uuid, vhead } from "./core.js";
 
 /* ---------- shared view pieces ---------- */
 const qInput = $("#q"), qClear = $("#qclear");
@@ -11,10 +11,12 @@ const byName = (a, b) => a === "Other" ? 1 : b === "Other" ? -1 : a.localeCompar
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
 
 // Segmented control: one pressed button per group; the group never re-renders.
+// An option with an icon path renders icon-only; its text stays as the accessible name and tooltip.
 function seg(label, options, current, onPick) {
   const g = el("div", { class: "seg", role: "group", "aria-label": label });
-  for (const [value, text] of options) {
-    const b = el("button", { type: "button", "aria-pressed": String(value === current), "data-v": value }, text);
+  for (const [value, text, d] of options) {
+    const b = el("button", { type: "button", "aria-pressed": String(value === current), "data-v": value,
+      class: d ? "ico" : null, "aria-label": d ? text : null, title: d ? text : null }, d ? icon(d, 20) : text);
     b.addEventListener("click", () => {
       for (const x of g.children) x.setAttribute("aria-pressed", String(x === b));
       onPick(value);
@@ -81,7 +83,7 @@ function libHead() {
       v => { S.kind = v; loadEntries(true); }),
     tagSel,
     seg("Sort", [["az", "By category"], ["new", "Newest"]], S.srt, setSrt),
-    seg("Layout", [["grid", "Labels"], ["list", "List"]], S.vt, setVT));
+    seg("Layout", [["grid", "Labels", ICONS.grid], ["list", "List", ICONS.list]], S.vt, setVT));
   // Phones fold the toolbar behind one button; wider screens hide the button.
   filtBtn = el("button", { class: "btn small filters", type: "button",
     "aria-expanded": "false", "aria-controls": "libTools" }, "Filters");
@@ -144,6 +146,7 @@ function kindMark(e) {
     : [icon(ICONS.link, 16), el("span", { text: "Link" })];
 }
 const details = id => el("button", { class: "btn small quiet", type: "button", "data-detail": id }, "Details");
+// The title button's hit area covers the card (app.css .lt::after); the source link sits in the action row.
 function entryLabel(e, grouped) {
   const url = safeUrl(e.url), prompt = e.kind === "prompt";
   const title = prompt ? (e.title || "Untitled prompt") : (e.title || (url ? hostOf(e.url) : "Untitled"));
@@ -153,17 +156,16 @@ function entryLabel(e, grouped) {
       !grouped && cat ? el("span", { class: "rb small", text: cat }) : null,
       ...kindMark(e),
       e.found ? el("time", { class: "date", datetime: e.found, text: fmtDate(e.found) }) : null),
-    url ? el("a", { class: "ltitle", href: url, target: "_blank", rel: "noopener noreferrer nofollow", text: title })
-      : el("span", { class: "ltitle", text: title }),
-    url ? el("p", { class: "from", title: url }, el("span", { class: "fname", text: "From" }), shortHost(e.url)) : null,
+    el("button", { class: "lt", type: "button", "data-detail": e.id }, el("span", { class: "ltitle", text: title })),
     prompt ? el("pre", { class: "code", text: e.text || "" }) : contents(e),
     tagList(e.tags, 4),
     byLine(e),
     el("hr", { class: "perf" }),
     el("div", { class: "acts" },
+      url ? el("a", { class: "btn small quiet src", href: url, title: url, target: "_blank", rel: "noopener noreferrer nofollow",
+        "aria-label": `Open the original on ${shortHost(e.url)} (new tab)` }, icon(ICONS.ext, 16), shortHost(e.url)) : null,
       prompt && e.text ? copyBtn(() => e.text, "Copy prompt") : null,
-      e.install ? copyBtn(() => e.install, "Copy install") : null,
-      details(e.id)));
+      e.install ? copyBtn(() => e.install, "Copy install") : null));
 }
 function entryRow(e, grouped) {
   const url = safeUrl(e.url), prompt = e.kind === "prompt";
@@ -258,7 +260,7 @@ function renderToc() {
 
 /* card actions (delegated) */
 function filterTag(t) {
-  if (detailDlg.open) detailDlg.close();
+  if (detailDlg.open) closeDialog(detailDlg);
   S.tag = t;
   if (S.view !== "library") setView("library"); else loadEntries(true);
 }
@@ -302,7 +304,8 @@ function statusOf(j) {
   if (j.state === "running") return ["", p.done >= 1 ? "Reading with the model" : "Fetching the page", ""];
   return ["", p.done >= 1 ? "Waiting to read" : "Waiting to fetch", j.state === "queued" ? why : ""];
 }
-function track(j) {
+// shelved: the job finished cleanly, so the last step's name turns green and carries the status itself.
+function track(j, shelved) {
   const p = progress(j), reach = Math.max(p.done, p.now, p.stop);
   const prev = lastReach.get(j.id);
   lastReach.set(j.id, reach);
@@ -312,6 +315,7 @@ function track(j) {
       if (i <= p.done) cls.push("done");
       if (i === p.now) cls.push("now");
       if (i === p.stop) cls.push("stop");
+      if (shelved && i === STEPS.length - 1) cls.push("ok");
       if (i < reach) cls.push("lit");
       if (i < reach && prev != null && i >= prev) cls.push("fresh");
       const state = i === p.stop ? "stopped here" : i === p.now ? "in progress" : i <= p.done ? "done" : "not reached";
@@ -324,8 +328,9 @@ function jobItem(j, onDone) {
   const item = el("li", { class: "job" },
     url ? el("a", { class: "jurl", href: url, target: "_blank", rel: "noopener noreferrer nofollow", text: hostOf(url) })
       : el("span", { class: "jurl", text: hostOf(j.final_url || j.url) }),
-    track(j),
-    el("p", { class: "status " + kind }, text, why ? el("span", { class: "why", text: ": " + why }) : null),
+    track(j, kind === "ok"),
+    // A clean "Shelved" is already said by the green last step; other states keep their sentence.
+    kind === "ok" ? null : el("p", { class: "status " + kind }, text, why ? el("span", { class: "why", text: ": " + why }) : null),
     (j.warnings || []).length ? el("ul", { class: "notes", "aria-label": "Notes" },
       ...j.warnings.map(w => el("li", { text: w }))) : null);
   // can_retry is the action the server accepts right now; finished jobs stay reprocessable.
@@ -449,8 +454,9 @@ async function openDetail(id) {
   detBody.replaceChildren(el("p", { class: "hint", text: "Loading…" }));
   if (!detailDlg.open) {
     detOpener = document.activeElement;
-    // Wide screens read details in a side panel beside the list; phones get the full sheet.
-    if (globalThis.matchMedia?.("(min-width: 961px)").matches) detailDlg.show(); else detailDlg.showModal();
+    // Modal on every width (inert background; Escape, the close button or a backdrop click close it).
+    // Wide screens style it as a side panel, phones as a full sheet.
+    detailDlg.showModal();
   }
   let j;
   try { j = await api("/api/entries/" + id); }
@@ -472,7 +478,7 @@ async function openDetail(id) {
       if (!vals) return;
       try {
         await api("/api/entries/" + id, { method: "DELETE" });
-        detailDlg.close(); toast("Entry removed."); if (S.view === "library") loadEntries(true);
+        closeDialog(detailDlg); toast("Entry removed."); if (S.view === "library") loadEntries(true);
       } catch (err) { if (err.status !== 401) banner("err", err.message, { sticky: true }); }
     });
   }
@@ -901,8 +907,6 @@ addEventListener("keydown", e => {
     e.preventDefault(); qInput.focus();
   }
   if (e.key === "Escape" && document.activeElement === qInput && qInput.value) qClear.click();
-  else if (e.key === "Escape" && detailDlg.open && !detailDlg.matches(":modal") &&
-      !document.querySelector("dialog:modal")) detailDlg.close();
 });
 function setVT(v) {
   S.vt = v; localStorage.setItem("clipshelf.view", v);

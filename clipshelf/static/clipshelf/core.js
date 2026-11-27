@@ -28,7 +28,9 @@ const ICONS = {
   eye: "M12 4.5C7 4.5 2.7 7.6 1 12c1.7 4.4 6 7.5 11 7.5s9.3-3.1 11-7.5c-1.7-4.4-6-7.5-11-7.5zM12 17a5 5 0 1 1 0-10 5 5 0 0 1 0 10zm0-8a3 3 0 1 0 0 6 3 3 0 0 0 0-6z",
   close: "M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z",
   link: "M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z",
-  prompt: "M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h18v-2H3v2z"
+  prompt: "M3 18h12v-2H3v2zM3 6v2h18V6H3zm0 7h18v-2H3v2z",
+  grid: "M3 3v8h8V3H3zm6 6H5V5h4v4zm-6 4v8h8v-8H3zm6 6H5v-4h4v4zm4-16v8h8V3h-8zm6 6h-4V5h4v4zm-6 4v8h8v-8h-8zm6 6h-4v-4h4v4z",
+  list: "M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"
 };
 const icon = (d, size) => {
   const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -165,10 +167,25 @@ function banner(kind, text, opts = {}) {
     el("button", { class: "iconbtn", type: "button", "aria-label": "Dismiss",
       onclick: hideBanner }, icon(ICONS.close, 20)));
   bannerEl.hidden = false;
+  // A manual popover renders above an open modal, but outside the modal it is inert. So it lives inside
+  // the topmost modal dialog while one is open (popover browsers only); re-showing moves it to the top.
+  if (bannerEl.showPopover) {
+    if (bannerEl.matches(":popover-open")) bannerEl.hidePopover();
+    const host = document.querySelector("dialog:modal") || document.body;
+    if (bannerEl.parentElement !== host) host.append(bannerEl);
+    bannerEl.showPopover();
+  }
   if (!opts.sticky && !opts.actions?.length)
     bannerTimer = setTimeout(hideBanner, opts.ms || 4000);
 }
-const hideBanner = () => { bannerEl.hidden = true; bannerEl.replaceChildren(); };
+const hideBanner = () => { bannerEl.hidePopover?.(); bannerEl.hidden = true; bannerEl.replaceChildren(); };
+// A closing dialog takes a hosted snackbar with it: move it back to the page and show it again.
+for (const d of document.querySelectorAll("dialog")) d.addEventListener("close", () => {
+  if (!d.contains(bannerEl)) return;
+  const open = !bannerEl.hidden;
+  document.body.append(bannerEl);
+  if (open && bannerEl.showPopover) bannerEl.showPopover();
+});
 const toast = (text, actions) => banner("ok", text, { actions, ms: 6000 });
 
 const confirmDlg = $("#confirmDlg");
@@ -214,14 +231,24 @@ $("#cfOk").addEventListener("click", () => {
   if (!bad) confirmDlg.close("ok");
 });
 
-// Sheets close from their close button, Escape (native), or a click on the backdrop.
+// Sheets slide out before they close (app.css dialog.sheet[data-closing]). getAnimations() flushes
+// style, so it sees the exit animation; under reduced motion there is none and the sheet closes at once.
+function closeDialog(d) {
+  if (!d.open || d.hasAttribute("data-closing")) return;
+  if (!d.classList.contains("sheet")) { d.close(); return; }
+  d.setAttribute("data-closing", "");
+  Promise.allSettled(d.getAnimations({ subtree: true }).map(a => a.finished))
+    .then(() => { d.removeAttribute("data-closing"); d.close(); });
+}
+// Sheets close from their close button, Escape, or a click on the backdrop.
 for (const b of document.querySelectorAll("dialog [data-close]")) {
   const d = b.closest("dialog");
-  b.addEventListener("click", () => d.close());
+  b.addEventListener("click", () => closeDialog(d));
+  d.addEventListener("cancel", e => { e.preventDefault(); closeDialog(d); });
   d.addEventListener("click", e => {
     if (e.target !== d) return;
     const r = d.getBoundingClientRect();
-    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
+    if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeDialog(d);
   });
 }
 const rail = $(".rail");
@@ -276,6 +303,7 @@ export {
   captureActive,
   captureBad,
   catsFresh,
+  closeDialog,
   confirmDialog,
   copyBtn,
   csrf,

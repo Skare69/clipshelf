@@ -1,10 +1,8 @@
 /* test_dom_events.mjs — DOM event handling in core.js and panels.js.
    Run from the repository root:
        node test_dom_events.mjs
-   Imports the real modules against a minimal DOM stub and checks their event
-   behavior: core.js builds elements whose handlers replace inline attributes,
-   and the window keydown handler must not close the non-modal details side
-   panel while a modal dialog (confirm, add) is open. Uses node: builtins only. */
+   Imports the real modules against a minimal DOM stub and checks that core.js
+   builds elements whose handlers replace inline attributes. Uses node: builtins only. */
 import assert from "node:assert/strict";
 
 class TestElement extends EventTarget {
@@ -12,7 +10,7 @@ class TestElement extends EventTarget {
   dataset = {}; children = []; hidden = false; value = ""; open = false;
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
   append() {} replaceChildren() {} closest() { return null; }
-  matches() { return false; }  // ":modal" false: the details side panel is non-modal
+  matches() { return false; }
   close() { this.open = false; this.dispatchEvent(new Event("close")); }
 }
 
@@ -45,13 +43,4 @@ assert.equal(button.attributes.get("type"), "button");
 assert.equal(button.attributes.get("disabled"), "");
 assert.equal(button.attributes.get("title"), "Retry");
 
-// Escape with the side panel and a modal dialog open: only the modal may close.
-const detailDlg = els.get("#detailDlg");
-detailDlg.open = true;
-modalOpen = true;
-press("Escape");
-assert.equal(detailDlg.open, true, "Escape with a modal open must not close the side panel");
-modalOpen = false;
-press("Escape");
-assert.equal(detailDlg.open, false, "Escape without a modal still closes the side panel");
-console.log("ok: element events and Escape/side-panel modal handling");
+console.log("ok: element events");

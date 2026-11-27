@@ -142,7 +142,8 @@ class AvailableUpdateTests(TestCase):
             # an instance without accounts redirects to setup
             get_user_model().objects.create_user("u", "u@example.com", "pw-0123456789")
             html = self.client.get("/accounts/login/").content.decode()
-        self.assertIn('<a class="upd" href="https://github.com/Skare69/clipshelf/'
+        self.assertIn('<a class="btn small signal upd" href="https://github.com/Skare69/clipshelf/'
                       'releases/tag/v0.13.0"', html)
-        self.assertIn('href="https://github.com/Skare69/clipshelf/releases/tag/v0.12.1">'
+        self.assertIn('<a href="https://github.com/Skare69/clipshelf">clipshelf</a>', html)
+        self.assertIn('<a class="v" href="https://github.com/Skare69/clipshelf/releases/tag/v0.12.1">'
                       'v0.12.1</a>', html)
