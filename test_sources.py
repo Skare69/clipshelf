@@ -3663,6 +3663,7 @@ def test():
     test_screening_warning_projection()
     test_post_transport_and_http_errors()
     test_response_read_bound()
+    test_request_deadline_bounded_read()
     test_bounded_read_stops_after_compressed_member()
     test_gzip_trailer_never_read_past_cap()
     test_image_source_bounds()
