@@ -2187,22 +2187,115 @@ class ImportTests(ApiTestCase):
             staged,
         )
 
-    def test_import_replay_reports_stored_error(self):
+    def test_import_errored_upload_requeues(self):
         alice = self._login(self.alice)
         content = json.dumps([{"id": "1", "desc": "clip one", "url": "https://example.com/clip-one"}]).encode()
         self.assertEqual(self._post_import(alice, content).status_code, 201)
         record = ImportRecord.objects.get()
+        staging = os.path.join(os.path.realpath(self._data_dir()), "staging")
+        old_staging = record.manifest["staging"]
         # The shape the worker stores when run_staged_import raises.
         record.manifest["status"] = "error"
         record.manifest["error"] = "x" * 400
+        record.manifest["attempts"] = 3
         record.save(update_fields=["manifest"])
-        replay = self._post_import(alice, content)
-        self.assertEqual(replay.status_code, 200)
-        payload = replay.json()["import"]
+        # The same bytes no longer replay the stored error: they re-queue
+        # the record onto the fresh spool.
+        retry = self._post_import(alice, content)
+        self.assertEqual(retry.status_code, 201)
+        payload = retry.json()["import"]
+        self.assertEqual(payload["id"], str(record.id))
+        self.assertEqual(payload["status"], "pending")
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "pending")
+        self.assertIsNone(record.manifest["error"])
+        self.assertIsNone(record.manifest["completed_at"])
+        self.assertEqual(record.manifest["attempts"], 0)
+        # The record owns the new spool; the replaced one is unlinked (the
+        # sweep only reaches files a record names).
+        staged = os.listdir(staging)
+        self.assertEqual(len(staged), 1)
+        self.assertEqual(record.manifest["staging"], f"staging/{staged[0]}")
+        self.assertNotEqual(record.manifest["staging"], old_staging)
+        # The re-queue keeps the admitted destination: another collection
+        # still conflicts, replay or not.
+        other = Collection.objects.create(name="Other", kind="shared", owner=self.alice)
+        conflict = self._post_import(alice, content, collection=other)
+        self.assertEqual(conflict.status_code, 409)
+
+    def test_import_errored_upload_reruns_and_commits(self):
+        alice = self._login(self.alice)
+        content = json.dumps([{"id": "1", "desc": "clip one", "url": "https://example.com/clip-one"}]).encode()
+        self.assertEqual(self._post_import(alice, content).status_code, 201)
+        record = ImportRecord.objects.get()
+        record.manifest["status"] = "error"
+        record.manifest["error"] = "transient staging failure"
+        record.save(update_fields=["manifest"])
+        self.assertEqual(self._post_import(alice, content).status_code, 201)
+        # The re-queued import runs like a fresh one: claim, commit, done.
+        def fake_acquire(url, directory):
+            with open(os.path.join(directory, "page.html"), "w", encoding="utf-8") as fh:
+                fh.write(f"<html>{url}</html>")
+            return {"url": url, "original_url": url, "title": "t", "desc": "d",
+                    "text": "x", "status": "complete"}
+        with mock.patch.object(
+                acquisition, "import_export",
+                side_effect=lambda batch, directory, budget=None:
+                    [fake_acquire(item["url"], directory) for item in batch]):
+            claimed = worker._claim_imports()
+            self.assertEqual(len(claimed), 1)
+            worker._run_import(claimed[0])
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "done")
+        self.assertIsNone(record.manifest["error"])
+        self.assertEqual(record.manifest["result"]["counts"]["entries"], 1)
+        self.assertEqual(Entry.objects.count(), 1)
+
+    def test_requeue_only_moves_errored_records(self):
+        record = ImportRecord.objects.create(
+            user=self.alice,
+            input_digest="d" * 64,
+            manifest={"status": "pending", "staging": "staging/keep.json",
+                      "collection_id": str(self.alice_personal.id),
+                      "format": "tiktok"},
+        )
+        # A record the worker already claimed stays untouched: replay instead.
+        self.assertIsNone(
+            services.requeue_errored_import(record, "staging/new.json"))
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "pending")
+        self.assertEqual(record.manifest["staging"], "staging/keep.json")
+        record.manifest["status"] = "error"
+        record.manifest["error"] = "boom"
+        record.save(update_fields=["manifest"])
+        old = services.requeue_errored_import(record, "staging/new.json")
+        self.assertEqual(old, "staging/keep.json")
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "pending")
+        self.assertEqual(record.manifest["staging"], "staging/new.json")
+        self.assertIsNone(record.manifest["error"])
+        self.assertEqual(record.manifest["attempts"], 0)
+        self.assertEqual(record.manifest["collection_id"],
+                         str(self.alice_personal.id))
+
+    def test_import_replay_reports_fresh_errors_bounded(self):
+        # The re-queue removed the permanent replay, but a record that errors
+        # while an upload is in flight still replays its failure, bounded.
+        record = ImportRecord.objects.create(
+            user=self.alice, input_digest="e" * 64,
+            manifest={"status": "error", "error": "x" * 400})
+        spooled = os.path.join(
+            os.path.realpath(self._data_dir()), "staging", "pin.json")
+        os.makedirs(os.path.dirname(spooled), exist_ok=True)
+        with open(spooled, "wb") as fh:
+            fh.write(b"{}")
+        response = views._import_replay(record, spooled)
+        self.assertEqual(response.status_code, 200)
+        payload = json.loads(response.content)["import"]
         self.assertEqual(payload["id"], str(record.id))
         self.assertEqual(payload["status"], "error")
-        # Bounded on the wire, never replayed as a bare success receipt.
         self.assertEqual(payload["error"], "x" * 300)
+        self.assertFalse(os.path.exists(spooled))
 
     def test_same_import_cannot_target_a_different_collection(self):
         alice = self._login(self.alice)

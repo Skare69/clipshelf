@@ -765,8 +765,9 @@ def _import_replay(record, spooled):
         "id": str(record.id),
         "status": manifest.get("status", ImportRecord.Status.PENDING),
     }
-    # The digest dedupe means a failed import is never reprocessed, so the
-    # replay is the uploader's only chance to learn why it failed.
+    # A re-upload of an errored import re-queues it below, so this reports a
+    # stored failure only when the record errored after the status read in
+    # this request; the message stays bounded on the wire.
     if payload["status"] == ImportRecord.Status.ERROR:
         payload["error"] = str(manifest.get("error") or "import failed")[:300]
     return JsonResponse({"import": payload})
@@ -811,7 +812,11 @@ def api_import(request):
         existing = services.import_for_request(
             user, request_id, digest.hexdigest(), collection
         )
-        if existing is not None:
+        requeue = (
+            existing is not None
+            and (existing.manifest or {}).get("status") == ImportRecord.Status.ERROR
+        )
+        if existing is not None and not requeue:
             return _import_replay(existing, spooled)
 
         with open(spooled, "rb") as fh:
@@ -827,6 +832,26 @@ def api_import(request):
         fmt, _args = imports.parse_upload(data)
         _scan_import_keys(data)
 
+        if requeue:
+            # An errored import no longer blocks its bytes: the validated
+            # re-upload moves the record back to pending on this fresh spool
+            # and the worker runs it again. The re-queue runs after the
+            # checks above, so a 400 keeps the stored error intact instead
+            # of leaving a pending record whose spool the error handler
+            # unlinks. The replaced spool is unlinked here: the sweep only
+            # reaches files a record names.
+            old_staging = services.requeue_errored_import(existing, rel_path)
+            if old_staging is None:
+                return _import_replay(existing, spooled)
+            old_path = (Path(root) / str(old_staging)).resolve()
+            if (old_path.is_relative_to((Path(root) / STAGING_SUBDIR).resolve())
+                    and old_path.is_file()):
+                try:
+                    os.remove(old_path)
+                except OSError:
+                    pass
+            return JsonResponse(
+                {"import": {"id": str(existing.id), "status": "pending"}}, status=201)
 
         record, created = services.admit_import(
             user, request_id, digest.hexdigest(), collection, rel_path, fmt

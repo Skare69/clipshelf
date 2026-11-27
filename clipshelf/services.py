@@ -251,7 +251,8 @@ def import_for_request(user, request_id, input_digest, collection):
     """First admission pass, before payload parsing: raise ValidationError
     (code="conflict") when the request id was accepted for a different digest
     or the digest already lives in another collection; return the record to
-    replay on a same-digest retry, None when the upload may create."""
+    replay on a same-digest retry (the caller re-queues an errored record
+    instead of replaying it), None when the upload may create."""
     binding = (
         ImportRequest.objects.select_related("record")
         .filter(user=user, request_id=request_id)
@@ -301,6 +302,33 @@ def admit_import(user, request_id, input_digest, collection, staging_rel, fmt):
             raise
         return record, False
     return record, True
+
+
+def requeue_errored_import(record, staging_rel):
+    """Move one errored import record back to pending on a fresh staging
+    spool, under the row lock: a re-uploaded file must retry instead of
+    replaying a stored failure forever. Returns the replaced staging path
+    for the caller to unlink (the sweep only reaches manifest-named files),
+    or None when the record is no longer errored — a concurrent upload
+    re-queued it or the worker moved it — so the caller replays instead.
+    attempts reset with the fresh run; the destination and format stay as
+    admitted (the worker re-derives the format from the bytes)."""
+    with transaction.atomic():
+        locked = ImportRecord.objects.select_for_update().get(pk=record.pk)
+        manifest = dict(locked.manifest or {})
+        if manifest.get("status") != ImportRecord.Status.ERROR:
+            return None
+        old_staging = manifest.get("staging")
+        manifest.update({
+            "status": ImportRecord.Status.PENDING,
+            "staging": staging_rel,
+            "attempts": 0,
+            "error": None,
+            "completed_at": None,
+        })
+        locked.manifest = manifest
+        locked.save(update_fields=["manifest"])
+    return old_staging
 
 
 # ---------------------------------------------------------------------------
