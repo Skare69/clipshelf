@@ -2223,6 +2223,41 @@ class ImportTests(ApiTestCase):
         conflict = self._post_import(alice, content, collection=other)
         self.assertEqual(conflict.status_code, 409)
 
+    def test_import_concurrent_retry_reports_live_state(self):
+        # Two retries of the same errored upload race: the winner re-queues
+        # the record under the lock, the loser then sees it no longer
+        # errored — and must replay the live state, not its stale snapshot,
+        # which still carries the old error for a record that is queued.
+        alice = self._login(self.alice)
+        content = json.dumps([{"id": "1", "desc": "clip one", "url": "https://example.com/clip-one"}]).encode()
+        self.assertEqual(self._post_import(alice, content).status_code, 201)
+        record = ImportRecord.objects.get()
+        record.manifest["status"] = "error"
+        record.manifest["error"] = "old failure"
+        record.save(update_fields=["manifest"])
+
+        real_requeue = services.requeue_errored_import
+
+        def winner_requeues_first(rec, staging_rel):
+            # The concurrent winner's re-queue lands before this request's
+            # own call looks at the status under the lock.
+            real_requeue(rec, "staging/import-winner.json")
+            return None
+
+        with mock.patch.object(services, "requeue_errored_import",
+                               side_effect=winner_requeues_first):
+            loser = self._post_import(alice, content)
+        self.assertEqual(loser.status_code, 200)
+        payload = loser.json()["import"]
+        self.assertEqual(payload["id"], str(record.id))
+        self.assertEqual(payload["status"], "pending")
+        self.assertNotIn("error", payload)
+        # The winner's re-queue stands: pending on its own fresh spool.
+        record.refresh_from_db()
+        self.assertEqual(record.manifest["status"], "pending")
+        self.assertEqual(record.manifest["staging"], "staging/import-winner.json")
+        self.assertIsNone(record.manifest["error"])
+
     def test_import_errored_upload_reruns_and_commits(self):
         alice = self._login(self.alice)
         content = json.dumps([{"id": "1", "desc": "clip one", "url": "https://example.com/clip-one"}]).encode()

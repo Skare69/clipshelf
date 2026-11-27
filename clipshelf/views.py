@@ -765,9 +765,9 @@ def _import_replay(record, spooled):
         "id": str(record.id),
         "status": manifest.get("status", ImportRecord.Status.PENDING),
     }
-    # A re-upload of an errored import re-queues it below, so this reports a
-    # stored failure only when the record errored after the status read in
-    # this request; the message stays bounded on the wire.
+    # Callers re-read the record before replaying, so this reports the live
+    # state; a failure message appears only while the record is errored and
+    # stays bounded on the wire.
     if payload["status"] == ImportRecord.Status.ERROR:
         payload["error"] = str(manifest.get("error") or "import failed")[:300]
     return JsonResponse({"import": payload})
@@ -842,6 +842,11 @@ def api_import(request):
             # reaches files a record names.
             old_staging = services.requeue_errored_import(existing, rel_path)
             if old_staging is None:
+                # A concurrent retry re-queued the record, or the worker
+                # moved it, after the status read above: `existing` is a
+                # stale snapshot that would answer the old error for a
+                # queued import. Re-read and replay the live state.
+                existing.refresh_from_db()
                 return _import_replay(existing, spooled)
             old_path = (Path(root) / str(old_staging)).resolve()
             if (old_path.is_relative_to((Path(root) / STAGING_SUBDIR).resolve())
