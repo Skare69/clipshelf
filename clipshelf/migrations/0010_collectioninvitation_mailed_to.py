@@ -3,20 +3,36 @@
 import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
+from django.utils import timezone
 
 
 def bind_mailed_rows(apps, schema_editor):
     """Bind each live mailed row to the active account that holds its address
-    now: the same target rule as the delivery job, so member removal can burn
-    links that were mailed before this field existed."""
+    now, as the primary email or as a verified secondary address, so member
+    removal can burn links that were mailed before this field existed. A row
+    that no such account holds is expired: its address left the account the
+    link was mailed to, so no removal could find it."""
     CollectionInvitation = apps.get_model("clipshelf", "CollectionInvitation")
+    EmailAddress = apps.get_model("account", "EmailAddress")
     User = apps.get_model(*settings.AUTH_USER_MODEL.split("."))
+    now = timezone.now()
     rows = CollectionInvitation.objects.filter(
-        mailed_at__isnull=False, mailed_to__isnull=True, accepted_by__isnull=True
+        mailed_at__isnull=False,
+        mailed_to__isnull=True,
+        accepted_by__isnull=True,
+        expires_at__gt=now,
     )
     for row in rows:
         target = User.objects.filter(email__iexact=row.email, is_active=True).first()
-        if target is not None:
+        if target is None:
+            held = EmailAddress.objects.filter(
+                email__iexact=row.email, verified=True, user__is_active=True
+            ).first()
+            target = held.user if held is not None else None
+        if target is None:
+            row.expires_at = now
+            row.save(update_fields=["expires_at"])
+        else:
             row.mailed_to = target
             row.save(update_fields=["mailed_to"])
 
@@ -24,6 +40,7 @@ def bind_mailed_rows(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
+        ('account', '0001_initial'),
         ('clipshelf', '0009_job_tokens_serversettings_llm_output_tokens'),
     ]
 

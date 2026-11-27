@@ -19,8 +19,17 @@ from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import connection
+from django.db.migrations.executor import MigrationExecutor
 from django.http import JsonResponse
-from django.test import Client, RequestFactory, SimpleTestCase, TestCase, override_settings
+from django.test import (
+    Client,
+    RequestFactory,
+    SimpleTestCase,
+    TestCase,
+    TransactionTestCase,
+    override_settings,
+)
 from django.urls import include, path, reverse
 from django.utils import timezone
 
@@ -37,6 +46,7 @@ from clipshelf.accounts import (
 from clipshelf.api import json_error
 from clipshelf.models import (
     Collection,
+    CollectionInvitation,
     FollowedSource,
     Invitation,
     Job,
@@ -1437,10 +1447,9 @@ class InviteSignupFormGuardTests(AccountTestCase):
                 form.clean_email()
 
 
-@override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
-class MemberRemovalSecondaryAddressTests(TestCase):
-    """Removal must burn invitations to every address of the removed account,
-    not only to the address that is primary at removal time."""
+class MemberRemovalFlow:
+    """Owner, member and shared collection for the removal tests: the member
+    holds primary address B and verified secondary address A."""
 
     def setUp(self):
         inline = patch.object(accounts, "deliver_async", lambda fn: fn())
@@ -1495,6 +1504,57 @@ class MemberRemovalSecondaryAddressTests(TestCase):
             collection=self.shared, user=self.member
         ).exists()
 
+    def _email_action(self, data):
+        """POST the allauth email view as the member, through reauthentication."""
+        response = self.member_client.post(reverse("account_email"), data=data)
+        if "reauthenticate" in response.get("Location", ""):
+            response = self.member_client.post(
+                response["Location"], data={"password": PASSWORD}
+            )
+        self.assertEqual(response.status_code, 302)
+
+    def _assert_rejoin_through_dropped_address_fails(self, link, dropped, kept):
+        """The member keeps `kept` as primary and drops `dropped`, joins
+        through an invitation to `kept` and is removed. Then the member adds
+        `dropped` again, confirms it, makes it primary and opens `link`, which
+        was mailed to `dropped` earlier: the link must not re-admit."""
+        if self.member.email != kept:
+            self._make_primary(kept)
+        self._email_action({"action_remove": "", "email": dropped})
+        self.assertFalse(EmailAddress.objects.filter(email__iexact=dropped).exists())
+        self._invite(kept)
+        self.assertEqual(self.member_client.get(self._link(kept)).status_code, 200)
+        self.assertTrue(self._is_member())
+        response = self.owner_client.delete(
+            f"/api/collections/{self.shared.id}/members/{self.member.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self._is_member())
+        mail.outbox.clear()
+        self._email_action({"action_add": "", "email": dropped})
+        (confirm,) = [
+            urlsplit(word).path
+            for message in mail.outbox
+            if message.to == [dropped]
+            for word in message.body.split()
+            if "/accounts/confirm-email/" in word
+        ]
+        self.assertEqual(self.member_client.post(confirm).status_code, 302)
+        self.assertTrue(
+            EmailAddress.objects.get(user=self.member, email=dropped).verified
+        )
+        self._make_primary(dropped)
+        response = self.member_client.get(link)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self._is_member())
+        self.assertContains(response, "no longer valid")
+
+
+@override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
+class MemberRemovalSecondaryAddressTests(MemberRemovalFlow, TestCase):
+    """Removal must burn invitations to every address of the removed account,
+    not only to the address that is primary at removal time."""
+
     def test_invitation_to_secondary_address_mails_nothing(self):
         self._invite("member-a@clipshelf.test")
         self.assertEqual(mail.outbox, [])
@@ -1522,59 +1582,61 @@ class MemberRemovalSecondaryAddressTests(TestCase):
         self.assertFalse(self._is_member())
         self.assertContains(response, "no longer valid")
 
-    def _email_action(self, data):
-        """POST the allauth email view as the member, through reauthentication."""
-        response = self.member_client.post(reverse("account_email"), data=data)
-        if "reauthenticate" in response.get("Location", ""):
-            response = self.member_client.post(
-                response["Location"], data={"password": PASSWORD}
-            )
-        self.assertEqual(response.status_code, 302)
-
     def test_removal_burns_link_mailed_to_an_address_dropped_before_removal(self):
         # Address B is primary: the owner's invitation mails a live link to B.
         self._invite("member-b@clipshelf.test")
-        link_b = self._link("member-b@clipshelf.test")
-        # The member switches to A and drops B from the account.
-        self._make_primary("member-a@clipshelf.test")
-        self._email_action({"action_remove": "", "email": "member-b@clipshelf.test"})
-        self.assertFalse(
-            EmailAddress.objects.filter(email__iexact="member-b@clipshelf.test").exists()
+        self._assert_rejoin_through_dropped_address_fails(
+            self._link("member-b@clipshelf.test"),
+            dropped="member-b@clipshelf.test",
+            kept="member-a@clipshelf.test",
         )
-        # The member joins through an invitation to A.
-        self._invite("member-a@clipshelf.test")
+
+
+@override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
+class MemberRemovalUpgradeTests(MemberRemovalFlow, TransactionTestCase):
+    """A live link mailed before migration 0010 (no mailed_to yet) to an
+    address that is a verified secondary address at upgrade time must not
+    re-admit the member after the address leaves and comes back."""
+
+    BEFORE = [("clipshelf", "0009_job_tokens_serversettings_llm_output_tokens")]
+
+    def setUp(self):
+        MigrationExecutor(connection).migrate(self.BEFORE)
+        super().setUp()
+
+    def tearDown(self):
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+
+    def test_upgrade_binds_legacy_link_to_a_secondary_address(self):
+        legacy = MigrationExecutor(connection).loader.project_state(self.BEFORE).apps
+        token = secrets.token_urlsafe(32)
+        now = timezone.now()
+        legacy.get_model("clipshelf", "CollectionInvitation").objects.create(
+            collection_id=self.shared.id,
+            email="member-a@clipshelf.test",
+            token_hash=invitation_token_hash(token),
+            created_by_id=self.owner.id,
+            expires_at=now + timedelta(days=7),
+            mailed_at=now,
+        )
+        MigrationExecutor(connection).migrate(
+            [("clipshelf", "0010_collectioninvitation_mailed_to")]
+        )
+        # The upgrade keeps the link live and binds it to the member.
         self.assertEqual(
-            self.member_client.get(self._link("member-a@clipshelf.test")).status_code,
-            200,
+            list(
+                CollectionInvitation.objects.filter(
+                    expires_at__gt=timezone.now()
+                ).values_list("mailed_to_id", flat=True)
+            ),
+            [self.member.id],
         )
-        self.assertTrue(self._is_member())
-        response = self.owner_client.delete(
-            f"/api/collections/{self.shared.id}/members/{self.member.id}"
+        self._assert_rejoin_through_dropped_address_fails(
+            reverse("clipshelf_collection_invite", args=[token]),
+            dropped="member-a@clipshelf.test",
+            kept="member-b@clipshelf.test",
         )
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(self._is_member())
-        # The removed member adds B again, confirms it from the mailbox,
-        # makes it primary and opens the old link to B.
-        mail.outbox.clear()
-        self._email_action({"action_add": "", "email": "member-b@clipshelf.test"})
-        (confirm,) = [
-            urlsplit(word).path
-            for message in mail.outbox
-            if message.to == ["member-b@clipshelf.test"]
-            for word in message.body.split()
-            if "/accounts/confirm-email/" in word
-        ]
-        self.assertEqual(self.member_client.post(confirm).status_code, 302)
-        self.assertTrue(
-            EmailAddress.objects.get(
-                user=self.member, email="member-b@clipshelf.test"
-            ).verified
-        )
-        self._make_primary("member-b@clipshelf.test")
-        response = self.member_client.get(link_b)
-        self.assertEqual(response.status_code, 200)
-        self.assertFalse(self._is_member())
-        self.assertContains(response, "no longer valid")
 
 
 class AdminUserListVerificationTests(AccountTestCase):

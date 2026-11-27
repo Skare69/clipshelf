@@ -1177,7 +1177,8 @@ class LegacyBindingBackfillTests(TransactionTestCase):
 class MailedToBackfillTests(TransactionTestCase):
     """The 0010 bind_mailed_rows backfill: a live link mailed before the
     mailed_to field existed is bound to the active account that holds its
-    address, so member removal can burn it."""
+    address as primary or verified secondary, so member removal can burn it.
+    A live mailed link that no such account holds is expired."""
 
     def test_0010_binds_live_mailed_rows_to_the_active_holder(self):
         executor = MigrationExecutor(connection)
@@ -1187,36 +1188,52 @@ class MailedToBackfillTests(TransactionTestCase):
             "clipshelf", "CollectionInvitation")
         owner = models.User.objects.create_user(username="o", email="o@example.com")
         holder = models.User.objects.create_user(username="h", email="h@example.com")
-        models.User.objects.create_user(
+        EmailAddress.objects.create(user=holder, email="h2@example.com", verified=True)
+        EmailAddress.objects.create(user=holder, email="claim@example.com")
+        gone = models.User.objects.create_user(
             username="x", email="gone@example.com", is_active=False)
+        EmailAddress.objects.create(user=gone, email="gone2@example.com", verified=True)
         collection = models.Collection.objects.create(
             name="Shared", kind="shared", owner=owner)
         now = timezone.now()
+        week = now + timedelta(days=7)
 
-        def row(email, mailed=True, accepted_by=None):
+        def row(email, mailed=True, accepted_by=None, expires_at=week):
             return Invitation.objects.create(
                 collection_id=collection.id, email=email,
                 token_hash=uuid.uuid4().hex, created_by_id=owner.id,
-                expires_at=now + timedelta(days=7),
+                expires_at=expires_at,
                 mailed_at=now if mailed else None, accepted_by_id=accepted_by)
 
         bound = row("H@Example.com")  # address match ignores case
-        unmailed = row("h@example.com", mailed=False)
-        accepted = row("h@example.com", accepted_by=holder.id)
+        secondary = row("H2@example.com")  # verified secondary address
+        unverified = row("claim@example.com")  # unverified claim binds nothing
+        unmailed = row("nobody@example.com", mailed=False)
+        accepted = row("nobody@example.com", accepted_by=holder.id)
+        dead = row("nobody@example.com", expires_at=now - timedelta(days=1))
         inactive = row("gone@example.com")
+        inactive_secondary = row("gone2@example.com")
         nobody = row("nobody@example.com")
 
         executor = MigrationExecutor(connection)
         executor.migrate([("clipshelf", "0010_collectioninvitation_mailed_to")])
 
-        mailed_to = dict(models.CollectionInvitation.objects.values_list(
-            "id", "mailed_to_id"))
-        self.assertEqual(mailed_to, {
-            bound.id: holder.id,
-            unmailed.id: None,
-            accepted.id: None,
-            inactive.id: None,
-            nobody.id: None,
+        after = timezone.now()
+        state = {
+            pk: (mailed_to, expires_at > after)
+            for pk, mailed_to, expires_at in models.CollectionInvitation.objects
+            .values_list("id", "mailed_to_id", "expires_at")
+        }
+        self.assertEqual(state, {
+            bound.id: (holder.id, True),
+            secondary.id: (holder.id, True),
+            unverified.id: (None, False),
+            unmailed.id: (None, True),
+            accepted.id: (None, True),
+            dead.id: (None, False),
+            inactive.id: (None, False),
+            inactive_secondary.id: (None, False),
+            nobody.id: (None, False),
         })
 
     def tearDown(self):
