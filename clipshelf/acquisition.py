@@ -713,15 +713,27 @@ def _import_item(item, directory, budget=None):
     return source
 
 
+def _item_dir(root, index):
+    """One staging subdirectory per imported item. Every item names its
+    images "slide00"..., so a shared directory would re-probe every earlier
+    item's names for each file (quadratic in the item count). A fresh
+    per-item directory makes the first probe of each file the last one."""
+    path = os.path.join(root, f"item-{index:04d}")
+    os.makedirs(path, exist_ok=True)
+    return path
+
+
 def import_export(items, directory, budget=None):
-    """Normalize tiktok.json / staged-media items; input order preserved 1:1."""
+    """Normalize tiktok.json / staged-media items; input order preserved 1:1.
+
+    Each staged item lands in its own `directory` subdirectory."""
     if not isinstance(items, list):
         raise AcquisitionError("import items must be a list")
     budget = ImportBudget() if budget is None else budget
     directory = os.path.abspath(directory)
     os.makedirs(directory, exist_ok=True)
     out = []
-    for item in items:
+    for index, item in enumerate(items):
         if not isinstance(item, dict) or not isinstance(item.get("url"), str) or not item["url"]:
             raise AcquisitionError("every import item needs a url")
         server_ingest = (item.get("passthrough")
@@ -738,7 +750,7 @@ def import_export(items, directory, budget=None):
                 source["desc"] = str(item.get("desc") or "")[:4000]
             elif server_ingest:
                 budget.spend()  # server-tier ingest fetches the page inline
-                source = acquire(item["url"], directory)  # server tier ingests directly
+                source = acquire(item["url"], _item_dir(directory, index))  # server tier ingests directly
                 source["title"] = source["title"] or str(item.get("title") or "")[:500]
                 source["desc"] = source["desc"] or str(item.get("desc") or "")[:4000]
             elif item.get("error"):
@@ -748,7 +760,7 @@ def import_export(items, directory, budget=None):
                                            "tier": "browser-export", "failure": "unavailable"})
                 _warn(source, f"browser export error: {str(item['error'])[:300]}")
             else:
-                source = _import_item(item, directory, budget)
+                source = _import_item(item, _item_dir(directory, index), budget)
         except AcquisitionError as exc:  # one bad item fails honestly, not the batch
             source = new_source(item["url"])
             source["acquisition"] = "error"

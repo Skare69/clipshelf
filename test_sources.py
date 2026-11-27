@@ -769,6 +769,36 @@ def test_import_media_bounds(tmp):
     print("import bounds ok")
 
 
+def test_import_staging_probe_linear(tmp):
+    # Many items with the same image names share one staging root: the
+    # per-item subdirectory must keep the probe count at one per staged file
+    # (linear in the item count), not a growing collision scan (quadratic).
+    good = base64.b64encode(png_bytes()).decode()
+    real_target = acq._target_path
+    calls = []
+
+    def counting(directory, filename, source, counter):
+        calls.append((directory, filename, counter))
+        return real_target(directory, filename, source, counter)
+
+    def stage(count):
+        staging = os.path.join(tmp, f"probe-{count}")
+        os.makedirs(staging, exist_ok=True)
+        calls.clear()
+        items = [{"url": f"https://www.tiktok.com/@u/photo/{i}",
+                  "images": [{"b64": good} for _ in range(4)]}
+                 for i in range(count)]
+        with mock.patch.object(acq, "_target_path", side_effect=counting):
+            out = acq.import_export(items, staging)
+        staged = sum(len(source["assets"]) for source in out)
+        assert staged == 4 * count
+        assert len(calls) == staged, (len(calls), staged)
+        return [asset["path"] for source in out for asset in source["assets"]]
+
+    paths = stage(40) + stage(80)
+    assert len(set(paths)) == len(paths)  # every staged file stays distinct
+
+
 def test_acquisition_regressions(tmp):
     # Repeated staged names must retain distinct files and bytes.
     name_dir = os.path.join(tmp, "same-name")
@@ -3785,6 +3815,7 @@ def test():
     with tempfile.TemporaryDirectory(prefix="cs-src-") as tmp:
         test_import_media_bounds(tmp)
         test_acquisition_regressions(tmp)
+        test_import_staging_probe_linear(tmp)
         test_tiktok_host_dispatch(tmp)
         test_profile_listing_bounds(tmp)
         test_acquisition_mutant_pins(tmp)
