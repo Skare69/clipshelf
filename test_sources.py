@@ -1833,6 +1833,48 @@ def test_response_read_bound():
     print("response read bound ok")
 
 
+def test_request_deadline_bounded_read():
+    """_request(): the whole body read dies at one absolute deadline. A
+    per-recv timeout alone lets a byte-at-a-time trickle reset the clock
+    forever (the defect network.py fixes for public fetches), so a slow or
+    keep-alive endpoint could hold a worker slot without limit."""
+    body = b'{"choices": [{"message": {"content": "ok"}}]}'
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def trickle():
+        try:
+            conn, _ = srv.accept()
+            with conn:
+                head = ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                        "Connection: close\r\n\r\n")  # no Content-Length: the
+                conn.sendall(head.encode())  # body read loops until EOF, so
+                for byte in body:            # a byte per 0.2 s resets a per-recv
+                    time.sleep(0.2)          # timeout forever; only the whole-
+                    conn.sendall(bytes([byte]))  # read deadline ends it
+        except OSError:
+            pass
+
+    threading.Thread(target=trickle, daemon=True).start()
+    start = time.monotonic()
+    try:
+        try:
+            interp._request("POST", f"http://127.0.0.1:{port}/chat/completions",
+                            None, {}, timeout=1)
+            raise AssertionError("trickled body accepted past deadline")
+        except interp._TransportError as exc:
+            elapsed = time.monotonic() - start
+            assert exc.kind == "unreachable", exc.kind
+            assert exc.detail == "deadline exceeded", exc.detail
+            assert str(exc) == "endpoint unreachable: deadline exceeded", str(exc)
+            assert elapsed < 2.0, f"slow body held the request {elapsed:.2f}s"
+    finally:
+        srv.close()
+    print("request deadline ok")
+
+
 def test_image_source_bounds():
     """Source images above the 32 MiB bound are skipped before decoding with
     an honest warning; a file exactly at the bound still decodes to one part."""

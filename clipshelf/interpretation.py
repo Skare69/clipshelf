@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -175,6 +176,18 @@ class _TransportError(InterpretationError):
         super().__init__(message)
 
 
+def _deadline_stream(fp, deadline):
+    """Response stream whose every recv re-tightens the socket timeout to the
+    remaining whole-request budget (network._DeadlineIO): urlopen(timeout=)
+    bounds each recv alone, so a byte-at-a-time trickle resets the clock
+    forever and holds a worker slot without limit. None for fake in-memory
+    streams (tests), which read straight through."""
+    sock = getattr(getattr(fp, "raw", None), "_sock", None)
+    if sock is None:
+        return None
+    return io.BufferedReader(network._DeadlineIO(sock, fp, deadline))
+
+
 def _request(method, url, key, payload, timeout):
     """ONE http adapter: bounded request -> parsed JSON, or _TransportError."""
     headers = {"Content-Type": "application/json"} if payload is not None else {}
@@ -182,8 +195,12 @@ def _request(method, url, key, payload, timeout):
         headers["Authorization"] = f"Bearer {key}"
     body = None if payload is None else json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    deadline = time.monotonic() + timeout
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
+            fp = getattr(resp, "fp", None)
+            if fp is not None:  # fake in-memory responses have none
+                resp.fp = _deadline_stream(fp, deadline) or fp
             raw = resp.read(LLM_RESPONSE_MAX + 1)
     except urllib.error.HTTPError as exc:
         try:  # a stalled or reset error body must not skip the OSError
@@ -195,6 +212,12 @@ def _request(method, url, key, payload, timeout):
             raise _TransportError("creds", exc.code) from None
         raise _TransportError("http", exc.code, detail) from None
     except (urllib.error.URLError, OSError) as exc:
+        if isinstance(exc, TimeoutError) or isinstance(
+                getattr(exc, "reason", None), TimeoutError):
+            # a spent whole-request deadline and a per-op socket timeout both
+            # mean the endpoint did not answer inside its budget
+            raise _TransportError("unreachable",
+                                  detail="deadline exceeded") from None
         raise _TransportError("unreachable",
                               detail=_redact(str(exc), key)[:300]) from None
     except ValueError:
