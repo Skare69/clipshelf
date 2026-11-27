@@ -378,6 +378,7 @@ def parse_upload(data):
             f"too many items ({count} > {services.MAX_IMPORT_ITEMS})")
     if fmt == "legacy":
         _check_history_cap(args["seen"], args["removed"])
+    _check_media_cap(args["items"])
     return fmt, args
 
 
@@ -389,6 +390,26 @@ def _check_history_cap(seen, removed):
         raise ValidationError(
             f"too many seen and removed URLs ({count} > "
             f"{services.MAX_IMPORT_HISTORY})")
+
+
+def _check_media_cap(items):
+    """Refuse imports past MAX_IMPORT_MEDIA_ITEMS items with media or
+    MAX_IMPORT_MEDIA_FILES media files: each such item writes its Job,
+    source and Asset rows inside the import's one write transaction."""
+    media_items = media_files = 0
+    for item in items:
+        files = sum(1 for _field, value in _media_refs(item) if value)
+        if files or item.get("interpreted"):
+            media_items += 1
+            media_files += files
+    if media_items > services.MAX_IMPORT_MEDIA_ITEMS:
+        raise ValidationError(
+            f"too many items with media ({media_items} > "
+            f"{services.MAX_IMPORT_MEDIA_ITEMS})")
+    if media_files > services.MAX_IMPORT_MEDIA_FILES:
+        raise ValidationError(
+            f"too many media files ({media_files} > "
+            f"{services.MAX_IMPORT_MEDIA_FILES})")
 
 
 def _cli_record_destination(user, digest):
@@ -453,6 +474,7 @@ def import_items(*, user, collection_id, items, prompts=None, client_request_id=
     removed_urls = list(removed)
     removed_keys = {lib.norm(url) or url for url in removed_urls}
     items = _dedupe(items, removed_keys)
+    _check_media_cap(items)
 
     digest = _input_digest(items, prompts, seen, removed, cache_dir)
     existing = (None if dry_run else

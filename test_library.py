@@ -2485,6 +2485,47 @@ class ImportTests(ApiTestCase):
         self.assertEqual(at_cap.status_code, 201)
         self.assertEqual(at_cap.json()["import"]["status"], "pending")
 
+    def test_import_rejects_over_cap_media_at_admission(self):
+        # Each item with media writes its Job, source and Asset rows in the
+        # import's one write transaction: 5000 items x 1 image held the
+        # SQLite write lock 34.9 s and failed a concurrent capture
+        # (scripts/bench_import_assets.py). Link-only items do not count; an
+        # interpreted legacy item does, because the import fetches its page.
+        alice = self._login(self.alice)
+        cap = services.MAX_IMPORT_MEDIA_ITEMS
+
+        def tiktok(media, images=1, links=0):
+            return json.dumps(
+                [{"url": f"https://m.example/{i}",
+                  "images": [{"url": f"https://cdn.example/{i}/{k}"}
+                             for k in range(images)]} for i in range(media)]
+                + [{"url": f"https://l.example/{i}"} for i in range(links)]
+            ).encode()
+
+        staging = os.path.join(os.path.realpath(self._data_dir()), "staging")
+        cases = [
+            (tiktok(cap + 1), f"too many items with media ({cap + 1} > {cap})"),
+            (tiktok(cap // 2, images=33),
+             f"too many media files ({cap // 2 * 33} > "
+             f"{services.MAX_IMPORT_MEDIA_FILES})"),
+            (json.dumps({"links": {
+                f"https://i.example/{i}": {"interpreted": "2024-01-01"}
+                for i in range(cap + 1)}}).encode(),
+             f"too many items with media ({cap + 1} > {cap})"),
+        ]
+        for content, detail in cases:
+            with self.subTest(detail=detail):
+                over = self._post_import(alice, content)
+                self.assertEqual(over.status_code, 400)
+                self.assertEqual(over.json()["detail"], detail)
+                self.assertFalse(ImportRecord.objects.filter(user=self.alice).exists())
+                self.assertEqual(os.listdir(staging), [])
+        at_cap = self._post_import(
+            alice, tiktok(cap, images=16,
+                          links=services.MAX_IMPORT_ITEMS - cap))
+        self.assertEqual(at_cap.status_code, 201)
+        self.assertEqual(at_cap.json()["import"]["status"], "pending")
+
     def test_import_rejects_element_flood_before_parsing(self):
         # json.load builds ~64 bytes of objects per element, a measured ~26
         # MiB of RSS per MiB of body (scripts/bench_import_parse.py): a 32

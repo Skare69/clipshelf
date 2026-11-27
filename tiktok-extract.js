@@ -71,6 +71,12 @@ const FILE_BUDGET = 30e6;
 // mirrors clipshelf services.MAX_IMPORT_ITEMS: the server rejects an upload
 // with more link entries than this
 const ITEM_BUDGET = 5000;
+// mirrors clipshelf services.MAX_IMPORT_MEDIA_ITEMS: the server rejects an
+// upload with more entries that carry images or a video than this
+const MEDIA_ITEM_BUDGET = 1000;
+// mirrors clipshelf services.MAX_IMPORT_MEDIA_FILES: the server rejects an
+// upload whose images + videos total more than this
+const MEDIA_FILE_BUDGET = 16000;
 
 async function tiktokExtract(urls, onProgress, budget = FILE_BUDGET) {
   const toB64 = async (blob) =>
@@ -86,7 +92,7 @@ async function tiktokExtract(urls, onProgress, budget = FILE_BUDGET) {
   if (worker) worker.opener = null;
   const out = [];
   const rest = [];
-  let i = 0, bytes = 0;
+  let i = 0, bytes = 0, mediaItems = 0, mediaFiles = 0;
   for (const url of urls) {
     if (out.length >= ITEM_BUDGET) {
       rest.push(...urls.slice(i));
@@ -212,6 +218,14 @@ async function tiktokExtract(urls, onProgress, budget = FILE_BUDGET) {
         rest.push(...urls.slice(i - 1));
         break;
       }
+      // media caps: the first media entry always fits, same as the bytes rule
+      const files = entry.images.length + (entry.video ? 1 : 0);
+      if (files && mediaItems &&
+          (mediaItems + 1 > MEDIA_ITEM_BUDGET || mediaFiles + files > MEDIA_FILE_BUDGET)) {
+        rest.push(...urls.slice(i - 1));
+        break;
+      }
+      if (files) { mediaItems++; mediaFiles += files; }
       bytes += size;
       out.push(entry);
       console.log("ok", url, `${images.length} images${video?.b64 ? ", video" : ""}`);
@@ -488,6 +502,39 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
         passthrough: true,
       });
       assert.deepStrictEqual(tiktokExtract.lastUrls, [many[ITEM_BUDGET]]);
+      // media item budget (services.MAX_IMPORT_MEDIA_ITEMS): one image each,
+      // no video; the post after the cap waits for the next run
+      global.fetch = async () => new Response("", { status: 404 });
+      itemStruct = { video: { cover: imageUrl } };
+      const posts = Array.from({ length: MEDIA_ITEM_BUDGET + 1 }, (_, k) =>
+        `https://www.tiktok.com/@test/video/m${k}`
+      );
+      const previousLog = console.log;
+      console.log = () => {}; // one "ok" line per post would flood the CI log
+      let mediaCapped;
+      try {
+        mediaCapped = await tiktokExtract(posts);
+      } finally {
+        console.log = previousLog;
+      }
+      assert.strictEqual(mediaCapped.length, MEDIA_ITEM_BUDGET);
+      assert.deepStrictEqual(mediaCapped[MEDIA_ITEM_BUDGET - 1].images, [{ url: imageUrl }]);
+      assert.deepStrictEqual(tiktokExtract.lastUrls, [posts[MEDIA_ITEM_BUDGET]]);
+      // media file budget (services.MAX_IMPORT_MEDIA_FILES): two posts reach
+      // the cap exactly, the third would pass it and waits with the rest
+      const half = MEDIA_FILE_BUDGET / 2;
+      itemStruct = {
+        imagePost: {
+          images: Array.from({ length: half }, (_, k) => ({
+            imageURL: { urlList: [`${imageUrl}/${k}`] },
+          })),
+        },
+      };
+      const slidePosts = [1, 2, 3, 4].map((k) => `https://www.tiktok.com/@test/photo/${k}`);
+      const fileCapped = await tiktokExtract(slidePosts);
+      assert.deepStrictEqual(fileCapped.map((o) => o.url), slidePosts.slice(0, 2));
+      assert.strictEqual(fileCapped[1].images.length, half);
+      assert.deepStrictEqual(tiktokExtract.lastUrls, slidePosts.slice(2));
     } finally {
       if (previousWindow === undefined) delete global.window;
       else global.window = previousWindow;

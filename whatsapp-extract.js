@@ -36,6 +36,12 @@ const FILE_BUDGET = 30e6;
 // mirrors clipshelf services.MAX_IMPORT_ITEMS: the server rejects an upload
 // with more link and prompt entries than this
 const ITEM_BUDGET = 5000;
+// mirrors clipshelf services.MAX_IMPORT_MEDIA_ITEMS: the server rejects an
+// upload with more entries that carry images than this
+const MEDIA_ITEM_BUDGET = 1000;
+// mirrors clipshelf services.MAX_IMPORT_MEDIA_FILES: the server rejects an
+// upload with more images in total than this
+const MEDIA_FILE_BUDGET = 16000;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const iso = (t) => new Date(t * 1000).toISOString();
@@ -90,7 +96,16 @@ function rowsFor(m, imageB64) {
 function applyRows(rows, out, bytes, nItems) {
   const size = new Blob([JSON.stringify(rows)]).size;
   const add = rows.filter(([s, k]) => (s === "links" || s === "prompts") && !(k in out[s])).length;
-  if (bytes && (bytes + size > FILE_BUDGET || nItems + add > ITEM_BUDGET)) return null;
+  const media = (entries) => {
+    let n = 0, files = 0;
+    for (const e of entries) if (e.images?.length) { n++; files += e.images.length; }
+    return [n, files];
+  };
+  const [haveItems, haveFiles] = media(Object.values(out.links));
+  const [addItems, addFiles] = media(rows
+    .filter(([s, k]) => s === "links" && !(k in out.links)).map(([, , e]) => e));
+  if (bytes && (bytes + size > FILE_BUDGET || nItems + add > ITEM_BUDGET
+    || haveItems + addItems > MEDIA_ITEM_BUDGET || haveFiles + addFiles > MEDIA_FILE_BUDGET)) return null;
   for (const [section, key, entry] of rows) out[section][key] ??= entry;
   return [add, size];
 }
@@ -267,6 +282,27 @@ if (typeof document === "undefined" && typeof module !== "undefined") {
     assert.strictEqual(Object.keys(out2.links).length, ITEM_BUDGET);
     // the byte budget stops too
     assert.strictEqual(applyRows(linkRows(1, "c"), { links: {}, prompts: {} }, FILE_BUDGET, 0), null);
+  }
+  // media budgets: entries with images, and images in total
+  {
+    const imageRows = (n, tag, k = 1) => Array.from({ length: n }, (_, i) =>
+      ["links", `https://web.whatsapp.com/?msg=${tag}${i}`,
+        { found, images: Array.from({ length: k }, () => ({ b64: "AAA=" })) }]);
+    const out = { links: {}, prompts: {} };
+    assert.strictEqual(applyRows(imageRows(MEDIA_ITEM_BUDGET - 1, "a"), out, 0, 0)[0], MEDIA_ITEM_BUDGET - 1);
+    // at the cap exactly: admitted
+    assert.strictEqual(applyRows(imageRows(1, "b"), out, 1, MEDIA_ITEM_BUDGET - 1)[0], 1);
+    // one more image row: stop, add nothing; it waits for the next run
+    assert.strictEqual(applyRows(imageRows(1, "c"), out, 1, MEDIA_ITEM_BUDGET), null);
+    assert.strictEqual(Object.keys(out.links).length, MEDIA_ITEM_BUDGET);
+    // plain link rows still fit: they are not media items
+    assert.strictEqual(applyRows(linkRows(1, "d"), out, 1, MEDIA_ITEM_BUDGET)[0], 1);
+    // image total: at the cap admitted, one image over stops
+    const per = MEDIA_FILE_BUDGET / 16;
+    const out2 = { links: {}, prompts: {} };
+    assert.strictEqual(applyRows(imageRows(16, "e", per), out2, 0, 0)[0], 16);
+    assert.strictEqual(applyRows(imageRows(1, "f"), out2, 1, 16), null);
+    assert.strictEqual(Object.keys(out2.links).length, 16);
   }
   // the export loop's own row choice through rowsFor: a video caption
   // exports its link row only (never a prompt row), a caption-less video

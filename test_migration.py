@@ -1054,11 +1054,12 @@ class ImportScreeningTests(MigrationMixin, TransactionTestCase):
         self.assertTrue(models.ImportRecord.objects.filter(user=self.user).exists())
 
 
-class ImportAssetHashingTests(MigrationMixin, TransactionTestCase):
-    """Asset files are hashed and measured before the import transaction:
-    the SQLite write lock covers only row inserts. Measured before the fix
-    (scripts/bench_import_assets.py): 5000 items x 16 images held the lock
-    68 s, and a concurrent capture failed with "database is locked"."""
+class ImportWriteLockTests(MigrationMixin, TransactionTestCase):
+    """An import must not hold the SQLite write lock past the 30 s
+    busy_timeout (scripts/bench_import_assets.py). 5000 items x 16 images
+    held it 52.8 s with the asset hashing inside it, and a concurrent capture
+    failed with "database is locked". Asset files are hashed before the
+    transaction, and the media caps bound the rows written inside it."""
 
     def test_asset_hashing_runs_outside_import_transaction(self):
         probes = []
@@ -1083,6 +1084,23 @@ class ImportAssetHashingTests(MigrationMixin, TransactionTestCase):
             data = (self.tmp / asset.path).read_bytes()
             self.assertEqual(asset.sha256, hashlib.sha256(data).hexdigest())
             self.assertEqual(asset.size, len(data))
+
+    def test_engine_refuses_over_cap_media_before_any_write(self):
+        # Paths without the upload view (CLI import_library, a replayed
+        # record) re-check the media caps in import_items itself.
+        images = [{"b64": png_b64("red")}, {"b64": png_b64("blue")}]
+        items = [{"url": f"https://example.com/m/{i}", "images": images}
+                 for i in range(3)]
+        for name, cap, detail in (
+                ("MAX_IMPORT_MEDIA_ITEMS", 2, "too many items with media (3 > 2)"),
+                ("MAX_IMPORT_MEDIA_FILES", 5, "too many media files (6 > 5)")):
+            with self.subTest(cap=name), override_settings(DATA_DIR=str(self.tmp)), \
+                    mock.patch.object(services, name, cap), \
+                    self.assertRaisesMessage(ValidationError, detail):
+                imports.import_items(user=self.user, collection_id=None, items=items)
+        self.assertFalse(models.ImportRecord.objects.exists())
+        self.assertFalse(models.Asset.objects.exists())
+        self.assertFalse((self.tmp / "assets").exists())
 
 
 class DeferredFetchTests(MigrationMixin, TestCase):

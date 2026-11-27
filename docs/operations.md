@@ -90,18 +90,30 @@ An imported item with media also writes a `Job`, its `Asset` rows and its
 source in the same transaction. The import hashes and measures the asset
 files before the transaction starts, so the lock covers only row writes.
 Measured on 2026-11-27 with
-`python3 scripts/bench_import_assets.py <items> <images>` on the same kind
-of disk, with the query log off as in a deployment:
+`python3 scripts/bench_import_assets.py <media_items> <images> <link_items>`
+on the same kind of disk, with the query log off as in a deployment:
 
 | Import | Lock with hashing inside | Lock with hashing before |
 | --- | --- | --- |
 | 5000 items x 16 images (80000 assets) | 52.8 s | 38.5 s |
 | 5000 items x 1 image | 34.1 s | 34.9 s |
 | 5000 link-only items | not measured | 11.4 s |
+| 2000 items x 16 images, 3000 link-only items | not measured | 23.1 s |
+| 1000 items x 16 images, 4000 link-only items | not measured | 16.6 s |
 
 In each run above 30 s, a concurrent capture failed with "database is
-locked". The per-item writes of an item with media cost most of the lock
-time, not the asset count. The import still has no bound for them.
+locked". The writes for each item with media cost most of the lock time,
+not the asset count. Thus admission and the import engine refuse an
+import with a 400 when it has more than `MAX_IMPORT_MEDIA_ITEMS` (1000)
+items with media, or more than `MAX_IMPORT_MEDIA_FILES` (16000) media
+files (clipshelf/services.py). An item with media has images, a video or
+a cached page. An interpreted legacy item also counts, because the import
+fetches its page. The last row of the table is the largest import that
+admission accepts. The 10000 history URLs that admission also accepts add
+2 s to 3 s (measured separately, see above).
+
+`tiktok-extract.js` and `whatsapp-extract.js` stop one run at the same
+caps. The next run exports the remaining posts or messages.
 
 ## LLM spend ceilings
 

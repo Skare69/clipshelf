@@ -245,6 +245,15 @@ MAX_IMPORT_ITEMS = 5000
 # for 2.3 s to 2.9 s, against the 30s busy_timeout that other users'
 # writes wait; 125000 URLs held it 32s and failed them.
 MAX_IMPORT_HISTORY = 2 * MAX_IMPORT_ITEMS
+# An item with media writes a Job, its source and its Asset rows in the same
+# transaction. In scripts/bench_import_assets.py (local disk, assets hashed
+# before the lock), 5000 items x 1 image held the lock 34.9 s and failed a
+# concurrent capture. At the caps with the rest of MAX_IMPORT_ITEMS as
+# link-only items, 1000 x 16 images held it 16.6 s (2000 x 16 held 23.1 s,
+# too close to the 30s busy_timeout once 10000 history URLs add 2-3 s).
+# An interpreted legacy item counts too: the import fetches its page inline.
+MAX_IMPORT_MEDIA_ITEMS = 1000
+MAX_IMPORT_MEDIA_FILES = 16 * MAX_IMPORT_MEDIA_ITEMS
 
 
 def import_for_request(user, request_id, input_digest, collection):

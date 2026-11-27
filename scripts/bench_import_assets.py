@@ -9,12 +9,16 @@ user while the import holds the write lock. It reports the transaction
 hold time, the share of it spent hashing asset files inside the lock, and
 how long the capture waited.
 
-Usage: python3 scripts/bench_import_assets.py [items] [images] [side_px]
-       (default: 5000 items x 16 images of 4x4 px)
-side_px sets the PNG edge in pixels; the pixels are random, so a file holds
-about 3 * side_px**2 bytes. Always run it with CLIPSHELF_DATA_DIR set to a
-fresh throwaway directory. A directory that already holds a database is
-refused, never benchmarked.
+Usage: python3 scripts/bench_import_assets.py [media_items] [images] [link_items] [side_px]
+       (default: services.MAX_IMPORT_MEDIA_ITEMS items x 16 images, plus
+       link-only items up to services.MAX_IMPORT_ITEMS: the largest import
+       that admission accepts)
+side_px (default 4) sets the PNG edge in pixels; the pixels are random, so
+a file holds about 3 * side_px**2 bytes. Sizes past the media caps were
+legal before the caps, which were chosen against their measurements: for
+those runs the script disables the cap check alone. Always run it with
+CLIPSHELF_DATA_DIR set to a fresh throwaway directory. A directory that
+already holds a database is refused, never benchmarked.
 
 Staging runs before the transaction: each item lands in its own subdirectory
 of the import's staging directory, so same-named slides never collide and the
@@ -63,9 +67,11 @@ def png_b64(side, rng):
 
 
 def main():
-    n_items = int(sys.argv[1]) if len(sys.argv) > 1 else services.MAX_IMPORT_ITEMS
+    n_items = int(sys.argv[1]) if len(sys.argv) > 1 else services.MAX_IMPORT_MEDIA_ITEMS
     n_images = int(sys.argv[2]) if len(sys.argv) > 2 else 16
-    side = int(sys.argv[3]) if len(sys.argv) > 3 else 4
+    n_links = (int(sys.argv[3]) if len(sys.argv) > 3
+               else services.MAX_IMPORT_ITEMS - n_items)
+    side = int(sys.argv[4]) if len(sys.argv) > 4 else 4
     call_command("migrate", verbosity=0)
     stamp = uuid.uuid4().hex[:8]
     importer = models.User.objects.create_user(
@@ -75,13 +81,18 @@ def main():
     services.get_settings().save()
     rng = random.Random(0)
     pool = [png_b64(side, rng) for _ in range(n_images)]
-    # images=0 imports link-only items: no assets, the job loop fetches later.
+    # images=0 makes the media items link-only too: no assets.
     items = [{"url": f"https://bench.example/{stamp}/{i}",
               **({"images": [{"b64": b64} for b64 in pool]} if pool else {})}
              for i in range(n_items)]
+    items += [{"url": f"https://bench.example/{stamp}/link/{i}"} for i in range(n_links)]
     print(f"busy_timeout: {connection.cursor().execute('PRAGMA busy_timeout').fetchone()[0]} ms")
-    print(f"items={n_items} images_per_item={n_images} "
+    print(f"media_items={n_items} images_per_item={n_images} link_items={n_links} "
           f"png_bytes={len(base64.b64decode(pool[0])) if pool else 0}")
+    if (n_items > services.MAX_IMPORT_MEDIA_ITEMS
+            or n_items * n_images > services.MAX_IMPORT_MEDIA_FILES):
+        imports._check_media_cap = lambda items: None
+        print("over the media caps: cap check disabled for the run")
 
     in_lock = threading.Event()
     capture = {}
