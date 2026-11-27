@@ -1982,6 +1982,47 @@ def test_request_deadline_bounded_read():
     print("request deadline ok")
 
 
+def test_redirect_refuses_non_http_targets():
+    """_urlopen(): a redirect to a non-http(s) scheme is refused before the
+    follow. urllib's default opener set follows ftp:// redirects, and their
+    reads run entirely outside the deadline machinery."""
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def serve_302_to_ftp():
+        try:
+            conn, _ = srv.accept()
+            with conn:
+                head = (f"HTTP/1.1 302 found\r\n"
+                        f"Location: ftp://127.0.0.1:{port}/f\r\n"
+                        f"Content-Length: 0\r\n\r\n")
+                conn.sendall(head.encode())
+        except OSError:
+            pass
+
+    real_open = interp.urllib.request.FTPHandler.ftp_open
+
+    def no_ftp(self, req):
+        raise AssertionError("FTP connection opened")
+
+    threading.Thread(target=serve_302_to_ftp, daemon=True).start()
+    interp.urllib.request.FTPHandler.ftp_open = no_ftp
+    try:
+        try:
+            interp._request("POST", f"http://127.0.0.1:{port}/chat/completions",
+                            None, {}, timeout=5)
+            raise AssertionError("ftp redirect followed")
+        except interp.InterpretationError as exc:
+            assert str(exc) == ("endpoint unreachable: "
+                                "redirect to non-http(s) target refused"), str(exc)
+    finally:
+        interp.urllib.request.FTPHandler.ftp_open = real_open
+        srv.close()
+    print("redirect scheme guard ok")
+
+
 def test_image_source_bounds():
     """Source images above the 32 MiB bound are skipped before decoding with
     an honest warning; a file exactly at the bound still decodes to one part."""
@@ -3735,6 +3776,7 @@ def test():
     test_post_transport_and_http_errors()
     test_response_read_bound()
     test_request_deadline_bounded_read()
+    test_redirect_refuses_non_http_targets()
     test_bounded_read_stops_after_compressed_member()
     test_gzip_trailer_never_read_past_cap()
     test_image_source_bounds()

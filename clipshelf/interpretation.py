@@ -23,6 +23,7 @@ import subprocess
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from PIL import Image, ImageOps
@@ -226,13 +227,32 @@ class _DeadlineHTTPSHandler(urllib.request.HTTPSHandler):
                             context=self._context)
 
 
+class _HTTPOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Redirect follower that refuses every non-http(s) target before the
+    follow. urllib's default opener set follows ftp:// redirects, whose
+    reads run entirely outside the deadline machinery."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        try:
+            scheme = urllib.parse.urlsplit(newurl).scheme
+        except ValueError:      # unparseable target: refuse it too
+            scheme = ""
+        if scheme not in ("http", "https"):
+            raise _TransportError(
+                "unreachable",
+                detail="redirect to non-http(s) target refused") from None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _urlopen(req, timeout, deadline):
     """ONE urlopen seam; tests patch this. The real path builds an opener
     whose connections carry the deadline, so it governs every response read,
     including the ones inside urlopen (status and header parsing, interim
-    100 Continue replies, the redirect body drain)."""
+    100 Continue replies, the redirect body drain), and whose redirect
+    follower refuses non-http(s) targets."""
     opener = urllib.request.build_opener(
-        _DeadlineHTTPHandler(deadline), _DeadlineHTTPSHandler(deadline))
+        _HTTPOnlyRedirects(), _DeadlineHTTPHandler(deadline),
+        _DeadlineHTTPSHandler(deadline))
     return opener.open(req, timeout=timeout)
 
 
