@@ -170,6 +170,11 @@ const LLM_PROVIDERS = [
   { id: "lmstudio", label: "LM Studio (local)", url: "http://localhost:1234/v1", local: true },
   { id: "vllm", label: "vLLM (local)", url: "http://localhost:8000/v1", local: true },
 ];
+/* Number inputs accept exponent notation ("6e3" is 6000), which parseInt
+   truncates (parseInt("6e3") === 6, so the clamp would send 500). valueAsNumber
+   keeps the real number; empty or non-numeric input is NaN and falls back. */
+const inputNumber = (input, fallback) =>
+  Number.isFinite(input.valueAsNumber) ? input.valueAsNumber : fallback;
 function adminLlm(llm, err, scr, scrErr) {
   const p = el("section", { class: "panel" }, el("h2", { text: "Model endpoint" }));
   if (err) return p.append(errNode(err)), p;
@@ -261,8 +266,8 @@ function adminLlm(llm, err, scr, scrErr) {
     finally { load.disabled = false; load.textContent = "Load models"; }
   });
   const body = () => ({ base_url: base.value.trim(), model: modelValue(),
-    concurrency: Math.min(8, Math.max(1, parseInt(conc.value, 10) || 1)),
-    output_tokens: Math.min(8000, Math.max(500, parseInt(outTok.value, 10) || 4000)) });
+    concurrency: Math.min(8, Math.max(1, inputNumber(conc, 1))),
+    output_tokens: Math.min(8000, Math.max(500, inputNumber(outTok, 4000))) });
   form.addEventListener("submit", async ev => {
     ev.preventDefault();
     const b = withKey(body());
@@ -272,7 +277,7 @@ function adminLlm(llm, err, scr, scrErr) {
   });
   check.addEventListener("click", async () => {
     const b = withKey({ base_url: base.value.trim(), model: modelValue(),
-      output_tokens: Math.min(8000, Math.max(500, parseInt(outTok.value, 10) || 4000)) });
+      output_tokens: Math.min(8000, Math.max(500, inputNumber(outTok, 4000))) });
     const before = [base.value.trim(), modelValue(), key.value, conc.value, outTok.value, clear.checked].join("\n");
     note.hidden = true;
     setCheck("busy");
@@ -326,4 +331,4 @@ function adminLlm(llm, err, scr, scrErr) {
 
 onEnter("admin", renderAdmin);
 
-export { adminInvitations };
+export { adminInvitations, inputNumber };

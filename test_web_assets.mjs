@@ -283,3 +283,19 @@ assert.ok(!oneText.includes("null"), `rendered row must not contain "null": ${JS
 assert.ok(oneText.includes("a@b.c") && oneText.includes("Pending"), "row renders with status");
 
 console.log("ok: empty invitations panel shows no stray null child");
+
+/* ---------- 6. number inputs read exponent notation ("6e3" = 6000) ---------- */
+/* Regression: the admin token/concurrency fields used parseInt, which truncates
+   "6e3" to 6 — the 500..8000 clamp then sent 500 instead of the typed 6000.
+   The real fix reads valueAsNumber; these asserts pin the exported helper the
+   save body and the Check connection payload both go through. */
+const { inputNumber } = await import("./clipshelf/static/clipshelf/admin.js");
+assert.equal(inputNumber({ valueAsNumber: 6e3 }, 4000), 6000,
+  "exponent notation 6e3 must read as 6000, not parseInt's 6");
+assert.equal(inputNumber({ valueAsNumber: 1e1 }, 1), 10,
+  "exponent notation 1e1 must read as 10");
+assert.equal(inputNumber({ valueAsNumber: NaN }, 4000), 4000,
+  "empty or non-numeric input (valueAsNumber NaN) must fall back");
+assert.equal(inputNumber({ valueAsNumber: 5500 }, 4000), 5500,
+  "a plain typed number keeps its value");
+console.log("ok: admin number inputs read 6e3 as 6000 via valueAsNumber");
