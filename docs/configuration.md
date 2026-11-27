@@ -20,6 +20,16 @@ the setup wizard. Without it, the wizard's CSRF check sees an `https://` Origin
 on a plain-HTTP request and answers 403. Wildcard hosts permit DNS rebinding;
 narrow them by setting `CLIPSHELF_ALLOWED_HOSTS`.
 
+## Import ceiling
+
+`CLIPSHELF_MAX_IMPORT_BYTES` sets the import upload ceiling in bytes. The
+default is `33554432` (32 MiB); `deploy/clipshelf.env.example` lists the
+variable. The web server refuses a request body larger than this ceiling plus
+1 MiB of multipart overhead with `413` before the request reaches Django, so
+one request cannot buffer more than that bound into a temp file. Raise the
+ceiling only together with the memory headroom for one import (see
+[operations.md](operations.md)).
+
 ## Followed sources
 
 Followed creator profiles are checked by the worker on a schedule. Two

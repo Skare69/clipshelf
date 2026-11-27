@@ -55,6 +55,8 @@ def _migrate():
 
 
 def _serve(host, port):
+    from django.conf import settings
+
     from clipshelf.management.locks import data_lock
     from clipshelf.project.wsgi import application
     from waitress import serve
@@ -62,7 +64,16 @@ def _serve(host, port):
         print(f"clipshelf on http://{host}:{port} (Ctrl+C stops)")
         # channel_timeout covers the slowest admin request: the model capability
         # check talks to the configured endpoint and a local model can be slow.
-        serve(application, host=host, port=port, channel_timeout=900)
+        # The body cap keeps waitress from buffering its unauthenticated 1 GiB
+        # default per connection before Django's own 413 can answer; the extra
+        # 1 MiB covers multipart overhead around the import ceiling.
+        serve(
+            application,
+            host=host,
+            port=port,
+            channel_timeout=900,
+            max_request_body_size=settings.CLIPSHELF_MAX_IMPORT_BYTES + 1024 * 1024,
+        )
 
 
 def main(argv):
