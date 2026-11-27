@@ -16,7 +16,8 @@ Usage: python3 scripts/bench_import_assets.py [media_items] [images] [link_items
 side_px (default 4) sets the PNG edge in pixels; the pixels are random, so
 a file holds about 3 * side_px**2 bytes. Sizes past the media caps were
 legal before the caps, which were chosen against their measurements: for
-those runs the script disables the cap check alone. Always run it with
+those runs the script disables both cap checks (payload and acquired
+assets) and nothing else. Always run it with
 CLIPSHELF_DATA_DIR set to a fresh throwaway directory. A directory that
 already holds a database is refused, never benchmarked.
 

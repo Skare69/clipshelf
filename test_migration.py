@@ -1157,7 +1157,6 @@ class ImportWriteLockTests(MigrationMixin, TransactionTestCase):
         in_lock, capture, hold = threading.Event(), {}, {}
         real_history = publication.record_import_history
         real_commit = services.commit_import_rows
-        real_open_target = acquisition._open_target
 
         def history(**kw):
             in_lock.set()  # the commit transaction is open: the lock is held
@@ -1169,12 +1168,6 @@ class ImportWriteLockTests(MigrationMixin, TransactionTestCase):
                 return real_commit(*a, **kw)
             finally:
                 hold["s"] = time.monotonic() - start
-
-        def unique_open_target(directory, filename, source):
-            # Staging probes slideNN names one by one in one directory, which
-            # is quadratic in the item count (CLIP-175). It runs before the
-            # transaction, so a unique name changes nothing the lock covers.
-            return real_open_target(directory, f"{uuid.uuid4().hex}-{filename}", source)
 
         def concurrent_capture():
             in_lock.wait()
@@ -1192,8 +1185,7 @@ class ImportWriteLockTests(MigrationMixin, TransactionTestCase):
         thread = threading.Thread(target=concurrent_capture)
         with override_settings(DATA_DIR=str(self.tmp)), \
                 mock.patch.object(publication, "record_import_history", side_effect=history), \
-                mock.patch.object(services, "commit_import_rows", side_effect=timed_commit), \
-                mock.patch.object(acquisition, "_open_target", side_effect=unique_open_target):
+                mock.patch.object(services, "commit_import_rows", side_effect=timed_commit):
             thread.start()
             try:
                 result = imports.import_items(user=self.user, collection_id=None, items=items)
