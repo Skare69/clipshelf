@@ -1863,6 +1863,29 @@ def test_response_read_bound():
     print("response read bound ok")
 
 
+def _read_request(conn):
+    """Read one HTTP request (headers plus its Content-Length body) before a
+    loopback server answers. A close with unread request bytes sends RST, and
+    a client still writing gets EPIPE; either can beat the response."""
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return
+        data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    length = 0
+    for line in head.split(b"\r\n")[1:]:
+        name, _, value = line.partition(b":")
+        if name.strip().lower() == b"content-length":
+            length = int(value)
+    while len(body) < length:
+        chunk = conn.recv(4096)
+        if not chunk:
+            return
+        body += chunk
+
+
 def test_request_deadline_bounded_read():
     """_request(): the whole body read dies at one absolute deadline. A
     per-recv timeout alone lets a byte-at-a-time trickle reset the clock
@@ -1877,6 +1900,7 @@ def test_request_deadline_bounded_read():
     def trickle():
         try:
             conn, _ = srv.accept()
+            _read_request(conn)
             with conn:
                 head = ("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
                         "Connection: close\r\n\r\n")  # no Content-Length: the
@@ -1916,6 +1940,7 @@ def test_request_deadline_bounded_read():
     def trickle_503():
         try:
             conn, _ = srv.accept()
+            _read_request(conn)
             with conn:
                 head = ("HTTP/1.1 503 busy\r\nContent-Type: text/plain\r\n"
                         "Connection: close\r\n\r\n")
@@ -1951,6 +1976,7 @@ def test_request_deadline_bounded_read():
     def trickle_302():
         try:
             conn, _ = srv.accept()
+            _read_request(conn)
             with conn:
                 head = ("HTTP/1.1 302 found\r\nLocation: /final\r\n"
                         "Content-Type: text/plain\r\nConnection: close\r\n\r\n")
@@ -1987,6 +2013,7 @@ def test_request_deadline_bounded_read():
     def trickle_100():
         try:
             conn, _ = srv.accept()
+            _read_request(conn)
             with conn:
                 conn.sendall(b"HTTP/1.1 100 Continue\r\n\r\n")  # consumed at once
                 for byte in b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok":
@@ -2024,6 +2051,7 @@ def test_redirect_refuses_non_http_targets():
     def serve_302_to_ftp():
         try:
             conn, _ = srv.accept()
+            _read_request(conn)
             with conn:
                 # Drain the request (headers, then Content-Length bytes)
                 # before the reply. Closing with unread request bytes in the
