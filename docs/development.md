@@ -26,6 +26,11 @@ one random password that it prints. It also adds about a dozen filed links and p
 when `CLIPSHELF_DEBUG` is off or when the data dir already has users. Do not start the worker
 on demo data: it fetches the queued demo jobs and lists the demo follow.
 
+To see the "new version available" notice, start `serve` as an older release and turn on the release check:
+add `CLIPSHELF_VERSION=0.13.0 CLIPSHELF_UPDATE_CHECK=1` to the `serve` command. The first page load starts
+the check against the latest GitHub release, and the next load shows the notice with a link to that release.
+The check needs network access to `api.github.com`.
+
 ## Layout
 
 The product is four pieces:
