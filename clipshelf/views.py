@@ -804,6 +804,19 @@ def _import_replay(record, spooled):
 @accounts.api_multipart
 def api_import(request):
     user = request.user
+    # An admitted import queues one job per URL-only item and the job
+    # loop interprets each on the operator's LLM key, so every upload
+    # spends the same kind of per-user budget as a capture POST.
+    allowed = ratelimit.consume(
+        request,
+        app="clipshelf",
+        action="import",
+        config={"import": getattr(
+            settings, "CLIPSHELF_IMPORT_RATE", "10/h/user")},
+        user=user,
+    )
+    if not allowed:
+        raise ApiError(429, detail="too many imports; try again soon")
     upload = request.FILES.get("file")
     if upload is None:
         raise ApiError(400, detail="multipart file required")

@@ -101,15 +101,17 @@ with up to 8000 output tokens (admin setting, default 4000), plus the
 prompt tokens. The worker adds each attempt's usage to `Job.prompt_tokens`
 and `Job.completion_tokens`.
 
-Two budgets use the process-local cache (per process, reset on restart;
+Three budgets use the process-local cache (per process, reset on restart;
 the same machinery as the invitation and tag-suggestion budgets):
 
 - Captures: `CLIPSHELF_CAPTURE_RATE`, default `30/h/user`, one count per
   capture POST.
 - Retries: `CLIPSHELF_JOB_RETRY_RATE`, default `20/h/user`, one count per
   "Try again" press.
+- Imports: `CLIPSHELF_IMPORT_RATE`, default `10/h/user`, one count per
+  upload POST. A URL-only item queues one interpreted job like a capture.
 
-An over-budget request answers HTTP 429 and creates no job. The values
+An over-budget request answers HTTP 429 and admits no work. The values
 are code defaults read with `getattr` in `clipshelf/views.py`. The token
 counters have no spending limit; sum the job rows yourself when you need
 a per-user daily figure.

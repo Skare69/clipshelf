@@ -2181,6 +2181,12 @@ class EntryApiTests(ApiTestCase):
 
 
 class ImportTests(ApiTestCase):
+    def setUp(self):
+        super().setUp()
+        # The import budget counts in the process-local cache, whose fixed
+        # location persists across tests in one process.
+        cache.clear()
+
     def _post_import(self, client, content, crid=None, collection=None,
                      user=None, **extra):
         actor = user or self.alice
@@ -3057,6 +3063,36 @@ class ImportTests(ApiTestCase):
         job = Job.objects.get(url="https://example.com/a")
         self.assertEqual(job.state, "blocked")
         self.assertEqual(job.interpretation, "blocked")
+
+    def test_import_budget_answers_429_without_a_record(self):
+        # A URL-only item stages as a pending source and queues one job
+        # the worker interprets on the operator's LLM key, so repeated
+        # distinct uploads spend the per-user budget: the last upload in
+        # the window answers 429 and admits no record.
+        with override_settings(CLIPSHELF_IMPORT_RATE="2/m/user"):
+            alice = self._login(self.alice)
+            for i in range(2):
+                content = json.dumps(
+                    [{"id": str(i), "url": f"https://example.com/clip-{i}"}]
+                ).encode()
+                self.assertEqual(
+                    self._post_import(alice, content).status_code, 201
+                )
+            over = self._post_import(
+                alice,
+                json.dumps(
+                    [{"id": "9", "url": "https://example.com/clip-9"}]
+                ).encode(),
+            )
+        self.assertEqual(over.status_code, 429)
+        self.assertEqual(over.json()["detail"], "too many imports; try again soon")
+        self.assertEqual(ImportRecord.objects.count(), 2)
+        # The refused upload leaves no staging file behind.
+        self.assertEqual(
+            len(os.listdir(os.path.join(os.path.realpath(self._data_dir()),
+                                        "staging"))),
+            2,
+        )
 
 
 class ApiMutantKillTests(ApiTestCase):
