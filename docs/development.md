@@ -13,6 +13,19 @@ CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=./data .venv/bin/python clipshelf.py worker
 
 The first-start details (setup wizard, admin recovery, mail) are in [install.md](install.md#run-it-locally).
 
+For UI work without a real library, seed an empty data dir with demo data:
+
+```
+CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=/tmp/clipshelf-demo .venv/bin/python clipshelf.py seed_demo
+CLIPSHELF_DEBUG=1 CLIPSHELF_DATA_DIR=/tmp/clipshelf-demo .venv/bin/python clipshelf.py serve 127.0.0.1:8000
+```
+
+`seed_demo` adds an admin (`demo@example.com`) and a member (`member@example.com`) with
+one random password that it prints. It also adds about a dozen filed links and prompts, a shared
+"Team picks" collection, a follow, and one inbox job in each state. The command stops
+when `CLIPSHELF_DEBUG` is off or when the data dir already has users. Do not start the worker
+on demo data: it fetches the queued demo jobs and lists the demo follow.
+
 ## Layout
 
 The product is four pieces:
