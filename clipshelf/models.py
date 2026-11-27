@@ -605,6 +605,16 @@ class CollectionInvitation(models.Model):
     # Set by the delivery job after a successful send: the resend cooldown
     # reads this, never the response path; a failed send leaves it null.
     mailed_at = models.DateTimeField(null=True, blank=True)
+    # The account the delivery job addressed. Member removal burns by this
+    # account too: the mailed address can leave the account before removal
+    # and come back after it, so the address alone cannot find the link.
+    mailed_to = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="member_invitations_mailed",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):

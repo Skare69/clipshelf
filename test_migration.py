@@ -27,6 +27,7 @@ from django.db import connection
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.recorder import MigrationRecorder
 from django.test import Client, TestCase, TransactionTestCase, override_settings
+from django.utils import timezone
 from allauth.account.models import EmailAddress
 from PIL import Image
 
@@ -1169,5 +1170,55 @@ class LegacyBindingBackfillTests(TransactionTestCase):
     def tearDown(self):
         # Restore the latest migration state whatever happened above (assert
         # failures included), so no other test ever sees the old schema.
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
+
+
+class MailedToBackfillTests(TransactionTestCase):
+    """The 0010 bind_mailed_rows backfill: a live link mailed before the
+    mailed_to field existed is bound to the active account that holds its
+    address, so member removal can burn it."""
+
+    def test_0010_binds_live_mailed_rows_to_the_active_holder(self):
+        executor = MigrationExecutor(connection)
+        before = [("clipshelf", "0009_job_tokens_serversettings_llm_output_tokens")]
+        executor.migrate(before)
+        Invitation = executor.loader.project_state(before).apps.get_model(
+            "clipshelf", "CollectionInvitation")
+        owner = models.User.objects.create_user(username="o", email="o@example.com")
+        holder = models.User.objects.create_user(username="h", email="h@example.com")
+        models.User.objects.create_user(
+            username="x", email="gone@example.com", is_active=False)
+        collection = models.Collection.objects.create(
+            name="Shared", kind="shared", owner=owner)
+        now = timezone.now()
+
+        def row(email, mailed=True, accepted_by=None):
+            return Invitation.objects.create(
+                collection_id=collection.id, email=email,
+                token_hash=uuid.uuid4().hex, created_by_id=owner.id,
+                expires_at=now + timedelta(days=7),
+                mailed_at=now if mailed else None, accepted_by_id=accepted_by)
+
+        bound = row("H@Example.com")  # address match ignores case
+        unmailed = row("h@example.com", mailed=False)
+        accepted = row("h@example.com", accepted_by=holder.id)
+        inactive = row("gone@example.com")
+        nobody = row("nobody@example.com")
+
+        executor = MigrationExecutor(connection)
+        executor.migrate([("clipshelf", "0010_collectioninvitation_mailed_to")])
+
+        mailed_to = dict(models.CollectionInvitation.objects.values_list(
+            "id", "mailed_to_id"))
+        self.assertEqual(mailed_to, {
+            bound.id: holder.id,
+            unmailed.id: None,
+            accepted.id: None,
+            inactive.id: None,
+            nobody.id: None,
+        })
+
+    def tearDown(self):
         executor = MigrationExecutor(connection)
         executor.migrate(executor.loader.graph.leaf_nodes())

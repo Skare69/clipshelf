@@ -306,6 +306,8 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
             # Reserve this job's row inside the same transaction: the
             # reservation doubles as the cooldown stamp, so a concurrent job
             # decides against a mailed row even while this send is in flight.
+            # It also binds the row to the addressed account, so member
+            # removal finds the link even after the address left the account.
             if not CollectionInvitation.objects.filter(
                 token_hash=mine,
                 mailed_at__isnull=True,
@@ -313,7 +315,7 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
                 expires_at__gt=now,
                 created_by=F("collection__owner"),
                 created_by__is_active=True,
-            ).update(mailed_at=now):
+            ).update(mailed_at=now, mailed_to=target):
                 return  # own row accepted, expired or superseded: nothing
                 # live left to mail
         try:
@@ -324,6 +326,7 @@ def queue_collection_invitation_mail(request, email, token, collection_id, colle
             # resend retries. A row the invitee redeemed while SMTP was in
             # flight keeps its stamp; the cooldown counts live rows only, so
             # a row burned by removal mid-send never holds the window.
+            # mailed_to stays: an SMTP error can follow a delivered message.
             CollectionInvitation.objects.filter(
                 token_hash=mine, accepted_by__isnull=True
             ).update(mailed_at=None)

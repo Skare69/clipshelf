@@ -1522,6 +1522,60 @@ class MemberRemovalSecondaryAddressTests(TestCase):
         self.assertFalse(self._is_member())
         self.assertContains(response, "no longer valid")
 
+    def _email_action(self, data):
+        """POST the allauth email view as the member, through reauthentication."""
+        response = self.member_client.post(reverse("account_email"), data=data)
+        if "reauthenticate" in response.get("Location", ""):
+            response = self.member_client.post(
+                response["Location"], data={"password": PASSWORD}
+            )
+        self.assertEqual(response.status_code, 302)
+
+    def test_removal_burns_link_mailed_to_an_address_dropped_before_removal(self):
+        # Address B is primary: the owner's invitation mails a live link to B.
+        self._invite("member-b@clipshelf.test")
+        link_b = self._link("member-b@clipshelf.test")
+        # The member switches to A and drops B from the account.
+        self._make_primary("member-a@clipshelf.test")
+        self._email_action({"action_remove": "", "email": "member-b@clipshelf.test"})
+        self.assertFalse(
+            EmailAddress.objects.filter(email__iexact="member-b@clipshelf.test").exists()
+        )
+        # The member joins through an invitation to A.
+        self._invite("member-a@clipshelf.test")
+        self.assertEqual(
+            self.member_client.get(self._link("member-a@clipshelf.test")).status_code,
+            200,
+        )
+        self.assertTrue(self._is_member())
+        response = self.owner_client.delete(
+            f"/api/collections/{self.shared.id}/members/{self.member.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self._is_member())
+        # The removed member adds B again, confirms it from the mailbox,
+        # makes it primary and opens the old link to B.
+        mail.outbox.clear()
+        self._email_action({"action_add": "", "email": "member-b@clipshelf.test"})
+        (confirm,) = [
+            urlsplit(word).path
+            for message in mail.outbox
+            if message.to == ["member-b@clipshelf.test"]
+            for word in message.body.split()
+            if "/accounts/confirm-email/" in word
+        ]
+        self.assertEqual(self.member_client.post(confirm).status_code, 302)
+        self.assertTrue(
+            EmailAddress.objects.get(
+                user=self.member, email="member-b@clipshelf.test"
+            ).verified
+        )
+        self._make_primary("member-b@clipshelf.test")
+        response = self.member_client.get(link_b)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self._is_member())
+        self.assertContains(response, "no longer valid")
+
 
 class AdminUserListVerificationTests(AccountTestCase):
     def test_user_list_reports_verification_status_per_user(self):

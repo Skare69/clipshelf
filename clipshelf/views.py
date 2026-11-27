@@ -491,6 +491,15 @@ def api_collection_member(request, collection_id, user_id):
                 accepted_by__isnull=True,
                 expires_at__gt=timezone.now(),
             ).update(expires_at=timezone.now())
+        # A link mailed to the account counts even when its address left the
+        # account before removal: the member can add the address again later
+        # and redeem the old link.
+        CollectionInvitation.objects.filter(
+            collection=collection,
+            mailed_to_id=membership.user_id,
+            accepted_by__isnull=True,
+            expires_at__gt=timezone.now(),
+        ).update(expires_at=timezone.now())
     return JsonResponse({"removed": True})
 
 
