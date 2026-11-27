@@ -413,10 +413,17 @@ def llm_check(request, user):
     Pure preview: typed values are never persisted."""
     body = json_body(request)
     _require_reauth(request, body)
-    base_url, model, api_key = get_settings().resolve(**_resolve_kwargs(body))
+    s = get_settings()
+    base_url, model, api_key = s.resolve(**_resolve_kwargs(body))
     from clipshelf.interpretation import check_connection
+    # The probe uses the typed output limit; omission or a non-integer falls
+    # back to the saved setting (interpretation clamps and defaults itself).
+    tokens = body.get("output_tokens")
+    if not isinstance(tokens, int) or isinstance(tokens, bool):
+        tokens = s.llm_output_tokens
     return JsonResponse(
-        {"check": check_connection({"base_url": base_url, "model": model, "api_key": api_key})}
+        {"check": check_connection({"base_url": base_url, "model": model,
+                                    "api_key": api_key, "output_tokens": tokens})}
     )
 
 

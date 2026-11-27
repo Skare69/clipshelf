@@ -661,8 +661,9 @@ class SuggestTagsApiTests(FollowMixin, TestCase):
         self.assertEqual(response.json(), {"tags": [
             "Recipes", "Home Cooking", "travel", "Street food", "Desserts"]})
         self.assertEqual(len(sent), 1)
+        # The suggest request sends the saved output limit, not a fixed cap.
         self.assertEqual(sent[0]["max_tokens"],
-                         interpretation.SUGGEST_OUTPUT_TOKENS)
+                         services.get_settings().llm_output_tokens)
         blob = self._blob(sent[0])
         self.assertEqual(blob["profile"], "@creator")
         self.assertEqual(blob["post_titles"],

@@ -271,13 +271,14 @@ function adminLlm(llm, err, scr, scrErr) {
     catch (e) { if (e.status !== 401 && !e.cancelled) banner("err", e.message, { sticky: true }); }
   });
   check.addEventListener("click", async () => {
-    const b = withKey({ base_url: base.value.trim(), model: modelValue() });
-    const before = [base.value.trim(), modelValue(), key.value, conc.value, clear.checked].join("\n");
+    const b = withKey({ base_url: base.value.trim(), model: modelValue(),
+      output_tokens: Math.min(8000, Math.max(500, parseInt(outTok.value, 10) || 4000)) });
+    const before = [base.value.trim(), modelValue(), key.value, conc.value, outTok.value, clear.checked].join("\n");
     note.hidden = true;
     setCheck("busy");
     try {
       const j = await sensitive("/api/admin/llm/check", b);
-      if ([base.value.trim(), modelValue(), key.value, conc.value, clear.checked].join("\n") !== before)
+      if ([base.value.trim(), modelValue(), key.value, conc.value, outTok.value, clear.checked].join("\n") !== before)
         setCheck("idle");
       else if (j.check?.ok) setCheck("ok");
       else { setCheck("idle"); showNote(note, false, j.check?.message || "check failed"); }

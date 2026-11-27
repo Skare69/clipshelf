@@ -1074,6 +1074,24 @@ class LlmModelPickerTests(AccountTestCase):
             s.refresh_from_db()
             self.assertEqual(s.llm_output_tokens, 6000)
 
+    def test_check_probe_sends_typed_output_tokens(self):
+        """The connection probe derives its limit from the typed output tokens
+        on screen; omission or a non-integer falls back to the saved setting."""
+        s = admin_views.get_settings()
+        s.llm_base_url, s.llm_model, s.llm_output_tokens = "http://saved/v1", "m", 6000
+        s.save()
+        sent = []
+        patcher = patch("clipshelf.interpretation._request",
+                        side_effect=lambda m, u, k, p, t: sent.append(p) or {})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.admin_post("/api/admin/llm/check", {"output_tokens": 5500}, reauth=True)
+        self.assertEqual(sent[-1]["max_tokens"], 5500)
+        self.admin_post("/api/admin/llm/check", {}, reauth=True)
+        self.assertEqual(sent[-1]["max_tokens"], 6000)
+        self.admin_post("/api/admin/llm/check", {"output_tokens": "5500"}, reauth=True)
+        self.assertEqual(sent[-1]["max_tokens"], 6000)
+
     def test_direct_model_save_never_carries_a_key_to_a_new_host(self):
         self.admin_post("/api/admin/llm", {"base_url": "http://saved/v1", "api_key": "stored"},
                         reauth=True)

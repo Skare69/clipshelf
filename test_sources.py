@@ -1530,7 +1530,8 @@ def test_interpretation_bounds():
     finally:
         interp.post = real_post
 
-    # the check gives reasoning models output headroom (its own fixed ceiling)
+    # the check gives reasoning models output headroom (the configured limit;
+    # nothing configured here, so the shared 4000 default applies)
     def spy_post(base, key, payload, timeout):
         calls.append(payload)
         return {"choices": [{"message": {"content": '{"ok": true, "color": "red"}'},
@@ -1542,7 +1543,7 @@ def test_interpretation_bounds():
         assert report == {"ok": True, "message": "image+JSON ok via m (saw: red)"}, report
         assert calls[-1]["temperature"] == 0  # deterministic probe
         assert [m["role"] for m in calls[-1]["messages"]] == ["system", "user"]
-        assert calls[-1]["max_tokens"] == interp.CHECK_OUTPUT_TOKENS == 2000
+        assert calls[-1]["max_tokens"] == interp.OUTPUT_TOKENS_MAX == 4000
     finally:
         interp.post = real_post
 
@@ -3140,6 +3141,35 @@ def test_interpret_output_tokens_setting():
     print("interpret output tokens setting ok")
 
 
+def test_suggest_tags_output_tokens_setting():
+    """suggest_tags derives max_tokens from config output_tokens, clamped to
+    500..8000; a missing or invalid value falls back to the 4000 default,
+    never the old fixed 300-token ceiling that starved reasoning models."""
+    ok = {"choices": [{"message": {"content": '{"tags": ["alpha", "beta"]}'}}]}
+    real_post = interp.post
+    calls = []
+
+    def spy_post(base, key, payload, timeout):
+        calls.append(payload)
+        return ok
+
+    interp.post = spy_post
+    try:
+        for value, sent in ((6000, 6000), (100, 500), (99999, 8000),
+                            (None, 4000), ("6000", 4000), (True, 4000)):
+            calls.clear()
+            config = {"base_url": "http://h/v1", "model": "m"}
+            if value is not None:
+                config["output_tokens"] = value
+            tags = interp.suggest_tags({"profile": "@chef", "post_titles": []},
+                                       config, [])
+            assert tags == ["alpha", "beta"], tags
+            assert [c["max_tokens"] for c in calls] == [sent], (value, calls)
+    finally:
+        interp.post = real_post
+    print("suggest tags output tokens setting ok")
+
+
 def test_interpret_length_retry_doubles_once():
     """finish_reason=length retries the same request once with a doubled
     limit (capped at 8000); the malformed-output retry stays separate."""
@@ -3280,7 +3310,7 @@ def test_check_connection_contract():
         assert ("via " + cfg["model"]) in report["message"], report["message"]
         assert report["message"].endswith(")"), report["message"]
         assert calls[0]["model"] == cfg["model"]
-        assert calls[0]["max_tokens"] == interp.CHECK_OUTPUT_TOKENS
+        assert calls[0]["max_tokens"] == interp.OUTPUT_TOKENS_MAX
         messages = calls[0]["messages"]
         assert messages[0]["role"] == "system"
         assert messages[0]["content"].endswith("}")
@@ -3295,6 +3325,23 @@ def test_check_connection_contract():
         assert probe.getpixel((0, 0)) == (200, 30, 30)
     finally:
         interp.post = real_post
+
+    # the probe takes the configured output limit, clamped like interpret();
+    # an invalid value falls back to the shared default, never a fixed 2000
+    calls.clear()
+
+    def limit_post(base, key, payload, timeout):
+        calls.append(payload)
+        return {"choices": [{"message": {"content": '{"ok": true, "color": "blue"}'}}]}
+
+    interp.post = limit_post
+    try:
+        interp.check_connection({**cfg, "output_tokens": 6000})
+        interp.check_connection({**cfg, "output_tokens": 99})
+        interp.check_connection({**cfg, "output_tokens": True})
+    finally:
+        interp.post = real_post
+    assert [c["max_tokens"] for c in calls] == [6000, 500, 4000], calls
 
     # a reply without a color falls back to "?" in the message
     def nocolor_post(base, key, payload, timeout):
@@ -3568,6 +3615,7 @@ def test():
     test_interpret_retry_reason_bound()
     test_interpret_invalid_repo_retries_once()
     test_interpret_output_tokens_setting()
+    test_suggest_tags_output_tokens_setting()
     test_interpret_length_retry_doubles_once()
     test_interpret_length_retry_fetches_once()
     test_interpret_records_usage()

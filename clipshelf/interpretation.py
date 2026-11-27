@@ -62,9 +62,8 @@ LINKS_MATERIAL_MAX = 50
 LLM_TIMEOUT = 900
 CHECK_TIMEOUT = 120
 LLM_RESPONSE_MAX = 16 << 20
-OUTPUT_TOKENS_MAX = 4000        # interpret default when config has no valid limit
+OUTPUT_TOKENS_MAX = 4000        # shared default when config has no valid limit
 OUTPUT_TOKENS_MIN, OUTPUT_TOKENS_RETRY_MAX = 500, 8000
-CHECK_OUTPUT_TOKENS = 2000
 USAGE_TOKENS_MAX = 10 ** 9      # per call; larger usage counts are garbage
 REPOS_MAX, LINKS_MAX, PROMPTS_MAX, INSTALLS_MAX, WARNINGS_MAX, CATEGORIES_MAX = \
     10, 20, 20, 20, 10, 10
@@ -92,7 +91,6 @@ _FETCH_HOSTS = frozenset(("github.com", "gist.github.com"))
 # "github.com/x://attacker.example/b") must never name the fetch host.
 _LEADING_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 SUGGEST_TAGS_MAX, SUGGEST_TITLES_MAX, SUGGEST_EXISTING_MAX = 5, 20, 200
-SUGGEST_OUTPUT_TOKENS = 300
 
 _SYSTEM_PROMPT = (
     "You are a precise library cataloging assistant. You receive ONE capture's "
@@ -802,7 +800,9 @@ def interpret(source, config, categories, screening_key=None, url_failures=None,
 
 
 def check_connection(config):
-    """Real capability probe: tiny image + JSON round trip, not a /models ping."""
+    """Real capability probe: tiny image + JSON round trip, not a /models ping.
+    The probe sends the config's output limit (see _output_tokens), so a
+    reasoning model that needs headroom can still finish the round trip."""
     try:
         base, model, key = _config(config)
     except ConfigurationError as exc:
@@ -820,8 +820,8 @@ def check_connection(config):
             image]}]
     try:
         response = post(base, key, {"model": model, "messages": messages,
-                                     "max_tokens": CHECK_OUTPUT_TOKENS,
-                                     "temperature": 0}, CHECK_TIMEOUT)
+                                    "max_tokens": _output_tokens(config),
+                                    "temperature": 0}, CHECK_TIMEOUT)
         raw = _content(response, key)
         parsed = _parse_json_content(raw)
         if not isinstance(parsed, dict) or parsed.get("ok") is not True:
@@ -857,7 +857,9 @@ def _suggested_tags(raw, existing):
 def suggest_tags(material, config, existing):
     """3-5 topic tags for one creator profile. material = {"profile": str,
     "post_titles": [str]}; existing = the user's own tags, reused verbatim
-    when the model picks them. One malformed-output retry, like interpret()."""
+    when the model picks them. One malformed-output retry, like interpret().
+    The request sends the config's output limit (see _output_tokens), never
+    a fixed small ceiling: reasoning models spend tokens before they answer."""
     base, model, key = _config(config)
     existing = [t for t in existing if isinstance(t, str)][:SUGGEST_EXISTING_MAX]
     blob = {"profile": str(material.get("profile") or ""),
@@ -872,7 +874,7 @@ def suggest_tags(material, config, existing):
             messages = messages + [{"role": "user",
                                     "content": _RETRY_NOTE.format(reason=reason)}]
         response = post(base, key, {"model": model, "messages": messages,
-                                    "max_tokens": SUGGEST_OUTPUT_TOKENS,
+                                    "max_tokens": _output_tokens(config),
                                     "temperature": 0.2}, CHECK_TIMEOUT)
         content = _content(response, key)
         try:
