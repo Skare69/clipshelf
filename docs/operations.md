@@ -92,16 +92,20 @@ Interpretation bills the operator's LLM key, so the endpoints that create
 work run under per-user budgets.
 
 One capture POST creates one job per URL in the text
-(`clipshelf/services.py`), and the budget counts POSTs, not URLs. One
+(`clipshelf/services.py`), and the budgets count requests, not URLs. One
 job attempt makes at most 3 model calls: the first call, one
 doubled-limit retry after a length cap, and one malformed-output retry.
-A job makes at most 5 attempts (`Job.MAX_ATTEMPTS`
-in `clipshelf/models.py`). The worst case is 15 model calls per job, each
-with up to 8000 output tokens (admin setting, default 4000), plus the
-prompt tokens. The worker adds each attempt's usage to `Job.prompt_tokens`
-and `Job.completion_tokens`.
+`Job.MAX_ATTEMPTS` (5, `clipshelf/models.py`) bounds one automatic
+failure streak: the job blocks at the cap, so one streak costs at most
+15 model calls, each with up to 8000 output tokens (admin setting,
+default 4000), plus the prompt tokens. A manual "Try again" press
+ignores the cap: `Job.requeue` requeues the row and the worker runs it
+without an attempts check, so each press adds up to 3 more calls, and a
+press on a done job can start a new 5-attempt streak. The retry budget
+below bounds the press rate. The worker adds each attempt's usage to
+`Job.prompt_tokens` and `Job.completion_tokens`.
 
-Three budgets use the process-local cache (per process, reset on restart;
+Four budgets use the process-local cache (per process, reset on restart;
 the same machinery as the invitation and tag-suggestion budgets):
 
 - Captures: `CLIPSHELF_CAPTURE_RATE`, default `30/h/user`, one count per
@@ -110,6 +114,10 @@ the same machinery as the invitation and tag-suggestion budgets):
   "Try again" press.
 - Imports: `CLIPSHELF_IMPORT_RATE`, default `10/h/user`, one count per
   upload POST. A URL-only item queues one interpreted job like a capture.
+- Follows: `CLIPSHELF_FOLLOW_RATE`, default `10/h/user`, one count per
+  follow create POST. The first listing of a follow queues one capture
+  per capped post; an unfollow drops the seen ledger, so a recreate
+  loop would re-queue the same posts.
 
 An over-budget request answers HTTP 429 and admits no work. The values
 are code defaults read with `getattr` in `clipshelf/views.py`. The token

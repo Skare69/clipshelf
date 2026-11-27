@@ -920,6 +920,19 @@ def api_follows(request):
     if request.method == "GET":
         rows = FollowedSource.objects.filter(user=user).order_by("created_at")
         return JsonResponse({"follows": [follows.follow_json(f) for f in rows]})
+    # A follow's first listing queues one capture per capped post, and an
+    # unfollow drops the SeenPost ledger, so a delete-and-recreate loop
+    # would re-queue the same posts; each create spends a per-user budget.
+    allowed = ratelimit.consume(
+        request,
+        app="clipshelf",
+        action="follow_create",
+        config={"follow_create": getattr(
+            settings, "CLIPSHELF_FOLLOW_RATE", "10/h/user")},
+        user=user,
+    )
+    if not allowed:
+        raise ApiError(429, detail="too many follows; try again soon")
     body = json_body(request)
     try:
         source = follows.create_follow(

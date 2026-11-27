@@ -27,6 +27,7 @@ import django
 django.setup()
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import Client, TestCase, TransactionTestCase, override_settings
@@ -431,6 +432,12 @@ class WorkerOnceCaptureFailureTests(FollowMixin, TransactionTestCase):
 # ------------------------------------------------------------- follow api
 
 class FollowApiTests(FollowMixin, TestCase):
+    def setUp(self):
+        super().setUp()
+        # The follow create budget counts in the process-local cache,
+        # whose fixed location persists across tests in one process.
+        cache.clear()
+
     def test_create_and_list_own_follows(self):
         client = self._login(self.alice)
         response = self._post_json(client, "/api/follows", {
@@ -525,11 +532,36 @@ class FollowApiTests(FollowMixin, TestCase):
         source.refresh_from_db()
         self.assertTrue(source.enabled)
 
+    def test_create_budget_answers_429_without_a_follow(self):
+        # A follow's first listing queues one capture per capped post, and
+        # an unfollow drops the SeenPost ledger, so a delete-and-recreate
+        # loop would re-queue the same posts; the per-user create budget
+        # bounds the loop and creation never lists on its own.
+        with override_settings(CLIPSHELF_FOLLOW_RATE="2/m/user"), \
+                mock.patch.object(acquisition, "list_profile_posts") as listing:
+            client = self._login(self.alice)
+            self.assertEqual(self._post_json(client, "/api/follows", {
+                "url": PROFILE + "one", "tag": "a"}).status_code, 201)
+            self.assertEqual(self._post_json(client, "/api/follows", {
+                "url": PROFILE + "two", "tag": "b"}).status_code, 201)
+            over = self._post_json(client, "/api/follows", {
+                "url": PROFILE + "three", "tag": "c"})
+        self.assertEqual(over.status_code, 429)
+        self.assertEqual(over.json()["detail"], "too many follows; try again soon")
+        self.assertEqual(FollowedSource.objects.filter(user=self.alice).count(), 2)
+        listing.assert_not_called()
+
 
 class FollowConflictTests(FollowMixin, TransactionTestCase):
     """Duplicate detection fires on the real unique constraint; a
     TransactionTestCase keeps the failed insert out of the test-wide
     transaction, like the request's own autocommit."""
+
+    def setUp(self):
+        super().setUp()
+        # The follow create budget counts in the process-local cache,
+        # whose fixed location persists across tests in one process.
+        cache.clear()
 
     def test_duplicate_spelling_is_conflict(self):
         client = self._login(self.alice)
