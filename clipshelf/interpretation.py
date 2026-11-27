@@ -204,6 +204,9 @@ def _request(method, url, key, payload, timeout):
             raw = resp.read(LLM_RESPONSE_MAX + 1)
     except urllib.error.HTTPError as exc:
         try:  # a stalled or reset error body must not skip the OSError
+            inner = getattr(exc.fp, "fp", None)  # HTTPResponse wraps a stream
+            if inner is not None:  # the error body read loops recvs too, so
+                exc.fp.fp = _deadline_stream(inner, deadline) or inner
             body = exc.read(4096)  # mapping below: degrade to an empty body
         except OSError:
             body = b""

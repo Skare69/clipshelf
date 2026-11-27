@@ -1872,6 +1872,42 @@ def test_request_deadline_bounded_read():
             assert elapsed < 2.0, f"slow body held the request {elapsed:.2f}s"
     finally:
         srv.close()
+
+    # the same deadline bounds the error body: urlopen raises HTTPError before
+    # any wrapper applies, so the error stream needs the wrap too. Without it
+    # this 503 held the request until the dribble reached EOF (~2.2 s at
+    # timeout=1); a full 4096-byte dribble would hold it without limit.
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+
+    def trickle_503():
+        try:
+            conn, _ = srv.accept()
+            with conn:
+                head = ("HTTP/1.1 503 busy\r\nContent-Type: text/plain\r\n"
+                        "Connection: close\r\n\r\n")
+                conn.sendall(head.encode())
+                for byte in b"e" * 16:   # dribbled error body, no Content-Length:
+                    time.sleep(0.2)      # exc.read(4096) loops recvs until EOF
+                    conn.sendall(bytes([byte]))
+        except OSError:
+            pass
+
+    threading.Thread(target=trickle_503, daemon=True).start()
+    start = time.monotonic()
+    try:
+        try:
+            interp._request("POST", f"http://127.0.0.1:{port}/chat/completions",
+                            None, {}, timeout=1)
+            raise AssertionError("trickled error body accepted past deadline")
+        except interp._TransportError as exc:
+            elapsed = time.monotonic() - start
+            assert exc.kind == "http" and exc.code == 503, (exc.kind, exc.code)
+            assert elapsed < 2.0, f"slow error body held the request {elapsed:.2f}s"
+    finally:
+        srv.close()
     print("request deadline ok")
 
 
