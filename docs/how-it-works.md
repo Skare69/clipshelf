@@ -34,7 +34,7 @@ flowchart LR
 - **Worker process** — `clipshelf/management/commands/worker.py` starts `clipshelf/worker.py` `main()`: claims jobs (`_claim`, `_claim_batch`), acquires, interprets, publishes, drains imports (`_claim_imports`, `_run_import`), and checks followed sources (`_claim_sources`)
 - **Followed sources** — `clipshelf/follows.py` (`create_follow`, `check_source`): profile listings over `clipshelf/acquisition.py` `list_profile_posts` (yt-dlp `--flat-playlist`, ids and URLs only), the `SeenPost` ledger, and the schedule settings on `ServerSettings`
 - **Acquisition** — `clipshelf/acquisition.py` (`acquire`, `_acquire_page`, `_acquire_tiktok`) over `clipshelf/network.py` (`validate_url`, `fetch_public`, public-IP pinning, `extractor_egress` proxy)
-- **Interpretation** — `clipshelf/interpretation.py` (`interpret`, one OpenAI-compatible `POST /chat/completions` per job with one malformed-output retry)
+- **Interpretation** — `clipshelf/interpretation.py` (`interpret`, one or more OpenAI-compatible `POST /chat/completions` per attempt: one malformed-output retry and one doubled-limit retry on `finish_reason=length`; output limit from Admin → Max output tokens)
 - **TypeSafe screening** — `clipshelf/judgment.py` (`screen_material` before the model, `screen_findings` before publishing) and `clipshelf/services.py` `screening_gate`; optional, fail-open
 - **Import engine** — `clipshelf/imports.py` (`run_staged_import`, `_commit_import`), admitted by `clipshelf/views.py` `api_import` or the `import_library` command (`clipshelf/management/commands/import_library.py`)
 - **Publication** — `clipshelf/services.py` (`accept_capture`, `store_source`, `store_findings`) and `clipshelf/publication.py` (`contribute_link`, `publish_prompt`, dedup keys, tombstones)
@@ -184,6 +184,7 @@ stateDiagram-v2
 - **queued** — written by `services.accept_capture` (`clipshelf/services.py`); claimable when `retry_at` is due (`clipshelf/worker.py` `_claimable_jobs`)
 - **running** — set by `Job.mark_running` under `select_for_update` (`clipshelf/models.py`), so two workers never take one job
 - **retry** — `Job.fail` schedules backoff `min(30 * 2^(attempts-1), 3600)` seconds, at most `MAX_ATTEMPTS = 5`
+- **token totals** — the worker adds each model call's usage to the job (`Job.prompt_tokens` / `Job.completion_tokens`). The job JSON reports the totals as `tokens` (`{"prompt", "completion"}`) (`clipshelf/views.py` `_job_json`)
 - **running → queued** — collection or account access loss pauses the job: `_process_job` calls `Job.defer` (`clipshelf/worker.py`); each pause cycle spends one attempt, and `Job.defer` blocks at the cap (`clipshelf/models.py`)
 - **blocked** — resting state via `Job.mark_blocked`; `retry_at` clears, so no retry is pending: screening guard rail (`interpretation.GuardrailBlocked`), deterministic acquisition refusal, attempts exhausted, or member revocation
 - **blocked → running** — auto-resume: the worker claims a `blocked` job with error `llm-not-configured` again when the LLM is configured (`clipshelf/worker.py` `_claimable_jobs`)
