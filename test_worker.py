@@ -2169,6 +2169,29 @@ class LocalTranscriptionTests(WorkerMixin, TransactionTestCase):
         services.store_transcript(job, "x" * (services.TEXT_MAX + 10))
         self.assertEqual(len(job.source["text"]), services.TEXT_MAX)
 
+    def test_transcript_lost_to_revoked_access_publishes_after_retry(self):
+        other = models.User.objects.create_user(username="w9", email="w9@example.com")
+        shared = models.Collection.objects.create(name="s", kind="shared", owner=other)
+        models.Membership.objects.create(collection=shared, user=self.user)
+        job = self.make_job(url="https://www.tiktok.com/@a/video/9", collection=shared)
+
+        def revoke_during_asr(path):
+            models.Membership.objects.filter(collection=shared, user=self.user).delete()
+            return "spoken words"
+
+        self.run_video(revoke_during_asr)
+        job = self.refresh(job)
+        self.assertEqual(job.source["metadata"]["captions"], "local-asr")
+        self.assertNotEqual(self.contribution(job).data.get("text"), "spoken words")
+
+        models.Membership.objects.create(collection=shared, user=self.user)
+        job.requeue()
+        spy = self.run_video(AssertionError("a saved transcript is never redone"))
+        job = self.refresh(job)
+        spy.assert_not_called()
+        self.assertEqual(job.state, "done")
+        self.assertEqual(self.contribution(job).data["text"], "spoken words")
+
     def test_store_transcript_without_contribution_updates_only_the_job(self):
         job = self.make_job(url="https://www.tiktok.com/@a/video/8")
         services.store_source(job, {

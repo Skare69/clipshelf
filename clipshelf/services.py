@@ -855,17 +855,24 @@ def store_findings(job, findings, screen=True):
                 *publication.link_keys(canonical), *publication.link_keys(job.url)):
             warnings.append("URL was removed from this collection; findings were not attached.")
         else:
+            data = {
+                "findings": validated,
+                "interpreted_at": timezone.now().isoformat(),
+                "categories": validated["categories"],
+            }
+            source = job.source or {}
+            if (source.get("metadata") or {}).get("captions") == "local-asr":
+                # store_transcript skips the contribution while access is
+                # lost; a later run (Retry) skips transcription, so publish
+                # the saved transcript here once access is back.
+                data["text"] = _str(source.get("text"))[:TEXT_MAX]
             publication.contribute_link(
                 collection=job.collection,
                 user=user,
                 capture=job.capture,
                 job=job,
                 key=canonical,
-                data={
-                    "findings": validated,
-                    "interpreted_at": timezone.now().isoformat(),
-                    "categories": validated["categories"],
-                },
+                data=data,
             )
             for prompt in validated["prompts"]:
                 publication.publish_prompt(
