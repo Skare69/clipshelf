@@ -218,6 +218,17 @@ Android OS backup and device-to-device transfer are off
 (`android:allowBackup="false"` plus the exclude-all `data_extraction_rules.xml`
 and `backup_rules.xml`), so undelivered shares remain on this phone only.
 
+## Accounts and invitations
+
+An admin issues a signup invitation (`Invitation`) for one email address with a 7-day TTL (`clipshelf/admin_views.py` `invitations`). The link opens `GET /invite/<token>` (`clipshelf/accounts.py` `invite_view`), and the signup consumes the invitation (`AccountAdapter.save_user`). A collection owner issues member invitations (`CollectionInvitation`) by email.
+
+When an admin disables an account (`clipshelf/admin_views.py` `user_status`), two kinds of unaccepted invitations expire at once:
+
+- The signup invitations that the account issued.
+- The member invitations of the shared collections that the account owns.
+
+A disabled, perhaps compromised, account cannot admit anyone through a link that it sent earlier. When the account is enabled again, these invitations stay expired. To admit the same person, an active admin issues a new invitation.
+
 ## Migrating an existing `library.json`
 
 From the running app, an old `library.json` goes through the import section of
