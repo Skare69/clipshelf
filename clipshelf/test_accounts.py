@@ -12,10 +12,12 @@ import time
 from datetime import timedelta
 from unittest.mock import patch
 from uuid import uuid4
+from urllib.parse import urlsplit
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import JsonResponse
 from django.test import Client, RequestFactory, SimpleTestCase, TestCase, override_settings
@@ -1433,6 +1435,92 @@ class InviteSignupFormGuardTests(AccountTestCase):
         with accounts.allauth_context.request_context(request):
             with self.assertRaises(ValidationError):
                 form.clean_email()
+
+
+@override_settings(ROOT_URLCONF="clipshelf.urls", TEMPLATES=TEMPLATES)
+class MemberRemovalSecondaryAddressTests(TestCase):
+    """Removal must burn invitations to every address of the removed account,
+    not only to the address that is primary at removal time."""
+
+    def setUp(self):
+        inline = patch.object(accounts, "deliver_async", lambda fn: fn())
+        inline.start()
+        self.addCleanup(inline.stop)
+        cache.clear()  # the owner-keyed invite throttle lives in the cache
+        self.owner = make_user("owner@clipshelf.test")
+        self.member = make_user("member-b@clipshelf.test")
+        EmailAddress.objects.create(
+            user=self.member, email="member-a@clipshelf.test", verified=True
+        )
+        self.shared = Collection.objects.create(
+            name="Team finds", kind="shared", owner=self.owner
+        )
+        self.owner_client = Client()
+        self.owner_client.force_login(self.owner)
+        self.member_client = Client()
+        self.member_client.force_login(self.member)
+
+    def _invite(self, email):
+        response = self.owner_client.post(
+            f"/api/collections/{self.shared.id}/members",
+            data=json.dumps({"email": email}),
+            content_type="application/json",
+        )
+        self.assertEqual(response.status_code, 202)
+
+    def _make_primary(self, email):
+        response = self.member_client.post(
+            reverse("account_email"), data={"action_primary": "", "email": email}
+        )
+        if "reauthenticate" in response.get("Location", ""):
+            response = self.member_client.post(
+                response["Location"], data={"password": PASSWORD}
+            )
+        self.assertEqual(response.status_code, 302)
+        self.member.refresh_from_db()
+        self.assertEqual(self.member.email, email)
+
+    def _link(self, email):
+        """Path of the newest invitation link mailed to this address."""
+        return [
+            urlsplit(line.strip()).path
+            for message in mail.outbox
+            if message.to == [email]
+            for line in message.body.splitlines()
+            if "/collections/invitations/" in line
+        ][-1]
+
+    def _is_member(self):
+        return Membership.objects.filter(
+            collection=self.shared, user=self.member
+        ).exists()
+
+    def test_invitation_to_secondary_address_mails_nothing(self):
+        self._invite("member-a@clipshelf.test")
+        self.assertEqual(mail.outbox, [])
+
+    def test_removal_burns_link_mailed_to_a_former_primary_address(self):
+        # Address B is primary: the owner's invitation mails a live link to B.
+        self._invite("member-b@clipshelf.test")
+        link_b = self._link("member-b@clipshelf.test")
+        # The member switches to A and joins through an invitation to A; the
+        # redemption spends only A's other tokens, so the link to B stays live.
+        self._make_primary("member-a@clipshelf.test")
+        self._invite("member-a@clipshelf.test")
+        link_a = self._link("member-a@clipshelf.test")
+        self.assertEqual(self.member_client.get(link_a).status_code, 200)
+        self.assertTrue(self._is_member())
+        response = self.owner_client.delete(
+            f"/api/collections/{self.shared.id}/members/{self.member.id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self._is_member())
+        # The removed member makes B primary again and opens the old link.
+        self._make_primary("member-b@clipshelf.test")
+        response = self.member_client.get(link_b)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self._is_member())
+        self.assertContains(response, "no longer valid")
 
 
 class AdminUserListVerificationTests(AccountTestCase):

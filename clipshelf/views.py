@@ -35,6 +35,8 @@ from django.views.decorators.http import require_GET, require_http_methods
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.static import serve as _static_serve
 
+from allauth.account.models import EmailAddress
+
 # The public allauth ratelimit wrapper cannot take an explicit limit config;
 # the internal consume (same machinery as admin reauthentication) can.
 from allauth.core.internal import ratelimit
@@ -466,13 +468,23 @@ def api_collection_member(request, collection_id, user_id):
             job.mark_blocked(error="collection access revoked")
         # Removing a member burns their outstanding invitation links for this
         # collection: no outstanding token may re-admit them without the
-        # owner's invite.
-        removed_email = (
-            User.objects.filter(pk=membership.user_id)
-            .values_list("email", flat=True)
-            .first()
+        # owner's invite. Every address of the account counts, not only the
+        # current primary: the member can make any held address primary and
+        # redeem a link that was mailed to it earlier.
+        removed_emails = {
+            address.lower()
+            for address in EmailAddress.objects.filter(
+                user_id=membership.user_id
+            ).values_list("email", flat=True)
+        }
+        removed_emails.update(
+            address.lower()
+            for address in User.objects.filter(pk=membership.user_id).values_list(
+                "email", flat=True
+            )
+            if address
         )
-        if removed_email:
+        for removed_email in removed_emails:
             CollectionInvitation.objects.filter(
                 collection=collection,
                 email__iexact=removed_email,
