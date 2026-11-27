@@ -7,6 +7,8 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Application;
+import android.content.ActivityNotFoundException;
+import android.content.ContextWrapper;
 import android.content.Intent;
 
 import org.junit.Test;
@@ -65,5 +67,22 @@ public class EntryOpenGuardTest {
         assertNotNull("no activity started for https URL", started);
         assertEquals(Intent.ACTION_VIEW, started.getAction());
         assertEquals("https://example.com/a", started.getData().toString());
+    }
+
+    /** A device with no http(s) handler throws ActivityNotFoundException
+     *  out of startActivity; openEntry must swallow it, not crash the
+     *  entry screen. */
+    @Test
+    public void openEntrySwallowsMissingHandler() {
+        androidx.appcompat.app.AppCompatActivity act =
+                Robolectric.buildActivity(androidx.appcompat.app.AppCompatActivity.class).setup().get();
+        ContextWrapper noHandler = new ContextWrapper(act) {
+            @Override
+            public void startActivity(Intent intent) {
+                throw new ActivityNotFoundException("no handler for " + intent);
+            }
+        };
+        Ui.openEntry(noHandler, "https://example.com/a");
+        assertNull(Shadows.shadowOf(act).getNextStartedActivity());
     }
 }
